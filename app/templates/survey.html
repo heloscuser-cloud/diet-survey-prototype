@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>설문</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>식습관 문진</h1>
+    <div class="prefill">
+      <p>이름: <strong>{{ prefill.name_masked }}</strong></p>
+      <p>출생연도: <strong>{{ prefill.birth_year }}</strong></p>
+      <p>성별: <strong>{{ prefill.gender }}</strong></p>
+      <p>휴대폰: <strong>{{ prefill.phone_masked }}</strong></p>
+    </div>
+    <form method="post" action="/survey/submit">
+      <input type="hidden" name="token" value="{{ token }}"/>
+      <label>하루 끼니 수
+        <input name="meals_per_day" type="number" min="1" max="8" required />
+      </label>
+      <label>야식 빈도(주)
+        <input name="late_snack_per_week" type="number" min="0" max="14" required />
+      </label>
+      <label>채소 1회분 섭취(일)
+        <input name="veggies_servings_per_day" type="number" min="0" max="10" required />
+      </label>
+      <label>당류 음료 섭취(주)
+        <input name="sugary_drink_per_week" type="number" min="0" max="30" required />
+      </label>
+      <label>음주 일수(주)
+        <input name="alcohol_days_per_week" type="number" min="0" max="7" required />
+      </label>
+      <button type="submit">제출</button>
+    </form>
+  </div>
+</body>
+</html>

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>마이페이지 · 리포트</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>마이 리포트</h1>
+    <p>로그인 상태에서 본인이 제출한 리포트를 내려받을 수 있어요.</p>
+    <p><a class="button" href="/survey">설문 시작</a> <a class="button" href="/logout">로그아웃</a></p>
+    {% if not reports %}
+      <p>아직 리포트가 없습니다.</p>
+    {% else %}
+      <table style="width:100%; border-collapse: collapse;">
+        <thead>
+          <tr>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">제출 시각</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">점수</th>
+            <th style="text-align:left; padding:8px; border-bottom:1px solid #eee;">다운로드</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in reports %}
+            <tr>
+              <td style="padding:8px; border-bottom:1px solid #f2f2f2;">{{ r.submitted_at }}</td>
+              <td style="padding:8px; border-bottom:1px solid #f2f2f2;">{{ r.score }}</td>
+              <td style="padding:8px; border-bottom:1px solid #f2f2f2;">
+                <a class="button" href="/portal/report/{{ r.id }}/download">PDF</a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  </div>
+</body>
+</html>

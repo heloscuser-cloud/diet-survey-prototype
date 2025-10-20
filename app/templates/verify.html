@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>인증 코드 입력</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>인증 코드 입력</h1>
+    <p>터미널 로그에 표시된 6자리 코드를 입력하세요.</p>
+    <form method="post" action="/login/verify">
+      <input type="hidden" name="t" value="{{ t }}" />
+      <label>코드 <input name="code" required pattern="\d{6}" placeholder="123456"></label>
+      <button type="submit">로그인</button>
+    </form>
+  </div>
+</body>
+</html>

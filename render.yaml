@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: diet-survey-prototype
+    env: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: APP_SECRET
+        generateValue: true
