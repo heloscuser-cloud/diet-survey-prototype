@@ -24,13 +24,13 @@
 <body>
   <div class="wrap">
     <div class="progress">단계 {{ step }} / 3</div>
-    <form class="card" method="post" action="/survey/{{ step }}" id="surveyForm">
+    <form class="card" method="post" action="/survey/step/{{ step }}" id="surveyForm">
       <input type="hidden" name="acc" value='{{ acc|e }}'>
       <input type="hidden" name="acc" value='{{ acc|e }}'>
       <input type="hidden" name="rtoken" value='{{ rtoken|e }}'>   <!-- 추가 -->
 
       {% if not is_first %}
-        <a class="btn prev" href="/survey/{{ step - 1 }}?acc={{ acc|urlencode }}&rtoken={{ rtoken|urlencode }}">이전</a>
+        <a class="btn prev" href="/survey/step/{{ step - 1 }}?acc={{ acc|urlencode }}&rtoken={{ rtoken|urlencode }}">이전</a>
       {% endif %}
 
       {% for q in questions %}
@@ -50,7 +50,7 @@
 
       <div class="nav">
         {% if not is_first %}
-          <a class="btn prev" href="/survey/{{ step - 1 }}?acc={{ acc|urlencode }}">이전</a>
+          <a class="btn prev" href="/survey/step/{{ step - 1 }}?acc={{ acc|urlencode }}">이전</a>
         {% endif %}
         <button type="submit" class="btn next" id="nextBtn" disabled>
           {{ "제출" if is_last else "다음" }}

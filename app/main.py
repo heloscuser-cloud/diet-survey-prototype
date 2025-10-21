@@ -481,20 +481,29 @@ def admin_logout():
     resp.delete_cookie(COOKIE_NAME, path="/")
     return resp
 
+from typing import Optional
+# 필요 시: from fastapi import Query
+
 @app.get("/admin/responses", response_class=HTMLResponse)
 def admin_responses(
     request: Request,
     page: int = 1,
     q: Optional[str] = None,
-    min_score: Optional[int] = None,
+    min_score: Optional[str] = None,   # ← int 대신 str로 받기
     from_: Optional[str] = None,
     to: Optional[str] = None,
     session: Session = Depends(get_session),
-    _auth: None = Depends(admin_required),
     _h: None = Depends(require_admin_host),
+    _auth: None = Depends(admin_required),
 ):
     PAGE_SIZE = 20
     page = max(1, page)
+
+    # 안전 파싱
+    try:
+        min_score_i = int(min_score) if (min_score is not None and min_score != "") else None
+    except ValueError:
+        min_score_i = None
 
     stmt = (
         select(SurveyResponse, Respondent, User)
@@ -508,13 +517,12 @@ def admin_responses(
             (User.phone_hash.ilike(like)) |
             (SurveyResponse.answers_json.ilike(like))
         )
-    if min_score:
-        stmt = stmt.where(SurveyResponse.score >= min_score)
+    if min_score_i is not None:
+        stmt = stmt.where(SurveyResponse.score >= min_score_i)
 
     def parse_date(s: Optional[str]):
         try: return datetime.strptime(s, "%Y-%m-%d").date()
         except: return None
-
     d_from = parse_date(from_)
     d_to = parse_date(to)
     if d_from:
@@ -533,13 +541,15 @@ def admin_responses(
         "q": q, "min_score": min_score, "from": from_, "to": to,
     })
 
+
 @app.get("/admin/responses.csv")
 def admin_responses_csv(
     q: Optional[str] = None,
-    min_score: Optional[int] = None,
+    min_score: Optional[str] = None,   # ← 여기
     from_: Optional[str] = None,
     to: Optional[str] = None,
     session: Session = Depends(get_session),
+    _h: None = Depends(require_admin_host),
     _auth: None = Depends(admin_required),
 ):
     def parse_date(s: Optional[str]):
@@ -547,12 +557,19 @@ def admin_responses_csv(
         except: return None
     d_from, d_to = parse_date(from_), parse_date(to)
 
+    # 안전 파싱
+    try:
+        min_score_i = int(min_score) if (min_score is not None and min_score != "") else None
+    except ValueError:
+        min_score_i = None
+
     def generate():
         yield "\ufeff"
         s = StringIO()
         w = csv.writer(s)
         w.writerow(["id","respondent_id","user_id","score","submitted_at","phone_hash","name_enc"])
         yield s.getvalue(); s.seek(0); s.truncate(0)
+
         stmt = (
             select(SurveyResponse, Respondent, User)
             .join(Respondent, Respondent.id == SurveyResponse.respondent_id)
@@ -565,15 +582,17 @@ def admin_responses_csv(
                 (User.phone_hash.ilike(like)) |
                 (SurveyResponse.answers_json.ilike(like))
             )
-        if min_score:
-            stmt = stmt.where(SurveyResponse.score >= min_score)
+        if min_score_i is not None:
+            stmt = stmt.where(SurveyResponse.score >= min_score_i)
         if d_from:
             stmt = stmt.where(SurveyResponse.submitted_at >= datetime(d_from.year, d_from.month, d_from.day))
         if d_to:
             stmt = stmt.where(SurveyResponse.submitted_at < datetime(d_to.year, d_to.month, d_to.day) + timedelta(days=1))
+
         for sr, resp, user in session.exec(stmt.order_by(SurveyResponse.id)):
             w.writerow([sr.id, sr.respondent_id, user.id, sr.score or "", sr.submitted_at, user.phone_hash, user.name_enc])
             yield s.getvalue(); s.seek(0); s.truncate(0)
+
     return StreamingResponse(generate(), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="responses.csv"'})
 
 
@@ -582,29 +601,24 @@ def admin_responses_csv(
 @app.get("/survey")
 def survey_root(auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
                 session: Session = Depends(get_session)):
-    # 로그인 확인
     user_id = verify_user(auth) if auth else -1
     if user_id < 0:
         return RedirectResponse(url="/login", status_code=302)
 
-    # 응답자 초안 생성 (기존 legacy와 동일한 개념)
     user = session.get(User, user_id)
     resp = Respondent(user_id=user.id, campaign_id="demo", status="draft")
     session.add(resp)
     session.commit()
     session.refresh(resp)
 
-    # 응답자 토큰 (서명) 생성 — 이후 단계들에서 계속 들고 다님
     rtoken = signer.sign(str(resp.id)).decode("utf-8")
-    return RedirectResponse(url=f"/survey/1?rtoken={rtoken}", status_code=303)
+    return RedirectResponse(url=f"/survey/step/1?rtoken={rtoken}", status_code=303)   # ← 여기만 확인
 
-@app.get("/survey/{step}", response_class=HTMLResponse)
+
+@app.get("/survey/step/{step}", response_class=HTMLResponse)
 def survey_step_get(request: Request, step: int, rtoken: str, acc: str | None = None):
-    # 단계 범위 체크
     if step < 1 or step > 3:
-        return RedirectResponse(url="/survey/1", status_code=303)
-
-    # rtoken 검증(응답자 ID 복원)
+        return RedirectResponse(url="/survey/step/1", status_code=303)
     respondent_id = verify_token(rtoken)
     if respondent_id < 0:
         return RedirectResponse(url="/login", status_code=302)
@@ -620,24 +634,22 @@ def survey_step_get(request: Request, step: int, rtoken: str, acc: str | None = 
         "is_first": step == 1
     })
 
-@app.post("/survey/{step}")
+
+@app.post("/survey/step/{step}")
 async def survey_step_post(request: Request, step: int,
                            acc: str = Form("{}"),
                            rtoken: str = Form(...)):
-    # 응답자 토큰 검증
     respondent_id = verify_token(rtoken)
     if respondent_id < 0:
         return RedirectResponse(url="/login", status_code=302)
 
     form = await request.form()
 
-    # 누적 응답 dict
     try:
         acc_data = json.loads(acc) if acc else {}
     except Exception:
         acc_data = {}
 
-    # 현재 단계 질문만 반영
     for q in get_questions_for_step(step):
         key = f"q{q['id']}"
         if q["type"] == "checkbox":
@@ -649,48 +661,42 @@ async def survey_step_post(request: Request, step: int,
             if val:
                 acc_data[key] = val
 
-    # 다음 단계 or 제출
     acc_q = json.dumps(acc_data, ensure_ascii=False)
     if step < 3:
         return RedirectResponse(
-            url=f"/survey/{step+1}?acc={acc_q}&rtoken={rtoken}",
+            url=f"/survey/step/{step+1}?acc={acc_q}&rtoken={rtoken}",
             status_code=303
         )
     else:
         return RedirectResponse(
-            url=f"/survey/submit?acc={acc_q}&rtoken={rtoken}",
+            url=f"/survey/finish?acc={acc_q}&rtoken={rtoken}",   # ← 제출 엔드포인트 변경
             status_code=303
         )
 
-@app.get("/survey/submit")
-def survey_submit_get(request: Request,
-                      acc: str,
-                      rtoken: str,
-                      session: Session = Depends(get_session)):
-    # 응답자 ID 복원
+
+@app.get("/survey/finish")
+def survey_finish(request: Request,
+                  acc: str,
+                  rtoken: str,
+                  session: Session = Depends(get_session)):
     respondent_id = verify_token(rtoken)
     if respondent_id < 0:
         return templates.TemplateResponse("error.html", {"request": request, "message": "세션이 만료되었습니다. 다시 시작해주세요."}, status_code=401)
 
-    # SurveyResponse 저장
     sr = SurveyResponse(
         respondent_id=respondent_id,
         answers_json=acc,
-        score=None  # 점수 규칙 확정되면 계산해서 넣기
+        score=None
     )
     session.add(sr)
-
-    # Respondent 상태 변경
     resp = session.get(Respondent, respondent_id)
     if resp:
         resp.status = "submitted"
         session.add(resp)
-
     session.commit()
     session.refresh(sr)
 
-    # 보고서 준비 URL로 이동 (기존 로직 재사용)
-    rtoken_report = signer.sign(f"{sr.id}").decode("utf-8")  # report용 토큰
+    rtoken_report = signer.sign(f"{sr.id}").decode("utf-8")
     return RedirectResponse(url=f"/report/ready?rtoken={rtoken_report}", status_code=303)
 
 
