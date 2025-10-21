@@ -683,3 +683,9 @@ def survey_submit_get(request: Request,
     rtoken_report = signer.sign(f"{sr.id}").decode("utf-8")  # report용 토큰
     return RedirectResponse(url=f"/report/ready?rtoken={rtoken_report}", status_code=303)
 
+
+from fastapi.routing import APIRoute
+
+@app.get("/_routes")
+def _routes():
+    return [{"path": r.path, "methods": list(r.methods)} for r in app.routes if isinstance(r, APIRoute)]
