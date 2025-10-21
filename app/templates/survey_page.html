@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>설문 {{ step }}/3</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Noto Sans KR, Arial, sans-serif; margin:0; background:#f7f7f8; }
+    .wrap { max-width: 720px; margin: 16px auto; padding: 12px; }
+    .card { background:#fff; border-radius:14px; padding:16px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+    h1 { font-size:18px; margin:0 0 6px; }
+    .q { margin:14px 0; }
+    .q-title { font-weight:600; margin-bottom:8px; line-height:1.4; }
+    label { display:block; padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px; margin:6px 0; }
+    input[type="radio"], input[type="checkbox"] { margin-right:8px; }
+    .nav { display:flex; gap:8px; margin-top:12px; }
+    .btn { flex:1; padding:14px; border-radius:12px; border:0; font-weight:600; }
+    .btn.prev { background:#e5e7eb; }
+    .btn.next { background:#111827; color:#fff; opacity:.5; }
+    .btn.next.enabled { opacity:1; }
+    .progress { font-size:13px; color:#6b7280; margin-bottom:10px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="progress">단계 {{ step }} / 3</div>
+    <form class="card" method="post" action="/survey/{{ step }}" id="surveyForm">
+      <input type="hidden" name="acc" value='{{ acc|e }}'>
+      <input type="hidden" name="acc" value='{{ acc|e }}'>
+      <input type="hidden" name="rtoken" value='{{ rtoken|e }}'>   <!-- 추가 -->
+
+      {% if not is_first %}
+        <a class="btn prev" href="/survey/{{ step - 1 }}?acc={{ acc|urlencode }}&rtoken={{ rtoken|urlencode }}">이전</a>
+      {% endif %}
+
+      {% for q in questions %}
+        <div class="q">
+          <div class="q-title">{{ q.id }}. {{ q.question }}</div>
+          {% if q.type == "radio" %}
+            {% for opt in q.options %}
+              <label><input type="radio" name="q{{ q.id }}" value="{{ opt }}">{{ opt }}</label>
+            {% endfor %}
+          {% elif q.type == "checkbox" %}
+            {% for opt in q.options %}
+              <label><input type="checkbox" name="q{{ q.id }}" value="{{ opt }}">{{ opt }}</label>
+            {% endfor %}
+          {% endif %}
+        </div>
+      {% endfor %}
+
+      <div class="nav">
+        {% if not is_first %}
+          <a class="btn prev" href="/survey/{{ step - 1 }}?acc={{ acc|urlencode }}">이전</a>
+        {% endif %}
+        <button type="submit" class="btn next" id="nextBtn" disabled>
+          {{ "제출" if is_last else "다음" }}
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    // 모든 문항 응답해야 다음/제출 버튼 활성화
+    const form = document.getElementById('surveyForm');
+    const nextBtn = document.getElementById('nextBtn');
+
+    function validate() {
+      const blocks = document.querySelectorAll('.q');
+      let ok = true;
+      blocks.forEach(block => {
+        const radios = block.querySelectorAll('input[type="radio"]');
+        const checkboxes = block.querySelectorAll('input[type="checkbox"]');
+        if (radios.length) {
+          const any = Array.from(radios).some(r => r.checked);
+          if (!any) ok = false;
+        } else if (checkboxes.length) {
+          const any = Array.from(checkboxes).some(c => c.checked);
+          if (!any) ok = false;
+        }
+      });
+      nextBtn.disabled = !ok;
+      nextBtn.classList.toggle('enabled', ok);
+    }
+
+    form.addEventListener('change', validate);
+    window.addEventListener('load', validate);
+  </script>
+</body>
+</html>
