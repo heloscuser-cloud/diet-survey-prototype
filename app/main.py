@@ -21,7 +21,7 @@ ROOT_DIR = os.path.dirname(BASE_DIR)
 DB_PATH = os.path.join(ROOT_DIR, "app", "data", "app.db")
 os.makedirs(os.path.join(ROOT_DIR, "app", "data"), exist_ok=True)
 
-DATABASE_URL = f"sqlite:///{DB_PATH}"
+DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DB_PATH}")
 engine = create_engine(DATABASE_URL, echo=False)
 
 app = FastAPI(title="Diet Survey Prototype")
