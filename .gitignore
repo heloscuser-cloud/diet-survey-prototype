@@ -1,0 +1,35 @@
+# ---- Python & FastAPI 기본 ----
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+*.log
+*.pid
+*.bak
+
+# ---- 가상환경 ----
+.venv/
+env/
+venv/
+
+# ---- 환경변수 파일 ----
+.env
+.env.local
+.env.prod
+.env.dev
+
+# ---- IDE 설정 ----
+.vscode/
+.idea/
+
+# ---- 시스템/배포용 ----
+.DS_Store
+Thumbs.db
+*.zip
+
+# ---- 빌드/배포 산출물 ----
+dist/
+build/
+*.egg-info/

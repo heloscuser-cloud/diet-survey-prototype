@@ -15,6 +15,36 @@ from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
+import os
+import secrets
+from datetime import datetime, timedelta
+from typing import Optional
+
+import itsdangerous
+from fastapi import Depends, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from sqlmodel import Session, select
+from sqlalchemy import func
+
+import json
+from pathlib import Path
+from fastapi import Request, Form
+from fastapi.responses import RedirectResponse
+
+
+# 질문 로드 (앱 기동시 1회)
+QUESTIONS_PATH = Path("app/data/survey_questions.json")
+with QUESTIONS_PATH.open("r", encoding="utf-8") as f:
+    ALL_QUESTIONS = json.load(f)
+
+# 페이지 그룹: (start_id, end_id)
+SURVEY_STEPS = [(1, 8), (9, 16), (17, 23)]
+
+def get_questions_for_step(step: int):
+    start_id, end_id = SURVEY_STEPS[step-1]
+    return [q for q in ALL_QUESTIONS if start_id <= q["id"] <= end_id]
+
+
 # ---- Basic app setup ----
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
@@ -190,7 +220,9 @@ def logout():
     resp.delete_cookie(AUTH_COOKIE_NAME)
     return resp
 
-@app.get("/survey", response_class=HTMLResponse)
+#---- 기존 테스트용 문진 ----#
+
+@app.get("/survey_legacy", response_class=HTMLResponse)
 def survey(request: Request, session: Session = Depends(get_session), auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME)):
     user_id = verify_user(auth) if auth else -1
     if user_id < 0:
@@ -236,7 +268,7 @@ def score_survey(data: SurveyIn) -> int:
     score += max(0, min(10, data.meals_per_day * 2))
     return int(score)
 
-@app.post("/survey/submit")
+@app.post("/survey/submit_legacy")
 async def survey_submit(request: Request,
                         token: str = Form(...),
                         meals_per_day: int = Form(...),
@@ -373,3 +405,281 @@ def portal_report_download(report_id: int, auth: str | None = Cookie(default=Non
 
     filename = f"report_{report_id}.pdf"
     return FileResponse(pdf_path, filename=filename, media_type="application/pdf")
+
+
+# --- Admin host gate ---
+ADMIN_ALLOWED_HOSTS = {
+    "admin.gaonnsurvey.store",  # 프로덕션
+    "localhost", "127.0.0.1"    # 로컬 테스트
+}
+
+def require_admin_host(request: Request):
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    if host not in ADMIN_ALLOWED_HOSTS:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+
+#---- 관리자 로그인 ----#
+
+APP_SECRET = os.environ.get("APP_SECRET", "dev-secret")
+ADMIN_USER = os.environ.get("ADMIN_USER")
+ADMIN_PASS = os.environ.get("ADMIN_PASS")
+_signer = itsdangerous.URLSafeSerializer(APP_SECRET, salt="admin-cookie")
+COOKIE_NAME = "admin"
+COOKIE_MAX_AGE = 7200  # 2시간
+SECURE_COOKIE = os.environ.get("SECURE_COOKIE", "1") == "1"
+
+def create_admin_cookie() -> str:
+    return _signer.dumps({"role": "admin", "iat": int(datetime.utcnow().timestamp())})
+
+def validate_admin_cookie(token: str) -> bool:
+    try:
+        return _signer.loads(token).get("role") == "admin"
+    except itsdangerous.BadSignature:
+        return False
+
+def admin_required(request: Request):
+    token = request.cookies.get(COOKIE_NAME)
+    if not token or not validate_admin_cookie(token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+@app.get("/admin/login", response_class=HTMLResponse)
+def admin_login_form(request: Request, _h: None = Depends(require_admin_host)):
+    return templates.TemplateResponse("admin/login.html", {"request": request, "error": None})
+
+@app.post("/admin/login")
+def admin_login(request: Request, username: str = Form(...), password: str = Form(...), _h: None = Depends(require_admin_host)):
+    ok = (
+        ADMIN_USER and ADMIN_PASS and
+        secrets.compare_digest(username, ADMIN_USER) and
+        secrets.compare_digest(password, ADMIN_PASS)
+    )
+    if not ok:
+        return templates.TemplateResponse(
+            "admin/login.html",
+            {"request": request, "error": "아이디 또는 비밀번호가 올바르지 않습니다."},
+            status_code=401
+        )
+    resp = RedirectResponse(url="/admin/responses", status_code=303)
+    resp.set_cookie(COOKIE_NAME, create_admin_cookie(), httponly=True, secure=SECURE_COOKIE,
+                    samesite="lax", max_age=COOKIE_MAX_AGE, path="/")
+    return resp
+
+@app.get("/admin/logout")
+def admin_logout():
+    resp = RedirectResponse(url="/admin/login", status_code=303)
+    resp.delete_cookie(COOKIE_NAME, path="/")
+    return resp
+
+@app.get("/admin/responses", response_class=HTMLResponse)
+def admin_responses(
+    request: Request,
+    page: int = 1,
+    q: Optional[str] = None,
+    min_score: Optional[int] = None,
+    from_: Optional[str] = None,
+    to: Optional[str] = None,
+    session: Session = Depends(get_session),
+    _auth: None = Depends(admin_required),
+):
+    PAGE_SIZE = 20
+    page = max(1, page)
+
+    stmt = (
+        select(SurveyResponse, Respondent, User)
+        .join(Respondent, Respondent.id == SurveyResponse.respondent_id)
+        .join(User, User.id == Respondent.user_id)
+    )
+    if q:
+        like = f"%{q}%"
+        stmt = stmt.where(
+            (User.name_enc.ilike(like)) |
+            (User.phone_hash.ilike(like)) |
+            (SurveyResponse.answers_json.ilike(like))
+        )
+    if min_score:
+        stmt = stmt.where(SurveyResponse.score >= min_score)
+
+    def parse_date(s: Optional[str]):
+        try: return datetime.strptime(s, "%Y-%m-%d").date()
+        except: return None
+
+    d_from = parse_date(from_)
+    d_to = parse_date(to)
+    if d_from:
+        stmt = stmt.where(SurveyResponse.submitted_at >= datetime(d_from.year, d_from.month, d_from.day))
+    if d_to:
+        stmt = stmt.where(SurveyResponse.submitted_at < datetime(d_to.year, d_to.month, d_to.day) + timedelta(days=1))
+
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = session.exec(count_stmt).one()
+    rows = session.exec(stmt.order_by(SurveyResponse.submitted_at.desc()).offset((page-1)*PAGE_SIZE).limit(PAGE_SIZE)).all()
+    total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
+
+    return templates.TemplateResponse("admin/responses.html", {
+        "request": request, "rows": rows, "page": page,
+        "total": total, "total_pages": total_pages,
+        "q": q, "min_score": min_score, "from": from_, "to": to,
+    })
+
+@app.get("/admin/responses.csv")
+def admin_responses_csv(
+    q: Optional[str] = None,
+    min_score: Optional[int] = None,
+    from_: Optional[str] = None,
+    to: Optional[str] = None,
+    session: Session = Depends(get_session),
+    _auth: None = Depends(admin_required),
+):
+    def parse_date(s: Optional[str]):
+        try: return datetime.strptime(s, "%Y-%m-%d").date()
+        except: return None
+    d_from, d_to = parse_date(from_), parse_date(to)
+
+    def generate():
+        yield "\ufeff"
+        s = StringIO()
+        w = csv.writer(s)
+        w.writerow(["id","respondent_id","user_id","score","submitted_at","phone_hash","name_enc"])
+        yield s.getvalue(); s.seek(0); s.truncate(0)
+        stmt = (
+            select(SurveyResponse, Respondent, User)
+            .join(Respondent, Respondent.id == SurveyResponse.respondent_id)
+            .join(User, User.id == Respondent.user_id)
+        )
+        if q:
+            like = f"%{q}%"
+            stmt = stmt.where(
+                (User.name_enc.ilike(like)) |
+                (User.phone_hash.ilike(like)) |
+                (SurveyResponse.answers_json.ilike(like))
+            )
+        if min_score:
+            stmt = stmt.where(SurveyResponse.score >= min_score)
+        if d_from:
+            stmt = stmt.where(SurveyResponse.submitted_at >= datetime(d_from.year, d_from.month, d_from.day))
+        if d_to:
+            stmt = stmt.where(SurveyResponse.submitted_at < datetime(d_to.year, d_to.month, d_to.day) + timedelta(days=1))
+        for sr, resp, user in session.exec(stmt.order_by(SurveyResponse.id)):
+            w.writerow([sr.id, sr.respondent_id, user.id, sr.score or "", sr.submitted_at, user.phone_hash, user.name_enc])
+            yield s.getvalue(); s.seek(0); s.truncate(0)
+    return StreamingResponse(generate(), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="responses.csv"'})
+
+
+#---- 문진 가져오기 ----#
+
+@app.get("/survey")
+def survey_root(auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+                session: Session = Depends(get_session)):
+    # 로그인 확인
+    user_id = verify_user(auth) if auth else -1
+    if user_id < 0:
+        return RedirectResponse(url="/login", status_code=302)
+
+    # 응답자 초안 생성 (기존 legacy와 동일한 개념)
+    user = session.get(User, user_id)
+    resp = Respondent(user_id=user.id, campaign_id="demo", status="draft")
+    session.add(resp)
+    session.commit()
+    session.refresh(resp)
+
+    # 응답자 토큰 (서명) 생성 — 이후 단계들에서 계속 들고 다님
+    rtoken = signer.sign(str(resp.id)).decode("utf-8")
+    return RedirectResponse(url=f"/survey/1?rtoken={rtoken}", status_code=303)
+
+@app.get("/survey/{step}", response_class=HTMLResponse)
+def survey_step_get(request: Request, step: int, rtoken: str, acc: str | None = None):
+    # 단계 범위 체크
+    if step < 1 or step > 3:
+        return RedirectResponse(url="/survey/1", status_code=303)
+
+    # rtoken 검증(응답자 ID 복원)
+    respondent_id = verify_token(rtoken)
+    if respondent_id < 0:
+        return RedirectResponse(url="/login", status_code=302)
+
+    questions = get_questions_for_step(step)
+    return templates.TemplateResponse("survey_page.html", {
+        "request": request,
+        "step": step,
+        "questions": questions,
+        "acc": acc or "{}",
+        "rtoken": rtoken,
+        "is_last": step == 3,
+        "is_first": step == 1
+    })
+
+@app.post("/survey/{step}")
+async def survey_step_post(request: Request, step: int,
+                           acc: str = Form("{}"),
+                           rtoken: str = Form(...)):
+    # 응답자 토큰 검증
+    respondent_id = verify_token(rtoken)
+    if respondent_id < 0:
+        return RedirectResponse(url="/login", status_code=302)
+
+    form = await request.form()
+
+    # 누적 응답 dict
+    try:
+        acc_data = json.loads(acc) if acc else {}
+    except Exception:
+        acc_data = {}
+
+    # 현재 단계 질문만 반영
+    for q in get_questions_for_step(step):
+        key = f"q{q['id']}"
+        if q["type"] == "checkbox":
+            vals = form.getlist(key)
+            if vals:
+                acc_data[key] = vals
+        else:
+            val = form.get(key)
+            if val:
+                acc_data[key] = val
+
+    # 다음 단계 or 제출
+    acc_q = json.dumps(acc_data, ensure_ascii=False)
+    if step < 3:
+        return RedirectResponse(
+            url=f"/survey/{step+1}?acc={acc_q}&rtoken={rtoken}",
+            status_code=303
+        )
+    else:
+        return RedirectResponse(
+            url=f"/survey/submit?acc={acc_q}&rtoken={rtoken}",
+            status_code=303
+        )
+
+@app.get("/survey/submit")
+def survey_submit_get(request: Request,
+                      acc: str,
+                      rtoken: str,
+                      session: Session = Depends(get_session)):
+    # 응답자 ID 복원
+    respondent_id = verify_token(rtoken)
+    if respondent_id < 0:
+        return templates.TemplateResponse("error.html", {"request": request, "message": "세션이 만료되었습니다. 다시 시작해주세요."}, status_code=401)
+
+    # SurveyResponse 저장
+    sr = SurveyResponse(
+        respondent_id=respondent_id,
+        answers_json=acc,
+        score=None  # 점수 규칙 확정되면 계산해서 넣기
+    )
+    session.add(sr)
+
+    # Respondent 상태 변경
+    resp = session.get(Respondent, respondent_id)
+    if resp:
+        resp.status = "submitted"
+        session.add(resp)
+
+    session.commit()
+    session.refresh(sr)
+
+    # 보고서 준비 URL로 이동 (기존 로직 재사용)
+    rtoken_report = signer.sign(f"{sr.id}").decode("utf-8")  # report용 토큰
+    return RedirectResponse(url=f"/report/ready?rtoken={rtoken_report}", status_code=303)
+
