@@ -6,3 +6,4 @@ itsdangerous==2.2.0
 reportlab==4.2.2
 sqlmodel==0.0.22
 python-dotenv==1.0.1
+psycopg2-binary==2.9.9
