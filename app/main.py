@@ -161,8 +161,17 @@ def verify_otp(session: Session, phone: str, code: str) -> bool:
     return True
 
 # ---- Routes ----
+def _host(request: Request) -> str:
+    return (request.headers.get("host") or "").split(":")[0].lower()
+
+ADMIN_HOST = "admin.gaonnsurvey.store"
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
+    if _host(request) == ADMIN_HOST:
+        # 관리자 서브도메인으로 들어오면 관리자 로그인으로 보냄
+        return RedirectResponse(url="/admin/login", status_code=302)
+    # 기존 사용자용 홈 유지
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/login", response_class=HTMLResponse)
@@ -482,6 +491,7 @@ def admin_responses(
     to: Optional[str] = None,
     session: Session = Depends(get_session),
     _auth: None = Depends(admin_required),
+    _h: None = Depends(require_admin_host),
 ):
     PAGE_SIZE = 20
     page = max(1, page)
@@ -684,8 +694,13 @@ def survey_submit_get(request: Request,
     return RedirectResponse(url=f"/report/ready?rtoken={rtoken_report}", status_code=303)
 
 
+
 from fastapi.routing import APIRoute
 
 @app.get("/_routes")
 def _routes():
     return [{"path": r.path, "methods": list(r.methods)} for r in app.routes if isinstance(r, APIRoute)]
+
+@app.get("/_host")
+def _host(request: Request):
+    return {"host": (request.headers.get("host") or "").split(":")[0].lower()}
