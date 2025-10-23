@@ -25,6 +25,9 @@
     .nowrap{white-space:nowrap}
     .muted{color:#6b7280}
     .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#eef2ff}
+   .w-date{ width: 160px; }  /* 날짜 입력 폭 */
+   .w-status{ width: 220px; }/* 상태 콤보 폭(한글 ~15자 정도) */
+   .w-text{ width: 480px; }  /* 텍스트 검색(~30자) */
   </style>
 </head>
 <body>
@@ -39,9 +42,9 @@
       <div class="grow">
         <label>신청일</label>
         <div class="row">
-          <input class="grow" type="date" name="from" value="{{ from or '' }}"/>
+          <input class="w-date" type="date" name="from" value="{{ from or '' }}"/>
           <span style="align-self:center">~</span>
-          <input class="grow" type="date" name="to" value="{{ to or '' }}"/>
+          <input class="w-date" type="date" name="to" value="{{ to or '' }}"/>
         </div>
       </div>
       <div style="display:flex;gap:8px;align-items:flex-end">
@@ -56,7 +59,7 @@
     <div class="row" style="margin-top:8px">
       <div class="grow">
         <label>진행 상태</label>
-        <select name="status">
+       <select name="status" class="w-status">
           <option value="" {{ 'selected' if not status }}>전체</option>
           <option value="submitted" {{ 'selected' if status=='submitted' }}>신청완료</option>
           <option value="accepted" {{ 'selected' if status=='accepted' }}>접수완료</option>
@@ -65,16 +68,18 @@
       </div>
     </div>
 
-    <!-- 3행: 텍스트 검색 -->
-    <div class="row" style="margin-top:8px">
-      <div class="grow">
-        <label>텍스트 검색</label>
-        <input type="text" name="q" value="{{ q or '' }}" placeholder="신청자 이름, 신청자 생년월일(YYYY-MM-DD), PDF 파일명으로 검색"/>
-      </div>
-      <div class="actions">
-        <button class="primary" type="submit">조회</button>
-      </div>
-    </div>
+<!-- 3행: 텍스트 검색 -->
+<div class="row" style="margin-top:8px">
+  <div class="grow">
+    <label>텍스트 검색</label>
+    <input type="text" name="q" class="w-text" value="{{ q or '' }}" placeholder="신청자 이름, 신청자 생년월일(YYYY-MM-DD), PDF 파일명으로 검색"/>
+  </div>
+</div>
+
+<!-- 4행: 가운데 정렬된 조회 버튼 -->
+<div class="row" style="margin-top:8px;justify-content:center">
+  <button class="btn" type="submit" style="min-width:140px;padding:10px 14px">조회</button>
+</div>
   </form>
 </div>
 
@@ -105,7 +110,6 @@
           <th>신청일</th>
           <th>제출일</th>
           <th>리포트</th>
-          <th>내보내기</th>
         </tr>
       </thead>
       <tbody>
@@ -124,31 +128,30 @@
           </td>
           <td>{{ to_kst_str(resp.created_at) }}</td>
           <td>{{ to_kst_str(sr.submitted_at) }}</td>
-          <td class="nowrap">
-          <!-- 업로드: 아이콘+숨은 파일인풋, 선택하면 자동 제출 -->
-            <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report" enctype="multipart/form-data">
-              <input id="file_{{ sr.id }}" type="file" name="file" accept="application/pdf" style="display:none"
-                onchange="this.form.submit()"/>
-              <label for="file_{{ sr.id }}" title="리포트 등록" style="cursor:pointer;display:inline-block;padding:6px 8px;border:1px solid #e5e7eb;border-radius:8px">
-                 <img src="/static/icons/plus.svg" alt="등록" style="width:16px;height:16px;vertical-align:middle"/>
-              </label>
-           </form>
+        
+<td class="nowrap">
+  <!-- 업로드 아이콘 -->
+  <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report" enctype="multipart/form-data">
+    <input id="file_{{ sr.id }}" type="file" name="file" accept="application/pdf" style="display:none"
+           onchange="this.form.submit()"/>
+    <label for="file_{{ sr.id }}" title="리포트 등록"
+           style="cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid #e5e7eb;border-radius:6px">
+      <img src="/static/icons/plus.svg" alt="등록" style="width:16px;height:16px"/>
+    </label>
+  </form>
 
-  <!-- 삭제: 아이콘 버튼 -->
+  <!-- 삭제 아이콘(크기 맞춤) -->
   {% if rf %}
   <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report/delete">
-    <button class="btn" type="submit" title="리포트 삭제" style="padding:6px 8px">
-      <img src="/static/icons/trash.svg" alt="삭제" style="width:16px;height:16px;vertical-align:middle"/>
+    <button type="submit" title="리포트 삭제"
+            style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid #e5e7eb;border-radius:6px;background:#fff;cursor:pointer">
+      <img src="/static/icons/trash.svg" alt="삭제" style="width:16px;height:16px"/>
     </button>
   </form>
   {% endif %}
 </td>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-
 </div>
+
 
 <script>
 function fmt(d){const z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}

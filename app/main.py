@@ -299,9 +299,11 @@ def login_verify(request: Request, t: str = Form(...), code: str = Form(...), se
         session.add(user)
         session.commit()
         session.refresh(user)
-
-    resp = RedirectResponse(url="/portal", status_code=303)
+   
+    resp = RedirectResponse(url="/info", status_code=303)  # 로그인 → 인적정보 → 설문
     resp.set_cookie(AUTH_COOKIE_NAME, sign_user(user.id), httponly=True, secure=False, samesite="lax", max_age=AUTH_MAX_AGE)
+    # 혹시 남아있을 수도 있는 완료 쿠키 제거(새 설문 시작을 방해하지 않도록)
+    resp.delete_cookie("survey_completed")
     return resp
 
 @app.get("/logout")
@@ -918,7 +920,7 @@ def survey_finish(request: Request,
 
 @app.post("/admin/responses/export.zip")
 def admin_export_zip(
-    ids: str = Form(...),  # "1,2,3"
+    ids: str = Form(...),
     session: Session = Depends(get_session),
     _h: None = Depends(require_admin_host),
     _auth: None = Depends(admin_required),
@@ -926,46 +928,53 @@ def admin_export_zip(
     def to_kst_str(dt):
         return to_kst(dt).strftime("%Y-%m-%d %H:%M") if dt else ""
 
-    id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+    # ids 파싱 보강
+    id_list = []
+    for x in (ids or "").split(","):
+        x = x.strip()
+        if x.isdigit():
+            id_list.append(int(x))
     if not id_list:
+        # 선택 없음 → 목록으로 복귀
         return RedirectResponse(url="/admin/responses", status_code=303)
 
-    # 질문 타이틀
     questions = [q["title"] for q in sorted(ALL_QUESTIONS, key=lambda x: x["id"])]
 
     mem = BytesIO()
-    with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as zf:
-        for rid in id_list:
-            sr = session.get(SurveyResponse, rid)
-            if not sr:
-                continue
-            try:
-                payload = json.loads(sr.answers_json) if sr.answers_json else {}
-            except Exception:
-                payload = {}
-            answers = payload.get("answers_indices") or []
+    try:
+        with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as zf:
+            for rid in id_list:
+                sr = session.get(SurveyResponse, rid)
+                if not sr:
+                    continue
+                try:
+                    payload = json.loads(sr.answers_json) if sr.answers_json else {}
+                except Exception:
+                    payload = {}
+                answers = payload.get("answers_indices") or []
 
-            # 2행 CSV 만들기
-            sio = StringIO()
-            w = csv.writer(sio)
-            w.writerow(questions)
+                sio = StringIO()
+                w = csv.writer(sio)
+                w.writerow(questions)
 
-            def fmt(val):
-                if isinstance(val, list):
-                    return ";".join(str(v) for v in val)
-                return "" if val is None else str(val)
+                def fmt(val):
+                    if isinstance(val, list):
+                        return ";".join(str(v) for v in val)
+                    return "" if val is None else str(val)
 
-            w.writerow([fmt(v) for v in answers])
-            csv_bytes = sio.getvalue().encode("utf-8-sig")
-
-            zf.writestr(f"response_{rid}.csv", csv_bytes)
-
-    mem.seek(0)
-    return StreamingResponse(
-        mem,
-        media_type="application/zip",
-        headers={"Content-Disposition": 'attachment; filename="reports.zip"'}
-    )
+                w.writerow([fmt(v) for v in answers])
+                csv_bytes = sio.getvalue().encode("utf-8-sig")
+                zf.writestr(f"response_{rid}.csv", csv_bytes)
+        mem.seek(0)
+        return StreamingResponse(
+            mem,
+            media_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="reports.zip"'}
+        )
+    except Exception as e:
+        # (선택) 오류 디버깅 편의를 위해 로그
+        print("export.zip error:", repr(e))
+        return RedirectResponse(url="/admin/responses", status_code=303)
 
 
 from fastapi.routing import APIRoute
