@@ -85,9 +85,12 @@
       <input type="hidden" name="ids" id="acceptIds"/>
       <button class="btn" type="button" onclick="bulkAccept()">접수 완료 처리</button>
     </form>
-    <form id="zipForm" method="post" action="/admin/responses/export.zip">
-      <input type="hidden" name="ids" id="zipIds"/>
-      <button class="btn" type="button" onclick="bulkZip()">엑셀 다운로드</button>
+    <form method="get" action="/admin/responses.csv">
+      <input type="hidden" name="q" value="{{ q or '' }}"/>
+      <input type="hidden" name="from" value="{{ from or '' }}"/>
+      <input type="hidden" name="to" value="{{ to or '' }}"/>
+      <input type="hidden" name="status" value="{{ status or '' }}"/>
+      <button class="btn" type="submit">엑셀 다운로드</button>
     </form>
   </div>
 
@@ -125,24 +128,18 @@
           <td>{{ to_kst_str(resp.created_at) }}</td>
           <td>{{ to_kst_str(sr.submitted_at) }}</td>
           <td class="nowrap">
-          <!-- 업로드: 아이콘+숨은 파일인풋, 선택하면 자동 제출 -->
             <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report" enctype="multipart/form-data">
-              <input id="file_{{ sr.id }}" type="file" name="file" accept="application/pdf" style="display:none"
-                onchange="this.form.submit()"/>
-              <label for="file_{{ sr.id }}" title="리포트 등록" style="cursor:pointer;display:inline-block;padding:6px 8px;border:1px solid #e5e7eb;border-radius:8px">
-                 <img src="/static/icons/plus.svg" alt="등록" style="width:16px;height:16px;vertical-align:middle"/>
-              </label>
-           </form>
-
-  <!-- 삭제: 아이콘 버튼 -->
-  {% if rf %}
-  <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report/delete">
-    <button class="btn" type="submit" title="리포트 삭제" style="padding:6px 8px">
-      <img src="/static/icons/trash.svg" alt="삭제" style="width:16px;height:16px;vertical-align:middle"/>
-    </button>
-  </form>
-  {% endif %}
-</td>
+              <input type="file" name="file" accept="application/pdf" required/>
+              <button class="btn" type="submit">등록</button>
+            </form>
+            {% if rf %}
+            <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report/delete">
+              <button class="btn" type="submit">삭제</button>
+            </form>
+            {% endif %}
+          </td>
+          <td><a href="/admin/response/{{ sr.id }}.csv">CSV</a></td>
+        </tr>
       {% endfor %}
       </tbody>
     </table>
@@ -162,12 +159,6 @@ function bulkAccept(){
   if(ids.length===0){alert('선택된 항목이 없습니다.');return;}
   document.getElementById('acceptIds').value = ids.join(',');
   document.getElementById('acceptForm').submit();
-}
-function bulkZip(){
-  const ids=[...document.querySelectorAll('.rowChk:checked')].map(c=>c.value);
-  if(ids.length===0){alert('선택된 항목이 없습니다.');return;}
-  document.getElementById('zipIds').value = ids.join(',');
-  document.getElementById('zipForm').submit();
 }
 </script>
 </body>

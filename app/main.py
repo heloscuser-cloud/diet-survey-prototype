@@ -7,10 +7,13 @@ from fastapi.requests import Request
 from sqlmodel import SQLModel, Field, Session, create_engine, select, Relationship
 from pydantic import BaseModel
 from typing import Optional, List
+from fastapi import Query
 from datetime import datetime, timedelta, date, timezone
 from random import randint
 from sqlalchemy import func, Column, LargeBinary
 from itsdangerous import TimestampSigner, BadSignature, SignatureExpired, URLSafeSerializer
+import zipfile
+import csv
 import itsdangerous
 import os
 from reportlab.lib.pagesizes import A4
@@ -18,7 +21,7 @@ from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from io import StringIO
+from io import StringIO, BytesIO
 import csv
 import secrets
 import json
@@ -487,8 +490,8 @@ def admin_responses(
     q: Optional[str] = None,
     min_score: Optional[str] = None,   # ← int 대신 str로 받기
     status: Optional[str] = None,  # all | submitted | accepted | report_uploaded
-    from_: Optional[str] = None,
-    to: Optional[str] = None,
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = Query(None, alias="to"),
     session: Session = Depends(get_session),
     _h: None = Depends(require_admin_host),
     _auth: None = Depends(admin_required),
@@ -628,8 +631,8 @@ def admin_delete_report(
 def admin_responses_csv(
     q: Optional[str] = None,
     min_score: Optional[str] = None,   # 의미 없어도 기존 인터페이스 유지
-    from_: Optional[str] = None,
-    to: Optional[str] = None,
+    from_: Optional[str] = Query(None, alias="from"),
+    to: Optional[str] = Query(None, alias="to"),
     status: Optional[str] = None,      # ← 추가되었다면 받기
     session: Session = Depends(get_session),
     _h: None = Depends(require_admin_host),
@@ -755,7 +758,7 @@ def admin_response_two_rows_csv(
 
 @app.get("/survey")
 def survey_root(auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
-                session: Session = Depends(get_session),  _guard: None = Depends(ensure_not_completed)):
+                session: Session = Depends(get_session),):
     user_id = verify_user(auth) if auth else -1
     if user_id < 0:
         return RedirectResponse(url="/login", status_code=302)
@@ -781,7 +784,10 @@ def survey_root(auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
     session.commit()
 
     rtoken = signer.sign(str(resp.id)).decode("utf-8")
-    return RedirectResponse(url=f"/survey/step/1?rtoken={rtoken}", status_code=303)   # ← 여기만 확인
+    # 새 설문 시작: 완료 쿠키 제거
+    redirect = RedirectResponse(url=f"/survey/step/1?rtoken={rtoken}", status_code=303)
+    redirect.delete_cookie("survey_completed")
+    return redirect
 
 
 @app.get("/survey/step/{step}", response_class=HTMLResponse)
@@ -909,6 +915,57 @@ def survey_finish(request: Request,
     response.set_cookie("survey_completed", "1", max_age=60*60*24*7, httponly=True, samesite="Lax", secure=bool(int(os.getenv("SECURE_COOKIE","1"))))
     return response
 
+
+@app.post("/admin/responses/export.zip")
+def admin_export_zip(
+    ids: str = Form(...),  # "1,2,3"
+    session: Session = Depends(get_session),
+    _h: None = Depends(require_admin_host),
+    _auth: None = Depends(admin_required),
+):
+    def to_kst_str(dt):
+        return to_kst(dt).strftime("%Y-%m-%d %H:%M") if dt else ""
+
+    id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+    if not id_list:
+        return RedirectResponse(url="/admin/responses", status_code=303)
+
+    # 질문 타이틀
+    questions = [q["title"] for q in sorted(ALL_QUESTIONS, key=lambda x: x["id"])]
+
+    mem = BytesIO()
+    with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as zf:
+        for rid in id_list:
+            sr = session.get(SurveyResponse, rid)
+            if not sr:
+                continue
+            try:
+                payload = json.loads(sr.answers_json) if sr.answers_json else {}
+            except Exception:
+                payload = {}
+            answers = payload.get("answers_indices") or []
+
+            # 2행 CSV 만들기
+            sio = StringIO()
+            w = csv.writer(sio)
+            w.writerow(questions)
+
+            def fmt(val):
+                if isinstance(val, list):
+                    return ";".join(str(v) for v in val)
+                return "" if val is None else str(val)
+
+            w.writerow([fmt(v) for v in answers])
+            csv_bytes = sio.getvalue().encode("utf-8-sig")
+
+            zf.writestr(f"response_{rid}.csv", csv_bytes)
+
+    mem.seek(0)
+    return StreamingResponse(
+        mem,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="reports.zip"'}
+    )
 
 
 from fastapi.routing import APIRoute
