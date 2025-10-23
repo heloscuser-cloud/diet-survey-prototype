@@ -22,6 +22,7 @@ from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from io import StringIO, BytesIO
+from openpyxl import Workbook
 import csv
 import secrets
 import json
@@ -220,6 +221,8 @@ async def info_submit(
     name: str = Form(...),
     birth_date: str = Form(...),   # "YYYY-MM-DD"
     gender: str = Form(...),       # "남" | "여"
+    height_cm: str = Form(None),
+    weight_kg: str = Form(None),
     auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
     session: Session = Depends(get_session),
 ):
@@ -235,12 +238,28 @@ async def info_submit(
     if gender not in ("남", "여"):
         return templates.TemplateResponse("error.html", {"request": request, "message": "성별은 남/여 중 선택해주세요."}, status_code=400)
 
+    # 숫자 파싱(선택)
+    def to_float(s):
+        try:
+            return float(s) if s not in (None, "") else None
+        except:
+            return None
+    h_cm = to_float(height_cm)
+    w_kg = to_float(weight_kg)
+
     # 다음 설문 세션 Respondent에 스냅샷으로 옮길 수 있도록 User에도 저장(옵션)
     user = session.get(User, user_id)
     if user:
         user.name_enc = name
         user.gender = gender
-        user.birth_year = bd.year
+        user.birth_year = bd.year  # 호환 위해 유지
+        # (선택) 정밀 저장: User에 컬럼 추가했으면 같이 저장
+        if hasattr(user, "birth_date"):
+            user.birth_date = bd
+        if hasattr(user, "height_cm"):
+            user.height_cm = h_cm
+        if hasattr(user, "weight_kg"):
+            user.weight_kg = w_kg
         session.add(user)
         session.commit()
 
@@ -775,13 +794,17 @@ def survey_root(auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
     session.refresh(resp)
     
     # User 정보 스냅샷을 Respondent에 저장(관리자 테이블 출력용)
+    # 생년월일: User.birth_date가 있으면 그 값을, 없으면 birth_year만이라도
     try:
-        bd = date(user.birth_year, 1, 1)  # birth_year만 있는 구조 → 연도만이라도
+        bd = user.birth_date if hasattr(user, "birth_date") and user.birth_date else date(user.birth_year, 1, 1)
     except:
         bd = None
     resp.applicant_name = user.name_enc
     resp.birth_date = bd
     resp.gender = user.gender
+    # 키/몸무게 스냅샷 (있을 때만)
+    if hasattr(user, "height_cm"): resp.height_cm = user.height_cm
+    if hasattr(user, "weight_kg"): resp.weight_kg = user.weight_kg
     session.add(resp)
     session.commit()
 
@@ -917,65 +940,93 @@ def survey_finish(request: Request,
     response.set_cookie("survey_completed", "1", max_age=60*60*24*7, httponly=True, samesite="Lax", secure=bool(int(os.getenv("SECURE_COOKIE","1"))))
     return response
 
-
-@app.post("/admin/responses/export.zip")
-def admin_export_zip(
-    ids: str = Form(...),
+@app.post("/admin/responses/export.xlsx")
+def admin_export_xlsx(
+    ids: str = Form(...),  # "1,2,3"
     session: Session = Depends(get_session),
     _h: None = Depends(require_admin_host),
     _auth: None = Depends(admin_required),
 ):
-    def to_kst_str(dt):
-        return to_kst(dt).strftime("%Y-%m-%d %H:%M") if dt else ""
-
-    # ids 파싱 보강
+    # ids 파싱
     id_list = []
     for x in (ids or "").split(","):
         x = x.strip()
         if x.isdigit():
             id_list.append(int(x))
     if not id_list:
-        # 선택 없음 → 목록으로 복귀
         return RedirectResponse(url="/admin/responses", status_code=303)
 
+    # 질문 타이틀
     questions = [q["title"] for q in sorted(ALL_QUESTIONS, key=lambda x: x["id"])]
 
+    # 워크북/시트
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "문진결과"
+
+    # 헤더 구성
+    fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별", "신장", "체중"]
+    ws.append(fixed_headers + questions)
+
+    # 나이 계산 함수(만 나이)
+    def calc_age(bd, ref_date):
+        if not bd:
+            return ""
+        return ref_date.year - bd.year - ((ref_date.month, ref_date.day) < (bd.month, bd.day))
+
+    today = now_kst().date()
+
+    # 데이터 행 추가
+    for idx, rid in enumerate(id_list, start=1):
+        sr = session.get(SurveyResponse, rid)
+        if not sr:
+            continue
+        resp = session.get(Respondent, sr.respondent_id)
+        user = session.get(User, resp.user_id) if resp else None
+
+        # 기초 필드
+        name = (resp.applicant_name if resp and resp.applicant_name else (user.name_enc if user else "")) or ""
+        bd = resp.birth_date if resp else None
+        age = calc_age(bd, today) if bd else ""
+        gender = (resp.gender if resp and resp.gender else (user.gender if user else "")) or ""
+        height = resp.height_cm if (resp and resp.height_cm is not None) else (user.height_cm if (user and hasattr(user, "height_cm")) else None)
+        weight = resp.weight_kg if (resp and resp.weight_kg is not None) else (user.weight_kg if (user and hasattr(user, "weight_kg")) else None)
+
+        # 문진 답(1부터, 23번은 리스트→";" 연결)
+        try:
+            payload = json.loads(sr.answers_json) if sr.answers_json else {}
+        except Exception:
+            payload = {}
+        answers = payload.get("answers_indices") or []
+        def fmt(v):
+            if isinstance(v, list):
+                return ";".join(str(x) for x in v)
+            return "" if v is None else str(v)
+        answer_row = [fmt(v) for v in answers]
+
+        # 한 줄 레코드 구성
+        row = [
+            idx,          # no. (엑셀 내 연번)
+            sr.id,        # 신청번호(안정적 식별자: 응답 ID 사용)
+            name,
+            bd.isoformat() if bd else "",
+            age,
+            gender,
+            ("" if height is None else height),
+            ("" if weight is None else weight),
+        ] + answer_row
+
+        ws.append(row)
+
+    # 바이너리로 내보내기
     mem = BytesIO()
-    try:
-        with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as zf:
-            for rid in id_list:
-                sr = session.get(SurveyResponse, rid)
-                if not sr:
-                    continue
-                try:
-                    payload = json.loads(sr.answers_json) if sr.answers_json else {}
-                except Exception:
-                    payload = {}
-                answers = payload.get("answers_indices") or []
-
-                sio = StringIO()
-                w = csv.writer(sio)
-                w.writerow(questions)
-
-                def fmt(val):
-                    if isinstance(val, list):
-                        return ";".join(str(v) for v in val)
-                    return "" if val is None else str(val)
-
-                w.writerow([fmt(v) for v in answers])
-                csv_bytes = sio.getvalue().encode("utf-8-sig")
-                zf.writestr(f"response_{rid}.csv", csv_bytes)
-        mem.seek(0)
-        return StreamingResponse(
-            mem,
-            media_type="application/zip",
-            headers={"Content-Disposition": 'attachment; filename="reports.zip"'}
-        )
-    except Exception as e:
-        # (선택) 오류 디버깅 편의를 위해 로그
-        print("export.zip error:", repr(e))
-        return RedirectResponse(url="/admin/responses", status_code=303)
-
+    wb.save(mem)
+    mem.seek(0)
+    return StreamingResponse(
+        mem,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="responses.xlsx"'}
+    )
 
 from fastapi.routing import APIRoute
 

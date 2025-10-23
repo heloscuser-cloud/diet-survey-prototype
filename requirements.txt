@@ -8,3 +8,4 @@ sqlmodel==0.0.22
 python-dotenv==1.0.1
 psycopg2-binary==2.9.9
 tzdata>=2024.1
+openpyxl>=3.1

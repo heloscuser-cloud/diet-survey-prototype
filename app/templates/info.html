@@ -10,6 +10,9 @@
     label{display:block;margin:12px 0 6px}
     input,select,button{width:100%;padding:12px;border:1px solid #e5e7eb;border-radius:10px}
     button{margin-top:16px;background:#111827;color:#fff;border:none;cursor:pointer}
+   .w-compact { width: 90px; } /* 한글 5글자 정도 */
+   .unit { align-self:center; padding:0 6px; color:#6b7280; }
+   .row-inline{display:flex; gap:8px; align-items:center}
   </style>
 </head>
 <body>
@@ -25,6 +28,14 @@
         <label style="flex:1"><input type="radio" name="gender" value="남" required/> 남</label>
         <label style="flex:1"><input type="radio" name="gender" value="여" required/> 여</label>
       </div>
+<label>신장 / 체중</label>
+<div class="row-inline">
+  <input type="number" step="0.1" min="0" name="height_cm" class="w-compact" placeholder="예: 158.5" />
+  <span class="unit">cm</span>
+  <input type="number" step="0.1" min="0" name="weight_kg" class="w-compact" placeholder="예: 65.5" />
+  <span class="unit">kg</span>
+</div>
+
       <button type="submit">다음</button>
     </form>
   </div>
