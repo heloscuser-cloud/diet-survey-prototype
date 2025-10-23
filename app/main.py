@@ -7,10 +7,11 @@ from fastapi.requests import Request
 from sqlmodel import SQLModel, Field, Session, create_engine, select, Relationship
 from pydantic import BaseModel
 from typing import Optional, List
-from itsdangerous import TimestampSigner, BadSignature, SignatureExpired
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from random import randint
 from sqlalchemy import func, Column, LargeBinary
+from itsdangerous import TimestampSigner, BadSignature, SignatureExpired, URLSafeSerializer
+import itsdangerous
 import os
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -626,37 +627,70 @@ def admin_delete_report(
 @app.get("/admin/responses.csv")
 def admin_responses_csv(
     q: Optional[str] = None,
-    min_score: Optional[str] = None,   # ← 여기
+    min_score: Optional[str] = None,   # 의미 없어도 기존 인터페이스 유지
     from_: Optional[str] = None,
     to: Optional[str] = None,
+    status: Optional[str] = None,      # ← 추가되었다면 받기
     session: Session = Depends(get_session),
     _h: None = Depends(require_admin_host),
     _auth: None = Depends(admin_required),
 ):
+    # 안전 파싱
     def parse_date(s: Optional[str]):
-        try: return datetime.strptime(s, "%Y-%m-%d").date()
-        except: return None
+        try:
+            return datetime.strptime(s, "%Y-%m-%d").date()
+        except:
+            return None
     d_from, d_to = parse_date(from_), parse_date(to)
 
-    # 안전 파싱
     try:
-        min_score_i = int(min_score) if (min_score is not None and min_score != "") else None
+        min_score_i = int(min_score) if (min_score not in (None, "")) else None
     except ValueError:
         min_score_i = None
 
+    # KST 포맷 유틸 (이 함수 안에서도 보장)
+    def to_kst_str(dt):
+        return to_kst(dt).strftime("%Y-%m-%d %H:%M") if dt else ""
+
+    stmt = (
+        select(SurveyResponse, Respondent, User, ReportFile)
+        .join(Respondent, Respondent.id == SurveyResponse.respondent_id)
+        .join(User, User.id == Respondent.user_id)
+        .join(ReportFile, ReportFile.survey_response_id == SurveyResponse.id, isouter=True)
+    )
+
+    if q:
+        like = f"%{q}%"
+        stmt = stmt.where(
+            (User.name_enc.ilike(like)) |
+            (User.phone_hash.ilike(like)) |
+            (SurveyResponse.answers_json.ilike(like)) |
+            (ReportFile.filename.ilike(like)) |
+            (func.to_char(Respondent.created_at, 'YYYY-MM-DD').ilike(like))
+        )
+    if min_score_i is not None:
+        stmt = stmt.where(SurveyResponse.score >= min_score_i)
+
+    if d_from:
+        stmt = stmt.where(Respondent.created_at >= datetime(d_from.year, d_from.month, d_from.day))
+    if d_to:
+        stmt = stmt.where(Respondent.created_at < datetime(d_to.year, d_to.month, d_to.day) + timedelta(days=1))
+
+    if status in ("submitted", "accepted", "report_uploaded"):
+        stmt = stmt.where(Respondent.status == status)
+
     def generate():
+        # UTF-8 BOM
         yield "\ufeff"
         s = StringIO(); w = csv.writer(s)
-        # 열: 신청번호, 신청자, PDF 파일명, 업로드 날짜, 진행 상태값, 신청일, 제출일
+        # 요구 사양 헤더
         w.writerow(["신청번호","신청자","PDF 파일명","업로드 날짜","진행 상태값","신청일","제출일"])
         yield s.getvalue(); s.seek(0); s.truncate(0)
 
-        to_kst_str = lambda dt: to_kst(dt).strftime("%Y-%m-%d %H:%M")
-        
         result = session.exec(stmt.order_by(SurveyResponse.submitted_at.desc())).all()
         for idx, (sr, resp, user, rf) in enumerate(result, start=1):
             applicant = f"{resp.applicant_name or (user.name_enc or '')} ({(resp.birth_date or '')}, {resp.gender or (user.gender or '')})"
-            status_h = "신청완료" if resp.status=="submitted" else "접수완료" if resp.status=="accepted" else "리포트 업로드 완료" if resp.status=="report_uploaded" else resp.status
+            status_h = "신청완료" if resp.status=="submitted" else "접수완료" if resp.status=="accepted" else "리포트 업로드 완료" if resp.status=="report_uploaded" else (resp.status or "")
             row = [
                 idx,
                 applicant,
@@ -669,8 +703,13 @@ def admin_responses_csv(
             w.writerow(row)
             yield s.getvalue(); s.seek(0); s.truncate(0)
 
-    return StreamingResponse(generate(), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="responses.csv"'})
-
+    return StreamingResponse(
+        generate(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="responses.csv"'}
+    )
+    
+    
 @app.get("/admin/response/{rid}.csv")
 def admin_response_two_rows_csv(
     rid: int,
