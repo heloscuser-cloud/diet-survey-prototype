@@ -79,7 +79,8 @@ signer = TimestampSigner(APP_SECRET)
 @app.exception_handler(HTTPException)
 async def completed_redirect_handler(request: Request, exc: HTTPException):
     if exc.status_code == 307 and exc.detail == "completed":
-        return RedirectResponse(url="/portal", status_code=307)
+        # 제출 완료 세션은 설문 접근 시 메인으로
+        return RedirectResponse(url="/", status_code=307)
     return await http_exception_handler(request, exc)
 
 @app.middleware("http")
@@ -253,9 +254,11 @@ async def info_submit(
         user.name_enc = name
         user.gender = gender
         user.birth_year = bd.year  # 호환 위해 유지
-        # (선택) 정밀 저장: User에 컬럼 추가했으면 같이 저장
-        if hasattr(user, "birth_date"):
-            user.birth_date = bd
+        # 실제 생년월일 저장(컬럼 있으면)
+        try:
+            user.birth_date = bd  # SQLModel에 컬럼 추가해두었으면 정상 동작
+        except Exception:
+            pass
         if hasattr(user, "height_cm"):
             user.height_cm = h_cm
         if hasattr(user, "weight_kg"):
@@ -794,11 +797,14 @@ def survey_root(auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
     session.refresh(resp)
     
     # User 정보 스냅샷을 Respondent에 저장(관리자 테이블 출력용)
-    # 생년월일: User.birth_date가 있으면 그 값을, 없으면 birth_year만이라도
+    # 실제 생년월일 우선 스냅샷
+    bd = None
     try:
-        bd = user.birth_date if hasattr(user, "birth_date") and user.birth_date else date(user.birth_year, 1, 1)
-    except:
-        bd = None
+        bd = user.birth_date
+    except Exception:
+        pass
+    if not bd and user.birth_year:
+        bd = date(user.birth_year, 1, 1)
     resp.applicant_name = user.name_enc
     resp.birth_date = bd
     resp.gender = user.gender
@@ -947,6 +953,10 @@ def admin_export_xlsx(
     _h: None = Depends(require_admin_host),
     _auth: None = Depends(admin_required),
 ):
+    
+    # 들어온 ids 로그(디버깅에 유용)
+    print("export.xlsx ids raw:", repr(ids))
+    
     # ids 파싱
     id_list = []
     for x in (ids or "").split(","):
@@ -1007,7 +1017,7 @@ def admin_export_xlsx(
         # 한 줄 레코드 구성
         row = [
             idx,          # no. (엑셀 내 연번)
-            sr.id,        # 신청번호(안정적 식별자: 응답 ID 사용)
+            (resp.serial_no or ""),       # 신청번호(안정적 식별자: 응답 ID 사용)
             name,
             bd.isoformat() if bd else "",
             age,

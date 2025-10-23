@@ -21,18 +21,33 @@
     <form method="post" action="/info">
       <label>이름</label>
       <input type="text" name="name" placeholder="홍길동" required/>
-      <label>생년월일</label>
-      <input type="date" name="birth_date" required/>
-      <label>성별</label>
-      <div style="display:flex;gap:12px">
-        <label style="flex:1"><input type="radio" name="gender" value="남" required/> 남</label>
-        <label style="flex:1"><input type="radio" name="gender" value="여" required/> 여</label>
-      </div>
+<label>생년월일</label>
+<div class="row-inline">
+  <input type="text" id="bd_y" class="w-compact" inputmode="numeric" placeholder="YYYY" maxlength="4"
+         oninput="this.value=this.value.replace(/[^0-9]/g,'').slice(0,4); autoNext(this,'bd_m',4)" />
+  <span class="unit">년</span>
+  <input type="text" id="bd_m" class="w-compact" inputmode="numeric" placeholder="MM" maxlength="2"
+         oninput="this.value=this.value.replace(/[^0-9]/g,'').slice(0,2); autoNext(this,'bd_d',2)" />
+  <span class="unit">월</span>
+  <input type="text" id="bd_d" class="w-compact" inputmode="numeric" placeholder="DD" maxlength="2"
+         oninput="this.value=this.value.replace(/[^0-9]/g,'').slice(0,2)" />
+  <span class="unit">일</span>
+</div>
+<input type="hidden" name="birth_date" id="birth_date" />
+ <label>성별</label>
+<div style="display:flex;gap:12px">
+  <label style="display:inline-flex;align-items:center;gap:6px">
+    <input type="radio" name="gender" value="남" required/> <span>남</span>
+  </label>
+  <label style="display:inline-flex;align-items:center;gap:6px">
+    <input type="radio" name="gender" value="여" required/> <span>여</span>
+  </label>
+</div>
 <label>신장 / 체중</label>
 <div class="row-inline">
-  <input type="number" step="0.1" min="0" name="height_cm" class="w-compact" placeholder="예: 158.5" />
+  <input type="number" step="0.1" min="0" name="height_cm" class="w-compact" placeholder="예: 158.5" inputmode="decimal" pattern="^\d+(\.\d)?$" onblur="norm1dp(this)"/>
   <span class="unit">cm</span>
-  <input type="number" step="0.1" min="0" name="weight_kg" class="w-compact" placeholder="예: 65.5" />
+<input type="number" step="0.1" min="0" name="weight_kg" class="w-compact" placeholder="예: 65.5" inputmode="decimal" pattern="^\d+(\.\d)?$" onblur="norm1dp(this)"/>
   <span class="unit">kg</span>
 </div>
 
@@ -41,3 +56,21 @@
   </div>
 </body>
 </html>
+
+<script>
+function norm1dp(el){
+  if(!el.value) return;
+  let v = String(el.value).replace(',', '.');
+  let f = parseFloat(v);
+  if (isNaN(f) || f<0) { el.value = ''; return; }
+  el.value = (Math.round(f*10)/10).toFixed(1);
+}
+function autoNext(el,nextId,max){ if(el.value.length>=max){ const n=document.getElementById(nextId); n && n.focus(); } }
+function pad2(n){return String(n).padStart(2,'0');}
+document.querySelector('form[action="/info"]').addEventListener('submit', function(e){
+  const y=document.getElementById('bd_y').value, m=document.getElementById('bd_m').value, d=document.getElementById('bd_d').value;
+  if(!(y && m && d && y.length===4 && m.length>=1 && d.length>=1)){ e.preventDefault(); alert('생년월일을 정확히 입력해주세요.'); return; }
+  const mm = pad2(m), dd = pad2(d);
+  document.getElementById('birth_date').value = `${y}-${mm}-${dd}`;
+});
+</script>

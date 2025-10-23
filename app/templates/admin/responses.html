@@ -37,23 +37,21 @@
 <div class="card">
   <h2 class="title">검색 조건</h2>
   <form id="searchForm" method="get" action="/admin/responses">
-    <!-- 1행: 신청일 + 빠른버튼 -->
-    <div class="row">
-      <div class="grow">
-        <label>신청일</label>
-        <div class="row">
-          <input class="w-date" type="date" name="from" value="{{ from or '' }}"/>
-          <span style="align-self:center">~</span>
-          <input class="w-date" type="date" name="to" value="{{ to or '' }}"/>
-        </div>
-      </div>
-      <div style="display:flex;gap:8px;align-items:flex-end">
-        <button type="button" class="btn" onclick="shiftDays(-1)">◀</button>
-        <button type="button" class="btn" onclick="shiftDays(1)">▶</button>
-        <button type="button" class="btn" onclick="setToday()">오늘</button>
-        <button type="button" class="btn" onclick="setWeek()">일주일</button>
-      </div>
-    </div>
+<!-- 1행: 신청일 + 빠른버튼 (바짝 붙이기) -->
+<div class="row" style="gap:8px; align-items:end">
+  <div class="row" style="gap:8px; align-items:center">
+    <label style="margin:0 6px 0 0">신청일</label>
+    <input class="w-date date-ymd" type="text" name="from" inputmode="numeric" placeholder="YYYY-MM-DD" value="{{ from or '' }}"/>
+    <span>~</span>
+    <input class="w-date date-ymd" type="text" name="to" inputmode="numeric" placeholder="YYYY-MM-DD" value="{{ to or '' }}"/>
+  </div>
+  <div class="row" style="gap:6px; align-items:center">
+    <button type="button" class="btn" onclick="shiftDays(-1)">◀</button>
+    <button type="button" class="btn" onclick="shiftDays(1)">▶</button>
+    <button type="button" class="btn" onclick="setToday()">오늘</button>
+    <button type="button" class="btn" onclick="setWeek()">일주일</button>
+  </div>
+</div>
 
     <!-- 2행: 진행 상태 -->
     <div class="row" style="margin-top:8px">
@@ -116,7 +114,7 @@
   {% for sr, resp, user, rf in rows %}
     <tr>
       <td><input type="checkbox" class="rowChk" value="{{ sr.id }}"/></td>
-      <td class="nowrap">{{ loop.index }}</td>
+      <td class="nowrap">{{ resp.serial_no or '' }}</td>
       <td>{{ resp.applicant_name or user.name_enc or '-' }} ({{ resp.birth_date or '' }}, {{ resp.gender or user.gender or '-' }})</td>
       <td>{{ rf.filename if rf else '' }}</td>
       <td>{{ to_kst_str(rf.uploaded_at) if rf else '' }}</td>
@@ -175,6 +173,25 @@ function bulkXlsx(){
   document.getElementById('xlsxIds').value = ids.join(',');
   document.getElementById('xlsxForm').submit();
 }
+document.querySelectorAll('.date-ymd').forEach(inp=>{
+  inp.addEventListener('input', e=>{
+    let v = e.target.value.replace(/[^\d]/g,'').slice(0,8);
+    if (v.length>=5) v = v.slice(0,4)+'-'+v.slice(4);
+    if (v.length>=8) v = v.slice(0,7)+'-'+v.slice(7);
+    e.target.value = v;
+  });
+  inp.addEventListener('keyup', e=>{
+    const v=e.target.value;
+    // 연도 4자리 입력 후 자동으로 다음 필드(같은 행에서 다음 date-ymd)로 이동
+    if (e.key>='0' && e.key<='9') {
+      const parts=v.split('-');
+      if (parts[0] && parts[0].length===4 && !parts[1]) {
+        // 하이픈은 이미 찍혔으므로 그대로 월 2자리 입력 대기
+        // 포커스 유지 (같은 필드에서 월 계속 입력)
+      }
+    }
+  });
+});
 </script>
 </body>
 </html>
