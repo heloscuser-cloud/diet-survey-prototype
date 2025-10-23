@@ -45,9 +45,11 @@
 </div>
 <label>신장 / 체중</label>
 <div class="row-inline">
-  <input type="number" step="0.1" min="0" name="height_cm" class="w-compact" placeholder="예: 158.5" inputmode="decimal" pattern="^\d+(\.\d)?$" onblur="norm1dp(this)"/>
+<input type="text" name="height_cm" class="w-compact" placeholder="예: 158.5" inputmode="numeric"
+        oninput="format1dpAutoDot(this)" onblur="ensure1dp(this)"/>
   <span class="unit">cm</span>
-<input type="number" step="0.1" min="0" name="weight_kg" class="w-compact" placeholder="예: 65.5" inputmode="decimal" pattern="^\d+(\.\d)?$" onblur="norm1dp(this)"/>
+ <input type="text" name="weight_kg" class="w-compact" placeholder="예: 67.5" inputmode="numeric"
+        oninput="format1dpAutoDot(this)" onblur="ensure1dp(this)"/>
   <span class="unit">kg</span>
 </div>
 
@@ -73,4 +75,28 @@ document.querySelector('form[action="/info"]').addEventListener('submit', functi
   const mm = pad2(m), dd = pad2(d);
   document.getElementById('birth_date').value = `${y}-${mm}-${dd}`;
 });
+/**
+ * 높이/몸무게 전용 입력 포맷터
+ * - 숫자만 허용
+ * - 앞 3자리 뒤에 자동으로 '.' 삽입 (예: "175" → "175.")
+ * - 소수 첫째자리까지만 유지 (예: "175.55" → "175.5")
+ * - blur 시 소수점 없으면 ".0" 보정
+ */
+function format1dpAutoDot(el){
+  let v = (el.value || "").replace(/[^\d.]/g,'');  // 숫자/점 이외 제거
+  v = v.replace(/\.+/g,'.');                       // 점 연속 입력 방지
+  // 아직 점이 없으면, 숫자가 3자리 넘는 순간 자동 점 삽입
+  if (!v.includes('.')) {
+    if (v.length > 3) v = v.slice(0,3) + '.' + v.slice(3);
+  }
+  // 점 뒤는 1자리만 유지
+  const [a,b=''] = v.split('.');
+  el.value = a.replace(/\D/g,'').slice(0,3) + (v.includes('.') ? '.' + b.replace(/\D/g,'').slice(0,1) : '');
+}
+function ensure1dp(el){
+  if (!el.value) return;
+  if (!el.value.includes('.')) el.value = el.value + '.0';
+  // "175." 형태면 ".0" 보정
+  if (el.value.endsWith('.')) el.value = el.value + '0';
+}
 </script>

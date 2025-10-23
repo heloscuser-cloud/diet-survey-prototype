@@ -132,6 +132,9 @@ class User(SQLModel, table=True):
     birth_year: Optional[int] = None
     gender: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    birth_date: Optional[date] = None
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
 
 class Respondent(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -798,13 +801,7 @@ def survey_root(auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
     
     # User 정보 스냅샷을 Respondent에 저장(관리자 테이블 출력용)
     # 실제 생년월일 우선 스냅샷
-    bd = None
-    try:
-        bd = user.birth_date
-    except Exception:
-        pass
-    if not bd and user.birth_year:
-        bd = date(user.birth_year, 1, 1)
+    bd = user.birth_date or (date(user.birth_year, 1, 1) if user.birth_year else None)
     resp.applicant_name = user.name_enc
     resp.birth_date = bd
     resp.gender = user.gender
@@ -967,7 +964,9 @@ def admin_export_xlsx(
         return RedirectResponse(url="/admin/responses", status_code=303)
 
     # 질문 타이틀
-    questions = [q["title"] for q in sorted(ALL_QUESTIONS, key=lambda x: x["id"])]
+    def q_title(q):
+        return q.get("title") or q.get("text") or q.get("label") or f"Q{q.get('id','')}"
+    questions = [q_title(q) for q in sorted(ALL_QUESTIONS, key=lambda x: x["id"])]
 
     # 워크북/시트
     wb = Workbook()

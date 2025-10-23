@@ -20,7 +20,7 @@
     th,td{border-bottom:1px solid #e5e7eb;padding:10px;font-size:14px;text-align:left}
     th{background:#f3f4f6}
     .right{display:flex;gap:8px;justify-content:flex-end}
-    .btn{padding:8px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;cursor:pointer}
+    .btn{padding:8px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap; height:34px;}
     .btn.primary{background:#111827;color:#fff;border:none}
     .nowrap{white-space:nowrap}
     .muted{color:#6b7280}
@@ -38,9 +38,9 @@
   <h2 class="title">검색 조건</h2>
   <form id="searchForm" method="get" action="/admin/responses">
 <!-- 1행: 신청일 + 빠른버튼 (바짝 붙이기) -->
-<div class="row" style="gap:8px; align-items:end">
-  <div class="row" style="gap:8px; align-items:center">
-    <label style="margin:0 6px 0 0">신청일</label>
+<div class="row" style="gap:8px; align-items:center">
+  <div class="row" style="gap:6px; align-items:center">
+    <label style="margin:0">신청일</label>
     <input class="w-date date-ymd" type="text" name="from" inputmode="numeric" placeholder="YYYY-MM-DD" value="{{ from or '' }}"/>
     <span>~</span>
     <input class="w-date date-ymd" type="text" name="to" inputmode="numeric" placeholder="YYYY-MM-DD" value="{{ to or '' }}"/>
