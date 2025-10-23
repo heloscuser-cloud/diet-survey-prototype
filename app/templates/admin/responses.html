@@ -1,55 +1,158 @@
-{% extends "admin/base_admin.html" %}
-{% block title %}응답 목록{% endblock %}
-{% block content %}
-  <h2>응답 목록</h2>
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>응답 목록</title>
+  <style>
+    body{font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif;background:#f6f7fb;margin:0;padding:24px}
+    .wrap{max-width:1100px;margin:0 auto}
+    .card{background:#fff;border-radius:16px;box-shadow:0 8px 24px rgba(0,0,0,.06);padding:16px;margin-bottom:16px}
+    .title{font-weight:700;margin:0 0 12px}
+    .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+    label{font-size:12px;color:#64748b;display:block;margin-bottom:6px}
+    input,select,button{width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:10px;background:#fff}
+    button.primary{background:#111827;color:#fff;border:none}
+    .row{display:flex;gap:12px;align-items:end}
+    .row .grow{flex:1}
+    .actions{display:flex;gap:8px;justify-content:flex-end}
+    table{width:100%;border-collapse:collapse}
+    th,td{border-bottom:1px solid #e5e7eb;padding:10px;font-size:14px;text-align:left}
+    th{background:#f3f4f6}
+    .right{display:flex;gap:8px;justify-content:flex-end}
+    .btn{padding:8px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;cursor:pointer}
+    .btn.primary{background:#111827;color:#fff;border:none}
+    .nowrap{white-space:nowrap}
+    .muted{color:#6b7280}
+    .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#eef2ff}
+  </style>
+</head>
+<body>
+<div class="wrap">
 
-  <form class="inline" method="get" action="/admin/responses">
-    <input type="text" name="q" placeholder="이름/전화 해시/기타 포함 검색" value="{{ q or '' }}">
-    <input type="number" name="min_score" placeholder="최소 점수" value="{{ min_score or '' }}">
-    <input type="date" name="from" value="{{ from or '' }}">
-    <input type="date" name="to" value="{{ to or '' }}">
-    <button class="btn" type="submit">검색</button>
-    <a class="btn" href="/admin/responses">초기화</a>
-    <a class="btn primary" href="/admin/responses.csv?q={{ q|urlencode }}&min_score={{ min_score }}&from={{ from }}&to={{ to }}">CSV 다운로드</a>
-  </form>
+  <!-- 검색 조건 박스 -->
+  <div class="card">
+    <h2 class="title">검색 조건</h2>
+    <form id="searchForm" method="get" action="/admin/responses">
+      <div class="grid">
+        <div>
+          <label>신청일</label>
+          <div class="row">
+            <input class="grow" type="date" name="from" value="{{ from or '' }}"/>
+            <span style="align-self:center">~</span>
+            <input class="grow" type="date" name="to" value="{{ to or '' }}"/>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <button type="button" class="btn" onclick="shiftDays(-1)">◀</button>
+            <button type="button" class="btn" onclick="shiftDays(1)">▶</button>
+            <button type="button" class="btn" onclick="setToday()">오늘</button>
+            <button type="button" class="btn" onclick="setWeek()">일주일</button>
+          </div>
+        </div>
 
-  <p class="muted">총 {{ total }}건 · 페이지 {{ page }} / {{ total_pages }}</p>
+        <div>
+          <label>진행 상태</label>
+          <select name="status">
+            <option value="" {{ 'selected' if not status }}>전체</option>
+            <option value="submitted" {{ 'selected' if status=='submitted' }}>신청완료</option>
+            <option value="accepted" {{ 'selected' if status=='accepted' }}>접수완료</option>
+            <option value="report_uploaded" {{ 'selected' if status=='report_uploaded' }}>리포트 업로드 완료</option>
+          </select>
+        </div>
 
-  <table>
-    <thead>
-      <tr>
-        <th>ID</th>
-        <th>응답자</th>
-        <th>점수</th>
-        <th>제출시각</th>
-        <th>요약</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for sr, resp, user in rows %}
+        <div>
+          <label>텍스트 검색</label>
+          <input type="text" name="q" value="{{ q or '' }}" placeholder="신청자 이름, 신청자 생년월일(YYYY-MM-DD), PDF 파일명으로 검색"/>
+        </div>
+      </div>
+
+      <div class="actions" style="margin-top:12px">
+        <button class="primary" type="submit">조회</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- 검색조건 아래 우측 버튼 -->
+  <div class="card" style="display:flex;justify-content:flex-end;gap:8px">
+    <form id="acceptForm" method="post" action="/admin/responses/accept">
+      <input type="hidden" name="ids" id="acceptIds"/>
+      <button class="btn" type="button" onclick="bulkAccept()">접수 완료 처리</button>
+    </form>
+    <form method="get" action="/admin/responses.csv">
+      <input type="hidden" name="q" value="{{ q or '' }}"/>
+      <input type="hidden" name="from" value="{{ from or '' }}"/>
+      <input type="hidden" name="to" value="{{ to or '' }}"/>
+      <input type="hidden" name="status" value="{{ status or '' }}"/>
+      <button class="btn" type="submit">엑셀 다운로드</button>
+    </form>
+  </div>
+
+  <!-- 조회 테이블 -->
+  <div class="card">
+    <table>
+      <thead>
         <tr>
-          <td>{{ sr.id }}</td>
+          <th><input type="checkbox" id="chkAll" onclick="toggleAll(this)"/></th>
+          <th>신청번호</th>
+          <th>신청자</th>
+          <th>PDF 파일명</th>
+          <th>업로드 날짜</th>
+          <th>진행 상태값</th>
+          <th>신청일</th>
+          <th>제출일</th>
+          <th>리포트</th>
+          <th>내보내기</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for sr, resp, user, rf in rows %}
+        <tr>
+          <td><input type="checkbox" class="rowChk" value="{{ sr.id }}"/></td>
+          <td class="nowrap">{{ loop.index }}</td>
+          <td>{{ resp.applicant_name or user.name_enc or '-' }} ({{ resp.birth_date or '' }}, {{ resp.gender or user.gender or '-' }})</td>
+          <td>{{ rf.filename if rf else '' }}</td>
+          <td>{{ to_kst_str(rf.uploaded_at) if rf else '' }}</td>
           <td>
-            사용자ID: {{ user.id }}<br>
-            이름(enc): {{ user.name_enc }}<br>
-            전화 해시: {{ user.phone_hash }}
+            {% if resp.status=='submitted' %}<span class="tag">신청완료</span>
+            {% elif resp.status=='accepted' %}<span class="tag">접수완료</span>
+            {% elif resp.status=='report_uploaded' %}<span class="tag">리포트 업로드 완료</span>
+            {% else %}<span class="muted">{{ resp.status }}</span>{% endif %}
           </td>
-          <td>{{ sr.score if sr.score is not none else '' }}</td>
+          <td>{{ to_kst_str(resp.created_at) }}</td>
           <td>{{ to_kst_str(sr.submitted_at) }}</td>
-          <td class="muted">
-            {{ (sr.answers_json or '')[:140] }}{% if (sr.answers_json or '')|length > 140 %}…{% endif %}
+          <td class="nowrap">
+            <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report" enctype="multipart/form-data">
+              <input type="file" name="file" accept="application/pdf" required/>
+              <button class="btn" type="submit">등록</button>
+            </form>
+            {% if rf %}
+            <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report/delete">
+              <button class="btn" type="submit">삭제</button>
+            </form>
+            {% endif %}
           </td>
+          <td><a href="/admin/response/{{ sr.id }}.csv">CSV</a></td>
         </tr>
       {% endfor %}
-    </tbody>
-  </table>
-
-  <div class="pagination">
-    {% if page > 1 %}
-      <a href="/admin/responses?page={{ page - 1 }}&q={{ q|urlencode }}&min_score={{ min_score }}&from={{ from }}&to={{ to }}">이전</a>
-    {% endif %}
-    {% if page < total_pages %}
-      <a href="/admin/responses?page={{ page + 1 }}&q={{ q|urlencode }}&min_score={{ min_score }}&from={{ from }}&to={{ to }}">다음</a>
-    {% endif %}
+      </tbody>
+    </table>
   </div>
-{% endblock %}
+
+</div>
+
+<script>
+function fmt(d){const z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
+function getDates(){const f=document.querySelector('input[name=from]');const t=document.querySelector('input[name=to]');return [f,t];}
+function shiftDays(n){let [f,t]=getDates();let fd=f.value?new Date(f.value):new Date();let td=t.value?new Date(t.value):new Date();fd.setDate(fd.getDate()+n);td.setDate(td.getDate()+n);f.value=fmt(fd);t.value=fmt(td);}
+function setToday(){let [f,t]=getDates();let d=new Date();f.value=fmt(d);t.value=fmt(d);}
+function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.setDate(td.getDate()-6);f.value=fmt(fd);t.value=fmt(td);}
+function toggleAll(el){document.querySelectorAll('.rowChk').forEach(c=>c.checked=el.checked);}
+function bulkAccept(){
+  const ids=[...document.querySelectorAll('.rowChk:checked')].map(c=>c.value);
+  if(ids.length===0){alert('선택된 항목이 없습니다.');return;}
+  document.getElementById('acceptIds').value = ids.join(',');
+  document.getElementById('acceptForm').submit();
+}
+</script>
+</body>
+</html>

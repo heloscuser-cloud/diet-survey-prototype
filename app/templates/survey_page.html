@@ -29,10 +29,6 @@
       <input type="hidden" name="acc" value='{{ acc|e }}'>
       <input type="hidden" name="rtoken" value='{{ rtoken|e }}'>   <!-- 추가 -->
 
-      {% if not is_first %}
-        <a class="btn prev" href="/survey/step/{{ step - 1 }}?acc={{ acc|urlencode }}&rtoken={{ rtoken|urlencode }}">이전</a>
-      {% endif %}
-
       {% for q in questions %}
         <div class="q">
           <div class="q-title">{{ q.id }}. {{ q.question }}</div>

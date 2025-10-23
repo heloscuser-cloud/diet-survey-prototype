@@ -1,37 +1,27 @@
-from fastapi import FastAPI, Request, Form, Depends, Response, Cookie, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
+from fastapi import FastAPI, Request, Form, Depends, Response, Cookie, HTTPException, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlmodel import SQLModel, Field, Session, create_engine, select
+from fastapi.exception_handlers import http_exception_handler
+from fastapi.responses import RedirectResponse, HTMLResponse, StreamingResponse
+from fastapi.requests import Request
+from sqlmodel import SQLModel, Field, Session, create_engine, select, Relationship
 from pydantic import BaseModel
 from typing import Optional, List
 from itsdangerous import TimestampSigner, BadSignature, SignatureExpired
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from random import randint
+from sqlalchemy import func, Column, LargeBinary
 import os
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-
-import os
+from io import StringIO
+import csv
 import secrets
-from datetime import datetime, timedelta
-from typing import Optional
-
-import itsdangerous
-from fastapi import Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
-from sqlmodel import Session, select
-from sqlalchemy import func
-
 import json
 from pathlib import Path
-from fastapi import Request, Form
-from fastapi.responses import RedirectResponse
-
-from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 KST = ZoneInfo("Asia/Seoul")
 
@@ -45,6 +35,10 @@ def to_kst(dt: datetime) -> datetime:
 def now_kst() -> datetime:
     return datetime.now(tz=KST)
 
+def ensure_not_completed(survey_completed: str | None = Cookie(default=None)):
+    if survey_completed == "1":
+        # 이미 완료된 세션은 설문으로 접근 시 포털로 보냄
+        raise HTTPException(status_code=307, detail="completed")
 
 
 # 질문 로드 (앱 기동시 1회)
@@ -69,12 +63,28 @@ os.makedirs(os.path.join(ROOT_DIR, "app", "data"), exist_ok=True)
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DB_PATH}")
 engine = create_engine(DATABASE_URL, echo=False)
 
+
 app = FastAPI(title="Diet Survey Prototype")
 app.mount("/static", StaticFiles(directory=os.path.join(ROOT_DIR, "app", "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(ROOT_DIR, "app", "templates"))
 
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret")
 signer = TimestampSigner(APP_SECRET)
+
+@app.exception_handler(HTTPException)
+async def completed_redirect_handler(request: Request, exc: HTTPException):
+    if exc.status_code == 307 and exc.detail == "completed":
+        return RedirectResponse(url="/portal", status_code=307)
+    return await http_exception_handler(request, exc)
+
+@app.middleware("http")
+async def no_store_for_survey(request: Request, call_next):
+    response = await call_next(request)
+    p = request.url.path
+    if p.startswith("/survey"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+    return response
 
 # ---- Font registration (optional for Korean) ----
 FONT_DIR = os.path.join(ROOT_DIR, "app", "fonts")
@@ -124,12 +134,24 @@ class Respondent(SQLModel, table=True):
     status: str = Field(default="draft")
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+    # --- NEW: 인적정보(신청자 표시용) ---
+    applicant_name: Optional[str] = None
+    birth_date: Optional[date] = None   # YYYY-MM-DD
+    gender: Optional[str] = None        # "남" | "여"
+
 class SurveyResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     respondent_id: int = Field(index=True)
     answers_json: str
     score: Optional[int] = None
     submitted_at: datetime = Field(default_factory=datetime.utcnow)
+
+class ReportFile(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    survey_response_id: int = Field(index=True)
+    filename: str
+    content: bytes = Field(sa_column=Column(LargeBinary))
+    uploaded_at: datetime = Field(default_factory=datetime.utcnow)
 
 class Otp(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -180,6 +202,46 @@ def _host(request: Request) -> str:
     return (request.headers.get("host") or "").split(":")[0].lower()
 
 ADMIN_HOST = "admin.gaonnsurvey.store"
+
+@app.get("/info", response_class=HTMLResponse)
+def info_form(request: Request, auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME)):
+    user_id = verify_user(auth) if auth else -1
+    if user_id < 0:
+        return RedirectResponse(url="/login", status_code=302)
+    return templates.TemplateResponse("info.html", {"request": request})
+
+@app.post("/info")
+async def info_submit(
+    request: Request,
+    name: str = Form(...),
+    birth_date: str = Form(...),   # "YYYY-MM-DD"
+    gender: str = Form(...),       # "남" | "여"
+    auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+    session: Session = Depends(get_session),
+):
+    user_id = verify_user(auth) if auth else -1
+    if user_id < 0:
+        return RedirectResponse(url="/login", status_code=302)
+
+    # 간단 검증
+    try:
+        bd = datetime.strptime(birth_date, "%Y-%m-%d").date()
+    except:
+        return templates.TemplateResponse("error.html", {"request": request, "message": "생년월일 형식이 올바르지 않습니다(YYYY-MM-DD)."}, status_code=400)
+    if gender not in ("남", "여"):
+        return templates.TemplateResponse("error.html", {"request": request, "message": "성별은 남/여 중 선택해주세요."}, status_code=400)
+
+    # 다음 설문 세션 Respondent에 스냅샷으로 옮길 수 있도록 User에도 저장(옵션)
+    user = session.get(User, user_id)
+    if user:
+        user.name_enc = name
+        user.gender = gender
+        user.birth_year = bd.year
+        session.add(user)
+        session.commit()
+
+    # 설문 시작
+    return RedirectResponse(url="/survey", status_code=303)
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
@@ -328,66 +390,6 @@ async def survey_submit(request: Request,
 def report_ready(request: Request, rtoken: str):
     return templates.TemplateResponse("report_ready.html", {"request": request, "rtoken": rtoken})
 
-def render_pdf(path: str, title: str, score: int, tips: List[str]):
-    c = canvas.Canvas(path, pagesize=A4)
-    width, height = A4
-    x_margin, y_margin = 20 * mm, 20 * mm
-
-    c.setFont(DEFAULT_FONT_BOLD, 20)
-    c.drawString(x_margin, height - y_margin, title)
-
-    c.setFont(DEFAULT_FONT, 12)
-    c.drawString(x_margin, height - y_margin - 20, f"생성일: {now_kst().strftime('%Y-%m-%d %H:%M')}")
-    c.drawString(x_margin, height - y_margin - 40, f"총점: {score} / 60")
-
-    c.line(x_margin, height - y_margin - 50, width - x_margin, height - y_margin - 50)
-
-    c.setFont(DEFAULT_FONT_BOLD, 14)
-    c.drawString(x_margin, height - y_margin - 80, "개선 팁")
-    c.setFont(DEFAULT_FONT, 12)
-
-    y = height - y_margin - 100
-    for tip in tips:
-        c.circle(x_margin + 3, y + 3, 2, fill=1)
-        c.drawString(x_margin + 12, y, tip)
-        y -= 18
-        if y < 40 * mm:
-            c.showPage()
-            y = height - y_margin
-
-    c.showPage()
-    c.save()
-
-@app.get("/report/pdf")
-def report_pdf(rtoken: str, session: Session = Depends(get_session)):
-    try:
-        raw = signer.unsign(rtoken, max_age=3600*24)
-    except (BadSignature, SignatureExpired):
-        return Response("링크가 만료되었어요.", status_code=401)
-
-    report_id = int(raw.decode("utf-8"))
-    sr = session.get(SurveyResponse, report_id)
-    if not sr:
-        return Response("리포트를 찾을 수 없어요.", status_code=404)
-
-    tips = []
-    if sr.score < 30:
-        tips.append("설탕이 많은 음료수를 물 또는 무가당 차로 대체해보세요.")
-        tips.append("야식 빈도를 주 1회 이하로 줄여보세요.")
-        tips.append("채소 섭취를 하루 3회 이상 목표로 해보세요.")
-    else:
-        tips.append("균형 잡힌 식단을 잘 유지하고 있어요. 👍")
-        tips.append("채소 섭취를 꾸준히 이어가세요.")
-        tips.append("가끔 간단한 간식은 과일로 대체해보세요.")
-
-    reports_dir = os.path.join(ROOT_DIR, "app", "data")
-    os.makedirs(reports_dir, exist_ok=True)
-    pdf_path = os.path.join(reports_dir, f"report_{report_id}.pdf")
-
-    render_pdf(pdf_path, "식습관 문진 결과 리포트", sr.score or 0, tips)
-
-    return FileResponse(pdf_path, filename=f"report_{report_id}.pdf", media_type="application/pdf")
-
 @app.get("/portal", response_class=HTMLResponse)
 def portal(request: Request, auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME), session: Session = Depends(get_session)):
     user_id = verify_user(auth) if auth else -1
@@ -405,31 +407,9 @@ def portal(request: Request, auth: str | None = Cookie(default=None, alias=AUTH_
                 "score": sr.score
             })
     reports.sort(key=lambda x: x["id"], reverse=True)
-    return templates.TemplateResponse("portal.html", {"request": request, "reports": reports})
-
-@app.get("/portal/report/{report_id}/download")
-def portal_report_download(report_id: int, auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME), session: Session = Depends(get_session)):
-    user_id = verify_user(auth) if auth else -1
-    if user_id < 0:
-        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
-
-    sr = session.get(SurveyResponse, report_id)
-    if not sr:
-        raise HTTPException(status_code=404, detail="리포트를 찾을 수 없습니다.")
-
-    resp = session.get(Respondent, sr.respondent_id)
-    if not resp or resp.user_id != user_id:
-        raise HTTPException(status_code=403, detail="접근 권한이 없습니다.")
-
-    reports_dir = os.path.join(ROOT_DIR, "app", "data")
-    pdf_path = os.path.join(reports_dir, f"report_{report_id}.pdf")
-    if not os.path.exists(pdf_path):
-        tips = ["균형 잡힌 식단을 유지하세요.", "당류 음료를 줄여보세요.", "채소 섭취를 늘려보세요."]
-        render_pdf(pdf_path, "식습관 문진 결과 리포트", sr.score or 0, tips)
-
-    filename = f"report_{report_id}.pdf"
-    return FileResponse(pdf_path, filename=filename, media_type="application/pdf")
-
+    return templates.TemplateResponse("portal.html", {
+        "request": request,
+    })
 
 # --- Admin host gate ---
 ADMIN_ALLOWED_HOSTS = {
@@ -505,6 +485,7 @@ def admin_responses(
     page: int = 1,
     q: Optional[str] = None,
     min_score: Optional[str] = None,   # ← int 대신 str로 받기
+    status: Optional[str] = None,  # all | submitted | accepted | report_uploaded
     from_: Optional[str] = None,
     to: Optional[str] = None,
     session: Session = Depends(get_session),
@@ -521,16 +502,19 @@ def admin_responses(
         min_score_i = None
 
     stmt = (
-        select(SurveyResponse, Respondent, User)
+        select(SurveyResponse, Respondent, User, ReportFile)
         .join(Respondent, Respondent.id == SurveyResponse.respondent_id)
         .join(User, User.id == Respondent.user_id)
+        .join(ReportFile, ReportFile.survey_response_id == SurveyResponse.id, isouter=True)
     )
     if q:
         like = f"%{q}%"
         stmt = stmt.where(
             (User.name_enc.ilike(like)) |
             (User.phone_hash.ilike(like)) |
-            (SurveyResponse.answers_json.ilike(like))
+            (SurveyResponse.answers_json.ilike(like)) |
+            (ReportFile.filename.ilike(like)) |
+            (func.to_char(Respondent.created_at, 'YYYY-MM-DD').ilike(like))
         )
     if min_score_i is not None:
         stmt = stmt.where(SurveyResponse.score >= min_score_i)
@@ -541,10 +525,13 @@ def admin_responses(
     d_from = parse_date(from_)
     d_to = parse_date(to)
     if d_from:
-        stmt = stmt.where(SurveyResponse.submitted_at >= datetime(d_from.year, d_from.month, d_from.day))
+        stmt = stmt.where(Respondent.created_at >= datetime(d_from.year, d_from.month, d_from.day))
     if d_to:
-        stmt = stmt.where(SurveyResponse.submitted_at < datetime(d_to.year, d_to.month, d_to.day) + timedelta(days=1))
+        stmt = stmt.where(Respondent.created_at < datetime(d_to.year, d_to.month, d_to.day) + timedelta(days=1))
 
+    if status in ("submitted", "accepted", "report_uploaded"):
+        stmt = stmt.where(Respondent.status == status)
+        
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = session.exec(count_stmt).one()
     rows = session.exec(stmt.order_by(SurveyResponse.submitted_at.desc()).offset((page-1)*PAGE_SIZE).limit(PAGE_SIZE)).all()
@@ -556,8 +543,84 @@ def admin_responses(
         "request": request, "rows": rows, "page": page,
         "total": total, "total_pages": total_pages,
         "q": q, "min_score": min_score, "from": from_, "to": to,
+        "status": status,
         "to_kst_str": to_kst_str,
     })
+
+#접수완료처리
+@app.post("/admin/responses/accept")
+def admin_bulk_accept(
+    ids: str = Form(...),  # "1,2,3"
+    session: Session = Depends(get_session),
+    _h: None = Depends(require_admin_host),
+    _auth: None = Depends(admin_required),
+):
+    id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+    if not id_list:
+        return RedirectResponse(url="/admin/responses", status_code=303)
+    srs = session.exec(select(SurveyResponse).where(SurveyResponse.id.in_(id_list))).all()
+    for sr in srs:
+        resp = session.get(Respondent, sr.respondent_id)
+        if resp:
+            resp.status = "accepted"
+            session.add(resp)
+    session.commit()
+    return RedirectResponse(url="/admin/responses", status_code=303)
+
+#리포트 업로드
+@app.post("/admin/response/{rid}/report")
+async def admin_upload_report(
+    rid: int,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+    _h: None = Depends(require_admin_host),
+    _auth: None = Depends(admin_required),
+):
+    sr = session.get(SurveyResponse, rid)
+    if not sr:
+        raise HTTPException(status_code=404, detail="not found")
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="PDF만 업로드 가능합니다.")
+    content = await file.read()
+
+    # 기존 파일 있으면 교체
+    old = session.exec(select(ReportFile).where(ReportFile.survey_response_id == rid)).first()
+    if old:
+        session.delete(old); session.commit()
+
+    rf = ReportFile(survey_response_id=rid, filename=file.filename, content=content)
+    session.add(rf)
+
+    # 상태 업데이트
+    resp = session.get(Respondent, sr.respondent_id)
+    if resp:
+        resp.status = "report_uploaded"
+        session.add(resp)
+
+    session.commit()
+    return RedirectResponse(url="/admin/responses", status_code=303)
+
+#리포트 삭제
+@app.post("/admin/response/{rid}/report/delete")
+def admin_delete_report(
+    rid: int,
+    session: Session = Depends(get_session),
+    _h: None = Depends(require_admin_host),
+    _auth: None = Depends(admin_required),
+):
+    sr = session.get(SurveyResponse, rid)
+    if not sr:
+        raise HTTPException(status_code=404, detail="not found")
+    rf = session.exec(select(ReportFile).where(ReportFile.survey_response_id == rid)).first()
+    if rf:
+        session.delete(rf)
+    # 상태는 업로드 이전 단계로(접수완료 유지)
+    resp = session.get(Respondent, sr.respondent_id)
+    if resp and resp.status == "report_uploaded":
+        resp.status = "accepted"
+        session.add(resp)
+    session.commit()
+    return RedirectResponse(url="/admin/responses", status_code=303)
 
 
 @app.get("/admin/responses.csv")
@@ -583,58 +646,107 @@ def admin_responses_csv(
 
     def generate():
         yield "\ufeff"
-        s = StringIO()
-        w = csv.writer(s)
-        w.writerow(["id","respondent_id","user_id","score","submitted_at","phone_hash","name_enc"])
+        s = StringIO(); w = csv.writer(s)
+        # 열: 신청번호, 신청자, PDF 파일명, 업로드 날짜, 진행 상태값, 신청일, 제출일
+        w.writerow(["신청번호","신청자","PDF 파일명","업로드 날짜","진행 상태값","신청일","제출일"])
         yield s.getvalue(); s.seek(0); s.truncate(0)
 
-        stmt = (
-            select(SurveyResponse, Respondent, User)
-            .join(Respondent, Respondent.id == SurveyResponse.respondent_id)
-            .join(User, User.id == Respondent.user_id)
-        )
-        if q:
-            like = f"%{q}%"
-            stmt = stmt.where(
-                (User.name_enc.ilike(like)) |
-                (User.phone_hash.ilike(like)) |
-                (SurveyResponse.answers_json.ilike(like))
-            )
-        if min_score_i is not None:
-            stmt = stmt.where(SurveyResponse.score >= min_score_i)
-        if d_from:
-            stmt = stmt.where(SurveyResponse.submitted_at >= datetime(d_from.year, d_from.month, d_from.day))
-        if d_to:
-            stmt = stmt.where(SurveyResponse.submitted_at < datetime(d_to.year, d_to.month, d_to.day) + timedelta(days=1))
-
-        for sr, resp, user in session.exec(stmt.order_by(SurveyResponse.id)):
-            w.writerow([sr.id, sr.respondent_id, user.id, sr.score or "", sr.submitted_at, user.phone_hash, user.name_enc])
+        to_kst_str = lambda dt: to_kst(dt).strftime("%Y-%m-%d %H:%M")
+        
+        result = session.exec(stmt.order_by(SurveyResponse.submitted_at.desc())).all()
+        for idx, (sr, resp, user, rf) in enumerate(result, start=1):
+            applicant = f"{resp.applicant_name or (user.name_enc or '')} ({(resp.birth_date or '')}, {resp.gender or (user.gender or '')})"
+            status_h = "신청완료" if resp.status=="submitted" else "접수완료" if resp.status=="accepted" else "리포트 업로드 완료" if resp.status=="report_uploaded" else resp.status
+            row = [
+                idx,
+                applicant,
+                (rf.filename if rf else ""),
+                (to_kst_str(rf.uploaded_at) if rf else ""),
+                status_h,
+                to_kst_str(resp.created_at),
+                to_kst_str(sr.submitted_at),
+            ]
+            w.writerow(row)
             yield s.getvalue(); s.seek(0); s.truncate(0)
 
     return StreamingResponse(generate(), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="responses.csv"'})
 
+@app.get("/admin/response/{rid}.csv")
+def admin_response_two_rows_csv(
+    rid: int,
+    session: Session = Depends(get_session),
+    _h: None = Depends(require_admin_host),
+    _auth: None = Depends(admin_required),
+):
+    sr = session.get(SurveyResponse, rid)
+    if not sr:
+        raise HTTPException(status_code=404, detail="not found")
+
+    try:
+        payload = json.loads(sr.answers_json) if sr.answers_json else {}
+    except Exception:
+        payload = {}
+
+    answers = payload.get("answers_indices") or []
+
+    # 질문 타이틀 추출(질문 id 오름차순)
+    questions = [q["title"] for q in sorted(ALL_QUESTIONS, key=lambda x: x["id"])]
+
+    # 두 번째 줄: 답 번호(다중선택은 "1;3;4")
+    def fmt(val):
+        if isinstance(val, list):
+            return ",".join(str(v) for v in val)
+        return "" if val is None else str(val)
+
+    answer_numbers = [fmt(v) for v in answers]
+
+    sio = StringIO()
+    w = csv.writer(sio)
+    w.writerow(questions)
+    w.writerow(answer_numbers)
+    csv_bytes = sio.getvalue().encode("utf-8-sig")
+
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="response_{rid}.csv"'},
+    )
 
 #---- 문진 가져오기 ----#
 
 @app.get("/survey")
 def survey_root(auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
-                session: Session = Depends(get_session)):
+                session: Session = Depends(get_session),  _guard: None = Depends(ensure_not_completed)):
     user_id = verify_user(auth) if auth else -1
     if user_id < 0:
         return RedirectResponse(url="/login", status_code=302)
 
     user = session.get(User, user_id)
+    # 인적정보 확인(없으면 /info로)
+    if not user or not user.name_enc or not user.gender or not user.birth_year:
+        return RedirectResponse(url="/info", status_code=303)
     resp = Respondent(user_id=user.id, campaign_id="demo", status="draft")
     session.add(resp)
     session.commit()
     session.refresh(resp)
+    
+    # User 정보 스냅샷을 Respondent에 저장(관리자 테이블 출력용)
+    try:
+        bd = date(user.birth_year, 1, 1)  # birth_year만 있는 구조 → 연도만이라도
+    except:
+        bd = None
+    resp.applicant_name = user.name_enc
+    resp.birth_date = bd
+    resp.gender = user.gender
+    session.add(resp)
+    session.commit()
 
     rtoken = signer.sign(str(resp.id)).decode("utf-8")
     return RedirectResponse(url=f"/survey/step/1?rtoken={rtoken}", status_code=303)   # ← 여기만 확인
 
 
 @app.get("/survey/step/{step}", response_class=HTMLResponse)
-def survey_step_get(request: Request, step: int, rtoken: str, acc: str | None = None):
+def survey_step_get(request: Request, step: int, rtoken: str, acc: str | None = None,  _guard: None = Depends(ensure_not_completed)):
     if step < 1 or step > 3:
         return RedirectResponse(url="/survey/step/1", status_code=303)
     respondent_id = verify_token(rtoken)
@@ -701,9 +813,48 @@ def survey_finish(request: Request,
     if respondent_id < 0:
         return templates.TemplateResponse("error.html", {"request": request, "message": "세션이 만료되었습니다. 다시 시작해주세요."}, status_code=401)
 
+    # --- [NEW] 폼(acc) → "1부터 시작하는 번호"로 정규화 ---
+    # acc: {"q1":"2","q2":"1",...,"q23":["1","4"]} 형태(문자열/문자열리스트)라고 가정
+    try:
+        acc_obj = json.loads(acc) if acc else {}
+    except Exception:
+        acc_obj = {}
+
+    # 질문 id 오름차순(1..23) 기준으로 번호만 추출
+    answers_indices = []
+    # ALL_QUESTIONS는 기동 시 로드된 전체 질문(JSON)
+    # 각 질문 객체는 {"id": 1, "title": "...", "type": "radio"/"checkbox", ...} 형태라고 가정
+    for q in sorted(ALL_QUESTIONS, key=lambda x: x["id"]):
+        key = f"q{q['id']}"
+        if q.get("type") == "checkbox":
+            raw_list = acc_obj.get(key, [])
+            if isinstance(raw_list, str):
+                # 혹시 "1,3,4" 같이 들어오면 분할
+                raw_list = [s.strip() for s in raw_list.split(",") if s.strip()]
+            # 정수로 정규화(1부터). 비정상 값은 제외
+            idx_list = []
+            for v in raw_list:
+                try:
+                    i = int(v)
+                    if i >= 1:
+                        idx_list.append(i)
+                except:
+                    pass
+            answers_indices.append(idx_list)
+        else:
+            v = acc_obj.get(key)
+            try:
+                i = int(v) if v not in (None, "") else None
+                answers_indices.append(i if (i is None or i >= 1) else None)
+            except:
+                answers_indices.append(None)
+
+    # DB에는 깔끔하게 번호만 저장
+    normalized_payload = {"answers_indices": answers_indices}
+
     sr = SurveyResponse(
         respondent_id=respondent_id,
-        answers_json=acc,
+        answers_json=json.dumps(normalized_payload, ensure_ascii=False),
         score=None
     )
     session.add(sr)
@@ -714,8 +865,10 @@ def survey_finish(request: Request,
     session.commit()
     session.refresh(sr)
 
-    rtoken_report = signer.sign(f"{sr.id}").decode("utf-8")
-    return RedirectResponse(url=f"/report/ready?rtoken={rtoken_report}", status_code=303)
+    response = RedirectResponse(url="/portal", status_code=302)
+    # 설문 완료 플래그(브라우저 뒤로가기로 입력 복귀 차단용)
+    response.set_cookie("survey_completed", "1", max_age=60*60*24*7, httponly=True, samesite="Lax", secure=bool(int(os.getenv("SECURE_COOKIE","1"))))
+    return response
 
 
 

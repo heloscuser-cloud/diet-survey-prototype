@@ -1,0 +1,55 @@
+{% extends "admin/base_admin.html" %}
+{% block title %}응답 목록{% endblock %}
+{% block content %}
+  <h2>응답 목록</h2>
+
+  <form class="inline" method="get" action="/admin/responses">
+    <input type="text" name="q" placeholder="이름/전화 해시/기타 포함 검색" value="{{ q or '' }}">
+    <input type="number" name="min_score" placeholder="최소 점수" value="{{ min_score or '' }}">
+    <input type="date" name="from" value="{{ from or '' }}">
+    <input type="date" name="to" value="{{ to or '' }}">
+    <button class="btn" type="submit">검색</button>
+    <a class="btn" href="/admin/responses">초기화</a>
+    <a class="btn primary" href="/admin/responses.csv?q={{ q|urlencode }}&min_score={{ min_score }}&from={{ from }}&to={{ to }}">CSV 다운로드</a>
+  </form>
+
+  <p class="muted">총 {{ total }}건 · 페이지 {{ page }} / {{ total_pages }}</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>응답자</th>
+        <th>점수</th>
+        <th>제출시각</th>
+        <th>요약</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for sr, resp, user in rows %}
+        <tr>
+          <td>{{ sr.id }}</td>
+          <td>
+            사용자ID: {{ user.id }}<br>
+            이름(enc): {{ user.name_enc }}<br>
+            전화 해시: {{ user.phone_hash }}
+          </td>
+          <td>{{ sr.score if sr.score is not none else '' }}</td>
+          <td>{{ to_kst_str(sr.submitted_at) }}</td>
+          <td class="muted">
+            {{ (sr.answers_json or '')[:140] }}{% if (sr.answers_json or '')|length > 140 %}…{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="pagination">
+    {% if page > 1 %}
+      <a href="/admin/responses?page={{ page - 1 }}&q={{ q|urlencode }}&min_score={{ min_score }}&from={{ from }}&to={{ to }}">이전</a>
+    {% endif %}
+    {% if page < total_pages %}
+      <a href="/admin/responses?page={{ page + 1 }}&q={{ q|urlencode }}&min_score={{ min_score }}&from={{ from }}&to={{ to }}">다음</a>
+    {% endif %}
+  </div>
+{% endblock %}
