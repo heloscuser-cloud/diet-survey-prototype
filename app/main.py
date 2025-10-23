@@ -256,16 +256,14 @@ async def info_submit(
     # 다음 설문 세션 Respondent에 스냅샷으로 옮길 수 있도록 User에도 저장(옵션)
     user = session.get(User, user_id)
     if user:
-        user.name_enc = name
-        user.gender = gender
-        user.birth_year = bd.year  # 호환 위해 유지
-        # 실제 생년월일 저장(컬럼 있으면)
-    try:
-        user.birth_date = bd
+        user.name_enc = name.strip()
+        user.gender = gender.strip()
+        user.birth_year = bd.year                       # 호환용 유지
+        user.birth_date = bd                            # 실제 생년월일 저장
         user.height_cm = h_cm
         user.weight_kg = w_kg
-    except Exception:
-        pass
+        session.add(user)
+        session.commit()   
         session.add(user)
         session.commit()
 
@@ -784,6 +782,7 @@ def admin_response_two_rows_csv(
 #---- 문진 가져오기 ----#
 
 @app.get("/survey")
+
 def survey_root(auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
                 session: Session = Depends(get_session),):
     user_id = verify_user(auth) if auth else -1
@@ -791,8 +790,17 @@ def survey_root(auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
         return RedirectResponse(url="/login", status_code=302)
 
     user = session.get(User, user_id)
-    # 인적정보 확인(없으면 /info로)
-    if not user or not user.name_enc or not user.gender or not user.birth_year:
+
+    # 임시로그. 문진 정상 동작시 삭제 (251024)
+    print("SURVEY GUARD",
+      "name=", bool(user and user.name_enc),
+      "gender=", bool(user and user.gender),
+      "birth_date=", bool(user and getattr(user, "birth_date", None)),
+      "birth_year=", bool(user and user.birth_year))
+
+    # 필수 인적사항: 이름/성별 + (birth_date 또는 birth_year)
+    has_birth = bool(getattr(user, "birth_date", None) or getattr(user, "birth_year", None))
+    if not user or not user.name_enc or not user.gender or not has_birth:
         return RedirectResponse(url="/info", status_code=303)
     resp = Respondent(user_id=user.id, campaign_id="demo", status="draft")
     session.add(resp)
@@ -801,7 +809,13 @@ def survey_root(auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
     
     # User 정보 스냅샷을 Respondent에 저장(관리자 테이블 출력용)
     # 실제 생년월일 우선 스냅샷
-    bd = user.birth_date or (date(user.birth_year, 1, 1) if user.birth_year else None)
+    bd = None
+    try:
+        bd = user.birth_date
+    except Exception:
+        pass
+    if not bd and user.birth_year:
+        bd = date(user.birth_year, 1, 1)
     resp.applicant_name = user.name_enc
     resp.birth_date = bd
     resp.gender = user.gender

@@ -18,7 +18,7 @@
 <body>
   <div class="card">
     <h1>인적정보</h1>
-    <form method="post" action="/info">
+    <form id="infoForm" method="post" action="/info">
       <label>이름</label>
       <input type="text" name="name" placeholder="홍길동" required/>
 <label>생년월일</label>
@@ -69,7 +69,7 @@ function norm1dp(el){
 }
 function autoNext(el,nextId,max){ if(el.value.length>=max){ const n=document.getElementById(nextId); n && n.focus(); } }
 function pad2(n){return String(n).padStart(2,'0');}
-document.querySelector('form[action="/info"]').addEventListener('submit', function(e){
+document.getElementById('infoForm').addEventListener('submit', function(e){
   const y=document.getElementById('bd_y').value, m=document.getElementById('bd_m').value, d=document.getElementById('bd_d').value;
   if(!(y && m && d && y.length===4 && m.length>=1 && d.length>=1)){ e.preventDefault(); alert('생년월일을 정확히 입력해주세요.'); return; }
   const mm = pad2(m), dd = pad2(d);
