@@ -143,10 +143,12 @@ class Respondent(SQLModel, table=True):
     status: str = Field(default="draft")
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    # --- NEW: 인적정보(신청자 표시용) ---
     applicant_name: Optional[str] = None
-    birth_date: Optional[date] = None   # YYYY-MM-DD
-    gender: Optional[str] = None        # "남" | "여"
+    birth_date: Optional[date] = None
+    gender: Optional[str] = None
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
+    serial_no: Optional[int] = Field(default=None, index=True)
 
 class SurveyResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -258,14 +260,12 @@ async def info_submit(
         user.gender = gender
         user.birth_year = bd.year  # 호환 위해 유지
         # 실제 생년월일 저장(컬럼 있으면)
-        try:
-            user.birth_date = bd  # SQLModel에 컬럼 추가해두었으면 정상 동작
-        except Exception:
-            pass
-        if hasattr(user, "height_cm"):
-            user.height_cm = h_cm
-        if hasattr(user, "weight_kg"):
-            user.weight_kg = w_kg
+    try:
+        user.birth_date = bd
+        user.height_cm = h_cm
+        user.weight_kg = w_kg
+    except Exception:
+        pass
         session.add(user)
         session.commit()
 
@@ -805,9 +805,14 @@ def survey_root(auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
     resp.applicant_name = user.name_enc
     resp.birth_date = bd
     resp.gender = user.gender
-    # 키/몸무게 스냅샷 (있을 때만)
-    if hasattr(user, "height_cm"): resp.height_cm = user.height_cm
-    if hasattr(user, "weight_kg"): resp.weight_kg = user.weight_kg
+    # 있으면 스냅샷
+    try:
+        if getattr(user, "height_cm", None) is not None:
+            resp.height_cm = float(user.height_cm)
+        if getattr(user, "weight_kg", None) is not None:
+            resp.weight_kg = float(user.weight_kg)
+    except Exception:
+        pass
     session.add(resp)
     session.commit()
 
