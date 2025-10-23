@@ -50,7 +50,7 @@
 
       <div class="nav">
         {% if not is_first %}
-          <a class="btn prev" href="/survey/step/{{ step - 1 }}?acc={{ acc|urlencode }}">이전</a>
+          <a class="btn prev" href="/survey/step/{{ step - 1 }}?acc={{ acc|urlencode }}&rtoken={{ rtoken|urlencode }}">이전</a>
         {% endif %}
         <button type="submit" class="btn next" id="nextBtn" disabled>
           {{ "제출" if is_last else "다음" }}

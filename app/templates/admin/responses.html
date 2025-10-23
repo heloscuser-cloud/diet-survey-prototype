@@ -35,7 +35,7 @@
             전화 해시: {{ user.phone_hash }}
           </td>
           <td>{{ sr.score if sr.score is not none else '' }}</td>
-          <td>{{ sr.submitted_at }}</td>
+          <td>{{ to_kst_str(sr.submitted_at) }}</td>
           <td class="muted">
             {{ (sr.answers_json or '')[:140] }}{% if (sr.answers_json or '')|length > 140 %}…{% endif %}
           </td>

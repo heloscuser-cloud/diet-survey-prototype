@@ -31,6 +31,21 @@ from pathlib import Path
 from fastapi import Request, Form
 from fastapi.responses import RedirectResponse
 
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+KST = ZoneInfo("Asia/Seoul")
+
+def to_kst(dt: datetime) -> datetime:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(KST)
+
+def now_kst() -> datetime:
+    return datetime.now(tz=KST)
+
+
 
 # 질문 로드 (앱 기동시 1회)
 QUESTIONS_PATH = Path("app/data/survey_questions.json")
@@ -322,7 +337,7 @@ def render_pdf(path: str, title: str, score: int, tips: List[str]):
     c.drawString(x_margin, height - y_margin, title)
 
     c.setFont(DEFAULT_FONT, 12)
-    c.drawString(x_margin, height - y_margin - 20, f"생성일: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    c.drawString(x_margin, height - y_margin - 20, f"생성일: {now_kst().strftime('%Y-%m-%d %H:%M')}")
     c.drawString(x_margin, height - y_margin - 40, f"총점: {score} / 60")
 
     c.line(x_margin, height - y_margin - 50, width - x_margin, height - y_margin - 50)
@@ -386,7 +401,7 @@ def portal(request: Request, auth: str | None = Cookie(default=None, alias=AUTH_
         for sr in srs:
             reports.append({
                 "id": sr.id,
-                "submitted_at": sr.submitted_at.strftime("%Y-%m-%d %H:%M"),
+                "submitted_at": to_kst(sr.submitted_at).strftime("%Y-%m-%d %H:%M"),
                 "score": sr.score
             })
     reports.sort(key=lambda x: x["id"], reverse=True)
@@ -535,10 +550,13 @@ def admin_responses(
     rows = session.exec(stmt.order_by(SurveyResponse.submitted_at.desc()).offset((page-1)*PAGE_SIZE).limit(PAGE_SIZE)).all()
     total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
 
+    to_kst_str = lambda dt: to_kst(dt).strftime("%Y-%m-%d %H:%M")
+
     return templates.TemplateResponse("admin/responses.html", {
         "request": request, "rows": rows, "page": page,
         "total": total, "total_pages": total_pages,
         "q": q, "min_score": min_score, "from": from_, "to": to,
+        "to_kst_str": to_kst_str,
     })
 
 
@@ -706,7 +724,3 @@ from fastapi.routing import APIRoute
 @app.get("/_routes")
 def _routes():
     return [{"path": r.path, "methods": list(r.methods)} for r in app.routes if isinstance(r, APIRoute)]
-
-@app.get("/_host")
-def _host(request: Request):
-    return {"host": (request.headers.get("host") or "").split(":")[0].lower()}
