@@ -601,12 +601,15 @@ def admin_login(request: Request, username: str = Form(...), password: str = For
         )
     resp = RedirectResponse(url="/admin/responses", status_code=303)
     resp.set_cookie(
+        COOKIE_NAME,                         # ← key (필수)
+        create_admin_cookie(),               # ← value (필수)
         httponly=True,
-        secure=True,              # HTTPS 강제
-        samesite="none",          # 어떤 요청에서도 전송되게
-        domain=".gaonnsurvey.store",  # 모든 서브도메인에서 공유
+        secure=True,                         # HTTPS 필수 (samesite=None 사용할 때)
+        samesite="none",                     # 서브도메인/리다이렉트에서도 쿠키 유지
+        domain=".gaonnsurvey.store",         # 모든 서브도메인에서 공유
         max_age=COOKIE_MAX_AGE,
-        path="/")
+        path="/",
+    )
     return resp
 
 @app.get("/admin/logout")
