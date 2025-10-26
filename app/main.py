@@ -541,7 +541,7 @@ def _norm_host(h: str) -> str:
     return (h or "").split(":")[0].strip().lower().rstrip(".")
 
 @app.middleware("http")
-async def force_admin_host(request: Request, call_next):
+async def require_admin_host(request: Request, call_next):
     p = request.url.path or ""
     h = _norm_host(request.headers.get("host"))
     if p.startswith("/admin") and h not in (ADMIN_HOST, "localhost", "127.0.0.1"):
