@@ -11,7 +11,7 @@
     h1 { font-size:18px; margin:0 0 6px; }
     .q { margin:14px 0; }
     .q-title { font-weight:600; margin-bottom:8px; line-height:1.4; }
-    label { display:block; padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px; margin:6px 0; }
+    label.opt { display:block; padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px; margin:6px 0; }
     input[type="radio"], input[type="checkbox"] { margin-right:8px; }
     .nav { display:flex; gap:8px; margin-top:12px; }
     .btn { flex:1; padding:14px; border-radius:12px; border:0; font-weight:600; }
@@ -24,21 +24,37 @@
 <body>
   <div class="wrap">
     <div class="progress">단계 {{ step }} / 3</div>
+
     <form class="card" method="post" action="/survey/step/{{ step }}" id="surveyForm">
-      <input type="hidden" name="acc" value='{{ acc|e }}'>
-      <input type="hidden" name="acc" value='{{ acc|e }}'>
-      <input type="hidden" name="rtoken" value='{{ rtoken|e }}'>   <!-- 추가 -->
+      <input type="hidden" name="acc" id="accInput" value='{{ acc|e }}'>
+      <input type="hidden" name="rtoken" value='{{ rtoken|e }}'>
 
       {% for q in questions %}
-        <div class="q">
-          <div class="q-title">{{ q.id }}. {{ q.question }}</div>
+        <div class="q" data-qid="{{ q.id }}">
+          <div class="q-title">{{ q.id }}. {{ q.title or q.text or q.label or q.question }}</div>
+
           {% if q.type == "radio" %}
             {% for opt in q.options %}
-              <label><input type="radio" name="q{{ q.id }}" value="{{ opt }}">{{ opt }}</label>
+              <label class="opt">
+                <input
+                  type="radio"
+                  name="q{{ q.id }}"
+                  value="{{ loop.index }}"  <!-- 1,2,3,... -->
+                  required
+                />
+                <span>{{ opt }}</span>
+              </label>
             {% endfor %}
           {% elif q.type == "checkbox" %}
             {% for opt in q.options %}
-              <label><input type="checkbox" name="q{{ q.id }}" value="{{ opt }}">{{ opt }}</label>
+              <label class="opt">
+                <input
+                  type="checkbox"
+                  name="q{{ q.id }}"      <!-- 같은 name으로 여러 값 -->
+                  value="{{ loop.index }}"<!-- 1,2,3,... -->
+                />
+                <span>{{ opt }}</span>
+              </label>
             {% endfor %}
           {% endif %}
         </div>
@@ -56,10 +72,28 @@
   </div>
 
   <script>
-    // 모든 문항 응답해야 다음/제출 버튼 활성화
     const form = document.getElementById('surveyForm');
     const nextBtn = document.getElementById('nextBtn');
+    const accEl = document.getElementById('accInput');
 
+    // 이전 단계 답 복원
+    (function restoreSelections(){
+      let data = {};
+      try { data = JSON.parse(accEl.value || "{}"); } catch(e) {}
+      for (const [key, v] of Object.entries(data)) {
+        if (Array.isArray(v)) {
+          v.forEach(n => {
+            const el = form.querySelector(`input[name="${key}"][value="${String(n)}"]`);
+            if (el) el.checked = true;
+          });
+        } else {
+          const el = form.querySelector(`input[name="${key}"][value="${String(v)}"]`);
+          if (el) el.checked = true;
+        }
+      }
+    })();
+
+    // 모든 문항 응답 시 다음/제출 활성화
     function validate() {
       const blocks = document.querySelectorAll('.q');
       let ok = true;
