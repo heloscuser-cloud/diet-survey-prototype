@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Form, Depends, Response, Cookie, HTTPException, UploadFile, File
+from fastapi import FastAPI, Request, Form, Depends, Response, Cookie, HTTPException, UploadFile, File, APIRouter
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.exception_handlers import http_exception_handler
@@ -95,9 +95,15 @@ signer = TimestampSigner(APP_SECRET)
 
 @app.exception_handler(HTTPException)
 async def completed_redirect_handler(request: Request, exc: HTTPException):
+    # 설문 뒤로가기 차단 307 → 메인
     if exc.status_code == 307 and exc.detail == "completed":
-        # 제출 완료 세션은 설문 접근 시 메인으로
         return RedirectResponse(url="/", status_code=307)
+
+    # ★ 관리자 보호: 401이면 로그인 화면으로
+    p = request.url.path or ""
+    if exc.status_code == 401 and p.startswith("/admin"):
+        return RedirectResponse(url="/admin/login", status_code=303)
+
     return await http_exception_handler(request, exc)
 
 @app.middleware("http")
@@ -485,7 +491,6 @@ def require_admin_host(request: Request):
         raise HTTPException(status_code=404, detail="Not found")
 
 
-
 #---- 관리자 로그인 ----#
 
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret")
@@ -493,7 +498,7 @@ ADMIN_USER = os.environ.get("ADMIN_USER")
 ADMIN_PASS = os.environ.get("ADMIN_PASS")
 _signer = itsdangerous.URLSafeSerializer(APP_SECRET, salt="admin-cookie")
 COOKIE_NAME = "admin"
-COOKIE_MAX_AGE = 7200  # 2시간
+COOKIE_MAX_AGE = 30  # 로그인 세션 유지 시간 30분 설정
 SECURE_COOKIE = os.environ.get("SECURE_COOKIE", "1") == "1"
 
 def create_admin_cookie() -> str:
@@ -509,6 +514,12 @@ def admin_required(request: Request):
     token = request.cookies.get(COOKIE_NAME)
     if not token or not validate_admin_cookie(token):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+# 관리자 전용 라우터
+admin_router = APIRouter(
+    prefix="/admin",
+    dependencies=[Depends(require_admin_host), Depends(admin_required)]
+)
 
 @app.get("/admin/login", response_class=HTMLResponse)
 def admin_login_form(request: Request, _h: None = Depends(require_admin_host)):
@@ -541,7 +552,7 @@ def admin_logout():
 from typing import Optional
 # 필요 시: from fastapi import Query
 
-@app.get("/admin/responses", response_class=HTMLResponse)
+@app.admin_router.get("/admin/responses", response_class=HTMLResponse)
 def admin_responses(
     request: Request,
     page: int = 1,
@@ -611,7 +622,7 @@ def admin_responses(
     })
 
 #접수완료처리
-@app.post("/admin/responses/accept")
+@app.admin_router.get("/admin/responses/accept")
 def admin_bulk_accept(
     ids: str = Form(...),  # "1,2,3"
     session: Session = Depends(get_session),
@@ -631,7 +642,7 @@ def admin_bulk_accept(
     return RedirectResponse(url="/admin/responses", status_code=303)
 
 #리포트 업로드
-@app.post("/admin/response/{rid}/report")
+@app.admin_router.get("/admin/response/{rid}/report")
 async def admin_upload_report(
     rid: int,
     file: UploadFile = File(...),
@@ -664,7 +675,7 @@ async def admin_upload_report(
     return RedirectResponse(url="/admin/responses", status_code=303)
 
 #리포트 삭제
-@app.post("/admin/response/{rid}/report/delete")
+@app.admin_router.get("/admin/response/{rid}/report/delete")
 def admin_delete_report(
     rid: int,
     session: Session = Depends(get_session),
@@ -686,7 +697,7 @@ def admin_delete_report(
     return RedirectResponse(url="/admin/responses", status_code=303)
 
 
-@app.get("/admin/responses.csv")
+@app.admin_router.get("/admin/responses.csv")
 def admin_responses_csv(
     q: Optional[str] = None,
     min_score: Optional[str] = None,   # 의미 없어도 기존 인터페이스 유지
@@ -772,7 +783,7 @@ def admin_responses_csv(
     )
     
     
-@app.get("/admin/response/{rid}.csv")
+@app.admin_router.get("/admin/response/{rid}.csv")
 def admin_response_two_rows_csv(
     rid: int,
     session: Session = Depends(get_session),
@@ -1010,65 +1021,94 @@ def admin_export_xlsx(
     _h: None = Depends(require_admin_host),
     _auth: None = Depends(admin_required),
 ):
-    
-    # 들어온 ids 로그(디버깅에 유용)
+    # 디버그 로그
     print("export.xlsx ids raw:", repr(ids))
-    
+
     # ids 파싱
-    id_list = []
-    for x in (ids or "").split(","):
-        x = x.strip()
-        if x.isdigit():
-            id_list.append(int(x))
+    id_list = [int(x) for x in (ids or "").split(",") if x.strip().isdigit()]
     if not id_list:
         return RedirectResponse(url="/admin/responses", status_code=303)
 
-    # 엑셀 워크북/시트 준비 ← ★ ws 정의는 여기!
+    # 엑셀 워크북/시트
     wb = Workbook()
     ws = wb.active
     ws.title = "문진결과"
 
-    # 질문 타이틀
+    # 질문 타이틀 (키 다양성 대응)
     def q_title(q: dict):
         return (
-            q.get("title") or q.get("text") or q.get("label") or
-            q.get("question") or q.get("prompt") or q.get("name") or
-            f"Q{q.get('id','')}"
+            q.get("title")
+            or q.get("text")
+            or q.get("label")
+            or q.get("question")
+            or q.get("prompt")
+            or q.get("name")
+            or f"Q{q.get('id','')}"
         )
     questions_sorted = sorted(ALL_QUESTIONS, key=lambda x: x["id"])
     questions = [q_title(q) for q in questions_sorted]
 
+    # 헤더행
     fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별", "신장", "체중"]
     ws.append(fixed_headers + questions)
 
-    # ... 루프 안에서 answers 파싱:
-    try:
-        payload = json.loads(sr.answers_json) if sr.answers_json else {}
-    except Exception:
-        payload = {}
+    # 유틸
+    today = now_kst().date()
 
-    answers = payload.get("answers_indices")
-    if not answers:
-        # q1..qN 형태에서 인덱스 배열 재구성
-        tmp = []
-        for q in questions_sorted:
-            key = f"q{q['id']}"
-            v = payload.get(key)
-            if isinstance(v, list):
-                tmp.append([int(x) for x in v if str(x).isdigit()])
-            elif v is None or v == "":
-                tmp.append("")
-            else:
-                tmp.append(int(v) if str(v).isdigit() else "")
-        answers = tmp
+    def calc_age(bd, ref_date):
+        if not bd:
+            return ""
+        return ref_date.year - bd.year - ((ref_date.month, ref_date.day) < (bd.month, bd.day))
 
     def fmt(v):
         if isinstance(v, list):
             return ";".join(str(x) for x in v)
         return "" if v is None else str(v)
-    row = [
-            idx,
-            (resp.serial_no if resp and resp.serial_no is not None else ""),
+
+    # 데이터 행 추가 (★ 모든 row 계산/append는 for 루프 "안"에서)
+    for idx, rid in enumerate(id_list, start=1):
+        sr = session.get(SurveyResponse, rid)
+        if not sr:
+            print("export.xlsx: missing SurveyResponse", rid)
+            continue
+
+        resp = session.get(Respondent, sr.respondent_id) if sr.respondent_id else None
+        user = session.get(User, resp.user_id) if resp and resp.user_id else None
+
+        # 인적사항
+        name = (resp.applicant_name if resp and resp.applicant_name else (user.name_enc if user and user.name_enc else "")) or ""
+        bd = resp.birth_date if (resp and resp.birth_date) else (getattr(user, "birth_date", None) if user else None)
+        age = calc_age(bd, today) if bd else ""
+        gender = (resp.gender if resp and resp.gender else (user.gender if user and user.gender else "")) or ""
+        height = (getattr(resp, "height_cm", None) if resp else None) or (getattr(user, "height_cm", None) if user else None)
+        weight = (getattr(resp, "weight_kg", None) if resp else None) or (getattr(user, "weight_kg", None) if user else None)
+        serial_no = resp.serial_no if (resp and resp.serial_no is not None) else ""
+
+        # 문진 답 파싱: answers_indices 우선, 없으면 q{id}들로 재구성
+        try:
+            payload = json.loads(sr.answers_json) if sr.answers_json else {}
+        except Exception as e:
+            print("export.xlsx: bad answers_json for rid", rid, "err:", repr(e))
+            payload = {}
+
+        answers = payload.get("answers_indices")
+        if not answers:
+            tmp = []
+            for q in questions_sorted:
+                key = f"q{q['id']}"
+                v = payload.get(key)
+                if isinstance(v, list):
+                    # 체크박스: 숫자 문자열들만
+                    tmp.append([int(x) for x in v if str(x).isdigit()])
+                elif v == "" or v is None:
+                    tmp.append("")
+                else:
+                    tmp.append(int(v) if str(v).isdigit() else "")
+            answers = tmp
+
+        row = [
+            idx,              # no. (엑셀 내부 연번)
+            serial_no,        # 신청번호(고정 순번)
             name,
             (bd.isoformat() if bd else ""),
             age,
@@ -1076,55 +1116,6 @@ def admin_export_xlsx(
             ("" if height is None else height),
             ("" if weight is None else weight),
         ] + [fmt(v) for v in answers]
-    ws.append(row)
-
-    # 나이 계산 함수(만 나이)
-    def calc_age(bd, ref_date):
-        if not bd:
-            return ""
-        return ref_date.year - bd.year - ((ref_date.month, ref_date.day) < (bd.month, bd.day))
-
-    today = now_kst().date()
-
-    # 데이터 행 추가
-    for idx, rid in enumerate(id_list, start=1):
-        sr = session.get(SurveyResponse, rid)
-        if not sr:
-            continue
-        resp = session.get(Respondent, sr.respondent_id)
-        user = session.get(User, resp.user_id) if resp else None
-
-        # 기초 필드
-        name = (resp.applicant_name if resp and resp.applicant_name else (user.name_enc if user else "")) or ""
-        bd = resp.birth_date if resp else None
-        age = calc_age(bd, today) if bd else ""
-        gender = (resp.gender if resp and resp.gender else (user.gender if user else "")) or ""
-        height = resp.height_cm if (resp and resp.height_cm is not None) else (user.height_cm if (user and hasattr(user, "height_cm")) else None)
-        weight = resp.weight_kg if (resp and resp.weight_kg is not None) else (user.weight_kg if (user and hasattr(user, "weight_kg")) else None)
-
-        # 문진 답(1부터, 23번은 리스트→";" 연결)
-        try:
-            payload = json.loads(sr.answers_json) if sr.answers_json else {}
-        except Exception:
-            payload = {}
-        answers = payload.get("answers_indices") or []
-        def fmt(v):
-            if isinstance(v, list):
-                return ";".join(str(x) for x in v)
-            return "" if v is None else str(v)
-        answer_row = [fmt(v) for v in answers]
-
-        # 한 줄 레코드 구성
-        row = [
-            idx,          # no. (엑셀 내 연번)
-            (resp.serial_no or ""),       # 신청번호(안정적 식별자: 응답 ID 사용)
-            name,
-            bd.isoformat() if bd else "",
-            age,
-            gender,
-            ("" if height is None else height),
-            ("" if weight is None else weight),
-        ] + answer_row
 
         ws.append(row)
 
@@ -1137,7 +1128,6 @@ def admin_export_xlsx(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="responses.xlsx"'}
     )
-
 from fastapi.routing import APIRoute
 
 @app.get("/_routes")
