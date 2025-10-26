@@ -119,52 +119,67 @@
       <th class="col-submitted">제출일</th>
       <th>리포트</th>
   </thead>
-  <tbody>
-  {% for sr, resp, user, rf in rows %}
-    <tr>
-      <td><input type="checkbox" class="rowChk" value="{{ sr.id }}"/></td>
-      <td class="col-serial">{{ resp.serial_no or '' }}</td>
-      <td class="col-applicant">{{ resp.applicant_name or user.name_enc or '-' }} ({{ resp.birth_date or '' }}, {{ resp.gender or user.gender or '-' }})</td>
-      <td class="col-filename">{{ rf.filename if rf else '' }}</td>
-      <td class="col-uploaded">{{ to_kst_str(rf.uploaded_at) if rf else '' }}</td>
-      <td class="col-status">
-      {% if resp.status=='submitted' %}<span class="tag">신청완료</span>
-      {% elif resp.status=='accepted' %}<span class="tag">접수완료</span>
-      {% elif resp.status=='report_uploaded' %}<span class="tag">리포트 업로드 완료</span>
-      {% else %}<span class="muted">{{ resp.status }}</span>{% endif %}
-      </td>
-      <td class="col-created">{{ to_kst_str(resp.created_at) }}</td>
-      <td "col-submitted">{{ to_kst_str(sr.submitted_at) }}</td>
-      <td class="report-cell">
-        <!-- 업로드: 작은 정사각 아이콘 -->
-        <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report" enctype="multipart/form-data">
-          <input id="file_{{ sr.id }}" type="file" name="file" accept="application/pdf" style="display:none" onchange="this.form.submit()"/>
-          <label for="file_{{ sr.id }}" title="리포트 등록"
-                 style="cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid #e5e7eb;border-radius:6px">
-            <img src="/static/icons/plus.svg" alt="등록" style="width:16px;height:16px"/>
-          </label>
-        </form>
+<tbody>
+{% for sr, resp, user, rf in rows %}
+  <tr>
+    <td><input type="checkbox" class="rowChk" value="{{ sr.id }}"/></td>
 
-        <!-- 삭제: 작은 정사각 아이콘 -->
-        {% if rf %}
-       <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report" enctype="multipart/form-data">
+    <!-- 신청번호 -->
+    <td class="col-serial">{{ resp.serial_no or '' }}</td>
+
+    <!-- 신청자: 이름(생년월일, 성별) -->
+    <td class="col-applicant">
+      {{ resp.applicant_name or user.name_enc or '-' }}
+      ({{ resp.birth_date or '' }}, {{ resp.gender or user.gender or '-' }})
+    </td>
+
+    <!-- PDF 파일명 -->
+    <td class="col-filename">{{ rf.filename if rf else '' }}</td>
+
+    <!-- 업로드 날짜 -->
+    <td class="col-uploaded">{{ to_kst_str(rf.uploaded_at) if rf else '' }}</td>
+
+    <!-- 진행 상태값 -->
+    <td class="col-status">
+      {% if resp.status == 'submitted' %}
+        <span class="tag">신청완료</span>
+      {% elif resp.status == 'accepted' %}
+        <span class="tag">접수완료</span>
+      {% elif resp.status == 'report_uploaded' %}
+        <span class="tag">리포트 업로드 완료</span>
+      {% else %}
+        <span class="muted">{{ resp.status or '' }}</span>
+      {% endif %}
+    </td>
+
+    <!-- 신청일 / 제출일 -->
+    <td class="col-created">{{ to_kst_str(resp.created_at) }}</td>
+    <td class="col-submitted">{{ to_kst_str(sr.submitted_at) }}</td>
+
+    <!-- 리포트 아이콘 -->
+    <td class="report-cell">
+      <!-- 등록 버튼 (파일 선택하면 자동 submit) -->
+      <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report" enctype="multipart/form-data">
         <input id="file_{{ sr.id }}" type="file" name="file" accept="application/pdf" style="display:none"
                onchange="this.form.submit()"/>
         <label for="file_{{ sr.id }}" class="icon-btn" title="리포트 등록">
           <img src="/static/icons/plus.svg" alt="등록"/>
         </label>
       </form>
+
+      <!-- 삭제 버튼 (파일이 있을 때만) -->
       {% if rf %}
       <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report/delete">
         <button type="submit" class="icon-btn" title="리포트 삭제">
           <img src="/static/icons/trash.svg" alt="삭제"/>
         </button>
       </form>
-        {% endif %}
-      </td>
-    </tr>
-  {% endfor %}
-  </tbody>
+      {% endif %}
+    </td>
+  </tr>
+{% endfor %}
+</tbody>
+
 </table>
 
 </div>
