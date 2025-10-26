@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, Form, Depends, Response, Cookie, HTTPException, UploadFile, File, APIRouter
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.routing import APIRoute
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import RedirectResponse, HTMLResponse, StreamingResponse
 from fastapi.requests import Request
@@ -101,6 +102,9 @@ async def completed_redirect_handler(request: Request, exc: HTTPException):
     # 설문 뒤로가기 차단 307 → 메인
     if exc.status_code == 307 and exc.detail == "completed":
         return RedirectResponse(url="/", status_code=307)
+       # 관리자 호스트 강제 307 → Location 헤더 그대로 사용
+    if exc.status_code == 307 and exc.detail == "admin-host-redirect":
+        return RedirectResponse(url=exc.headers.get("Location") or "/", status_code=307)
 
     # ★ 관리자 보호: 401이면 로그인 화면으로
     p = request.url.path or ""
@@ -533,21 +537,23 @@ def portal(request: Request, auth: str | None = Cookie(default=None, alias=AUTH_
     })
 
 # --- Admin host gate ---
-ADMIN_ALLOWED_HOSTS = {
-    "admin.gaonnsurvey.store",  # 프로덕션
-    "localhost", "127.0.0.1"    # 로컬 테스트
-}
+ADMIN_HOST = "admin.gaonnsurvey.store"
 
 def _norm_host(h: str) -> str:
     return (h or "").split(":")[0].strip().lower().rstrip(".")
 
 def require_admin_host(request: Request):
-    host = (request.headers.get("host") or "").split(":")[0].lower()
-    if host not in ADMIN_ALLOWED_HOSTS:
-        raise HTTPException(status_code=404, detail="Not found")
-        # 디버그 로그 추가
-        print(f"[ADMIN HOST GATE] blocked host={host}")
-        raise HTTPException(status_code=404, detail="Not found")
+    host = _norm_host(request.headers.get("host"))
+    if host == ADMIN_HOST or host in ("localhost", "127.0.0.1"):
+        return
+    # 잘못된 호스트 → 같은 경로로 관리자 호스트로 302 리다이렉트
+    target = f"https://{ADMIN_HOST}{request.url.path}"
+    if request.url.query:
+        target += f"?{request.url.query}"
+    # 디버그 로그
+    print(f"[ADMIN HOST GATE] redirect {host} -> {ADMIN_HOST} path={request.url.path}")
+    raise HTTPException(status_code=307, detail="admin-host-redirect", headers={"Location": target})
+
 
 
 #---- 관리자 로그인 ----#
@@ -604,9 +610,9 @@ def admin_login(request: Request, username: str = Form(...), password: str = For
         COOKIE_NAME,                         # ← key (필수)
         create_admin_cookie(),               # ← value (필수)
         httponly=True,
-        secure=True,                         # HTTPS 필수 (samesite=None 사용할 때)
-        samesite="none",                     # 서브도메인/리다이렉트에서도 쿠키 유지
-        domain=".gaonnsurvey.store",         # 모든 서브도메인에서 공유
+        secure=True,              # HTTPS
+        samesite="lax",           # 동일 사이트 내 탐색/POST에 항상 전송
+        domain="admin.gaonnsurvey.store",  # 관리자 호스트로 고정
         max_age=COOKIE_MAX_AGE,
         path="/",
     )
@@ -1081,6 +1087,7 @@ def survey_finish(request: Request,
     response.set_cookie("survey_completed", "1", max_age=60*60*24*7, httponly=True, samesite="Lax", secure=bool(int(os.getenv("SECURE_COOKIE","1"))))
     return response
 
+
 @app.post("/admin/responses/export.xlsx")
 def admin_export_xlsx(
     ids: str = Form(...),  # "1,2,3"
@@ -1096,49 +1103,74 @@ def admin_export_xlsx(
     if not id_list:
         return RedirectResponse(url="/admin/responses", status_code=303)
 
+    # 답 파서 (여러 저장포맷 대응)
+    def extract_answers(payload: dict, questions_sorted):
+        """
+        각 문항(id 오름차순)에 대한 선택 번호를 추출.
+        - 단일: "2" -> 2
+        - 복수: ["1","3"] 또는 "1,3" -> [1,3]
+        - 없으면 ""
+        """
+        ai = payload.get("answers_indices")
+        if isinstance(ai, list) and len(ai) == len(questions_sorted):
+            return ai
+
+        def to_num(v):
+            if v is None or v == "": return ""
+            if isinstance(v, list):
+                return [int(x) for x in v if str(x).isdigit()]
+            if isinstance(v, str) and "," in v:
+                return [int(x) for x in v.split(",") if x.strip().isdigit()]
+            return int(v) if str(v).isdigit() else ""
+
+        # nested: {"answers": {...}}, {"acc": {...}}, {"data": {...}}
+        candidates = [payload]
+        for k in ("answers", "acc", "data"):
+            if isinstance(payload.get(k), dict):
+                candidates.append(payload[k])
+
+        for cand in candidates:
+            out, ok = [], 0
+            for q in questions_sorted:
+                key = f"q{q['id']}"
+                num = to_num(cand.get(key))
+                out.append(num)
+                if num != "": ok += 1
+            if ok > 0:
+                return out
+        return ["" for _ in questions_sorted]
+
     # 엑셀 워크북/시트
     wb = Workbook()
     ws = wb.active
     ws.title = "문진결과"
 
-    # 질문 타이틀 (키 다양성 대응)
+    # 질문 타이틀
     def q_title(q: dict):
-        return (
-            q.get("title")
-            or q.get("text")
-            or q.get("label")
-            or q.get("question")
-            or q.get("prompt")
-            or q.get("name")
-            or f"Q{q.get('id','')}"
-        )
+        return (q.get("title") or q.get("text") or q.get("label")
+                or q.get("question") or q.get("prompt") or q.get("name")
+                or f"Q{q.get('id','')}")
     questions_sorted = sorted(ALL_QUESTIONS, key=lambda x: x["id"])
     questions = [q_title(q) for q in questions_sorted]
 
-    # 헤더행
+    # 헤더
     fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별", "신장", "체중"]
     ws.append(fixed_headers + questions)
 
     # 유틸
     today = now_kst().date()
-
     def calc_age(bd, ref_date):
-        if not bd:
-            return ""
+        if not bd: return ""
         return ref_date.year - bd.year - ((ref_date.month, ref_date.day) < (bd.month, bd.day))
-
     def fmt(v):
-        if isinstance(v, list):
-            return ";".join(str(x) for x in v)
+        if isinstance(v, list): return ";".join(str(x) for x in v)
         return "" if v is None else str(v)
 
-    # 데이터 행 추가 (★ 모든 row 계산/append는 for 루프 "안"에서)
+    # 데이터 행
     for idx, rid in enumerate(id_list, start=1):
         sr = session.get(SurveyResponse, rid)
         if not sr:
-            print("export.xlsx: missing SurveyResponse", rid)
             continue
-
         resp = session.get(Respondent, sr.respondent_id) if sr.respondent_id else None
         user = session.get(User, resp.user_id) if resp and resp.user_id else None
 
@@ -1151,34 +1183,17 @@ def admin_export_xlsx(
         weight = (getattr(resp, "weight_kg", None) if resp else None) or (getattr(user, "weight_kg", None) if user else None)
         serial_no = resp.serial_no if (resp and resp.serial_no is not None) else ""
 
-        # 문진 답 파싱: answers_indices 우선, 없으면 q{id}들로 재구성
+        # 답 추출
         try:
             payload = json.loads(sr.answers_json) if sr.answers_json else {}
         except Exception as e:
             print("export.xlsx: bad answers_json for rid", rid, "err:", repr(e))
             payload = {}
-
-        answers = payload.get("answers_indices")
-        if not answers:
-            tmp = []
-            for q in questions_sorted:
-                key = f"q{q['id']}"
-                v = payload.get(key)
-                if isinstance(v, list):
-                    # 체크박스: 숫자 문자열들만
-                    tmp.append([int(x) for x in v if str(x).isdigit()])
-                elif isinstance(v, str) and "," in v:
-                    # 체크박스가 "1,3" 같은 문자열로 저장된 경우
-                    tmp.append([int(x) for x in v.split(",") if x.strip().isdigit()])
-                elif v == "" or v is None:
-                    tmp.append("")
-                else:
-                    tmp.append(int(v) if str(v).isdigit() else "")
-            answers = tmp
+        answers = extract_answers(payload, questions_sorted)
 
         row = [
-            idx,              # no. (엑셀 내부 연번)
-            serial_no,        # 신청번호(고정 순번)
+            idx,
+            serial_no,
             name,
             (bd.isoformat() if bd else ""),
             age,
@@ -1186,10 +1201,9 @@ def admin_export_xlsx(
             ("" if height is None else height),
             ("" if weight is None else weight),
         ] + [fmt(v) for v in answers]
-
         ws.append(row)
 
-    # 바이너리로 내보내기
+    # 바이너리 응답
     mem = BytesIO()
     wb.save(mem)
     mem.seek(0)
@@ -1198,7 +1212,7 @@ def admin_export_xlsx(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="responses.xlsx"'}
     )
-from fastapi.routing import APIRoute
+
 
 @app.get("/_routes")
 def _routes():
