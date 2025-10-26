@@ -11,6 +11,7 @@ from fastapi import Query
 from datetime import datetime, timedelta, date, timezone
 from random import randint
 from sqlalchemy import func, Column, LargeBinary, Integer, text
+from sqlalchemy import text as sa_text
 from itsdangerous import TimestampSigner, BadSignature, SignatureExpired, URLSafeSerializer
 import zipfile
 import csv
@@ -152,19 +153,35 @@ class User(SQLModel, table=True):
     height_cm: Optional[float] = None
     weight_kg: Optional[float] = None
 
+
 class Respondent(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
+    __tablename__ = "respondent"
+    # (선택 안전장치) 이미 같은 테이블이 메타데이터에 있을 경우 재정의 허용
+    __table_args__ = {"extend_existing": True}
+
+    id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(index=True)
     campaign_id: str = Field(default="default")
     status: str = Field(default="draft")
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
-    applicant_name: Optional[str] = None
-    birth_date: Optional[date] = None
-    gender: Optional[str] = None
-    height_cm: Optional[float] = None
-    weight_kg: Optional[float] = None
-    serial_no: Optional[int] = Field(default=None, index=True)
+    # 인적정보 스냅샷
+    applicant_name: str | None = None
+    birth_date: date | None = None
+    gender: str | None = None
+    height_cm: float | None = None
+    weight_kg: float | None = None
+
+    # 신청번호(고정 순번) — DB 시퀀스에서 자동 발급
+    serial_no: int | None = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            server_default=text("nextval('respondent_serial_no_seq')"),
+            unique=True,
+            index=True,
+        ),
+    )
 
 class SurveyResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -179,15 +196,7 @@ class ReportFile(SQLModel, table=True):
     filename: str
     content: bytes = Field(sa_column=Column(LargeBinary))
     uploaded_at: datetime = Field(default_factory=datetime.utcnow)
-
-#신청번호 자동채우기
-class Respondent(SQLModel, table=True):
-    ...
-    serial_no: Optional[int] = Field(
-        default=None,
-        sa_column=Column(Integer, server_default=text("nextval('respondent_serial_no_seq')"), unique=True, index=True)
-    )
-    
+  
 class Otp(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     phone: str = Field(index=True)
@@ -981,6 +990,13 @@ def survey_finish(request: Request,
         session.add(resp)
     session.commit()
     session.refresh(sr)
+    
+    if resp.serial_no is None:
+        next_val = session.exec(sa_text("SELECT nextval('respondent_serial_no_seq')")).one()[0]
+        resp.serial_no = next_val
+        session.add(resp)
+        session.commit()
+        session.refresh(resp)
 
     response = RedirectResponse(url="/portal", status_code=302)
     # 설문 완료 플래그(브라우저 뒤로가기로 입력 복귀 차단용)
