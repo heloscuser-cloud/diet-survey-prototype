@@ -872,6 +872,9 @@ def admin_response_two_rows_csv(
         headers={"Content-Disposition": f'attachment; filename=\"response_{rid}.csv\"'},
     )
 
+
+app.include_router(admin_router)
+
 #---- 문진 가져오기 ----#
 
 @app.get("/survey")
