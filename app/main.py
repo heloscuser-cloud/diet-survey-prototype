@@ -552,7 +552,7 @@ def admin_logout():
 from typing import Optional
 # 필요 시: from fastapi import Query
 
-@app.admin_router.get("/admin/responses", response_class=HTMLResponse)
+@admin_router.get("/admin/responses", response_class=HTMLResponse)
 def admin_responses(
     request: Request,
     page: int = 1,
@@ -622,7 +622,7 @@ def admin_responses(
     })
 
 #접수완료처리
-@app.admin_router.get("/admin/responses/accept")
+@admin_router.get("/admin/responses/accept")
 def admin_bulk_accept(
     ids: str = Form(...),  # "1,2,3"
     session: Session = Depends(get_session),
@@ -642,7 +642,7 @@ def admin_bulk_accept(
     return RedirectResponse(url="/admin/responses", status_code=303)
 
 #리포트 업로드
-@app.admin_router.get("/admin/response/{rid}/report")
+@admin_router.get("/admin/response/{rid}/report")
 async def admin_upload_report(
     rid: int,
     file: UploadFile = File(...),
@@ -675,7 +675,7 @@ async def admin_upload_report(
     return RedirectResponse(url="/admin/responses", status_code=303)
 
 #리포트 삭제
-@app.admin_router.get("/admin/response/{rid}/report/delete")
+@admin_router.get("/admin/response/{rid}/report/delete")
 def admin_delete_report(
     rid: int,
     session: Session = Depends(get_session),
@@ -697,7 +697,7 @@ def admin_delete_report(
     return RedirectResponse(url="/admin/responses", status_code=303)
 
 
-@app.admin_router.get("/admin/responses.csv")
+@admin_router.get("/admin/responses.csv")
 def admin_responses_csv(
     q: Optional[str] = None,
     min_score: Optional[str] = None,   # 의미 없어도 기존 인터페이스 유지
@@ -783,7 +783,7 @@ def admin_responses_csv(
     )
     
     
-@app.admin_router.get("/admin/response/{rid}.csv")
+@admin_router.get("/admin/response/{rid}.csv")
 def admin_response_two_rows_csv(
     rid: int,
     session: Session = Depends(get_session),
