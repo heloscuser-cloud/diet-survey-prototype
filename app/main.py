@@ -1067,15 +1067,15 @@ def admin_export_xlsx(
             return ";".join(str(x) for x in v)
         return "" if v is None else str(v)
     row = [
-        idx,
-        (resp.serial_no if resp and resp.serial_no is not None else ""),
-        name,
-        (bd.isoformat() if bd else ""),
-        age,
-        gender,
-        ("" if height is None else height),
-        ("" if weight is None else weight),
-    ] + [fmt(v) for v in answers]
+            idx,
+            (resp.serial_no if resp and resp.serial_no is not None else ""),
+            name,
+            (bd.isoformat() if bd else ""),
+            age,
+            gender,
+            ("" if height is None else height),
+            ("" if weight is None else weight),
+        ] + [fmt(v) for v in answers]
     ws.append(row)
 
     # 나이 계산 함수(만 나이)
