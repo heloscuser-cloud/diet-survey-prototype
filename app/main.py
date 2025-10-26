@@ -10,7 +10,7 @@ from typing import Optional, List
 from fastapi import Query
 from datetime import datetime, timedelta, date, timezone
 from random import randint
-from sqlalchemy import func, Column, LargeBinary, Integer
+from sqlalchemy import func, Column, LargeBinary, Integer, text
 from itsdangerous import TimestampSigner, BadSignature, SignatureExpired, URLSafeSerializer
 import zipfile
 import csv
