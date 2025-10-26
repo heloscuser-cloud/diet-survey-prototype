@@ -107,10 +107,8 @@ async def completed_redirect_handler(request: Request, exc: HTTPException):
         return RedirectResponse(url=exc.headers.get("Location") or "/", status_code=307)
 
     # ★ 관리자 보호: 401이면 로그인 화면으로
-    p = request.url.path or ""
-    if exc.status_code == 401 and p.startswith("/admin"):
+    if exc.status_code == 401 and (request.url.path or "").startswith("/admin"):
         return RedirectResponse(url="/admin/login", status_code=303)
-
     return await http_exception_handler(request, exc)
 
 @app.middleware("http")
@@ -550,7 +548,7 @@ def require_admin_host(request: Request):
     if request.url.query:
         target += f"?{request.url.query}"
     print(f"[ADMIN HOST GATE] redirect {host} -> {ADMIN_HOST} path={request.url.path}")
-    # 307 + detail로 예외 핸들러에서 그대로 Location 사용
+    # 307로 예외 핸들러에서 그대로 Location 사용
     raise HTTPException(status_code=307, detail="admin-host-redirect", headers={"Location": target})
 
 
@@ -608,15 +606,15 @@ def admin_login(request: Request, username: str = Form(...), password: str = For
         )
     resp = RedirectResponse(url="/admin/responses", status_code=303)
     resp.set_cookie(
-        COOKIE_NAME,                 # ← key (예: "admin")
-        create_admin_cookie(),       # ← value
+        COOKIE_NAME,                # key
+        create_admin_cookie(),      # value
         httponly=True,
-        secure=True,                 # HTTPS 필수
-        samesite="none",             # 어떤 탐색/POST에서도 전송
-        domain=".gaonnsurvey.store", # 모든 서브도메인 공유 (admin 전용이면 'admin.gaonnsurvey.store'도 OK)
+        secure=True,                # HTTPS
+        samesite="lax",             # 동일 사이트 탐색/POST에 항상 전송
+        domain="admin.gaonnsurvey.store",  # 관리자 호스트로 고정
         max_age=COOKIE_MAX_AGE,
         path="/",
-    )
+        )
     return resp
 
 @app.get("/admin/logout")
@@ -1105,17 +1103,12 @@ def admin_export_xlsx(
         return RedirectResponse(url="/admin/responses", status_code=303)
 
     # 답 파서 (여러 저장포맷 대응)
-    def extract_answers(payload: dict, questions_sorted):
+    def extract_answers(payload: dict, questions_sorted: list[dict]) -> list:
         """
-        각 문항(id 오름차순)에 대한 선택 번호를 추출.
-        - 단일: "2" -> 2
-        - 복수: ["1","3"] 또는 "1,3" -> [1,3]
-        - 없으면 ""
+        answers_indices가 있으면 우선 사용하되,
+        그 안에서 빈칸(None, "", [])은 q{id} 값으로 보정.
+        없으면 q{id}로 전체 구성.
         """
-        ai = payload.get("answers_indices")
-        if isinstance(ai, list) and len(ai) == len(questions_sorted):
-            return ai
-
         def to_num(v):
             if v is None or v == "": return ""
             if isinstance(v, list):
@@ -1124,17 +1117,35 @@ def admin_export_xlsx(
                 return [int(x) for x in v.split(",") if x.strip().isdigit()]
             return int(v) if str(v).isdigit() else ""
 
-        # nested: {"answers": {...}}, {"acc": {...}}, {"data": {...}}
+        ai = payload.get("answers_indices")
+        if isinstance(ai, list) and len(ai) == len(questions_sorted):
+            # 보정용 map (answers/acc/data 등 nested에서도 q{id} 찾아봄)
+            candidates = [payload]
+            for k in ("answers", "acc", "data"):
+                if isinstance(payload.get(k), dict):
+                    candidates.append(payload[k])
+            def fallback(idx, qid):
+                for cand in candidates:
+                    v = cand.get(f"q{qid}")
+                    num = to_num(v)
+                    if num != "": return num
+                return ""
+            out = []
+            for i, q in enumerate(questions_sorted):
+                v = ai[i]
+                empty = (v is None) or (v == "") or (isinstance(v, list) and len(v) == 0)
+                out.append(fallback(q["id"]) if empty else v)
+            return out
+
+        # answers_indices가 없으면 q{id}로 구성
         candidates = [payload]
         for k in ("answers", "acc", "data"):
             if isinstance(payload.get(k), dict):
                 candidates.append(payload[k])
-
         for cand in candidates:
             out, ok = [], 0
             for q in questions_sorted:
-                key = f"q{q['id']}"
-                num = to_num(cand.get(key))
+                num = to_num(cand.get(f"q{q['id']}"))
                 out.append(num)
                 if num != "": ok += 1
             if ok > 0:
