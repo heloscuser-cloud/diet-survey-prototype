@@ -540,16 +540,19 @@ ADMIN_HOST = "admin.gaonnsurvey.store"
 def _norm_host(h: str) -> str:
     return (h or "").split(":")[0].strip().lower().rstrip(".")
 
-def require_admin_host(request: Request):
-    host = _norm_host(request.headers.get("host"))
-    if host in (ADMIN_HOST, "localhost", "127.0.0.1"):
-        return
-    target = f"https://{ADMIN_HOST}{request.url.path}"
-    if request.url.query:
-        target += f"?{request.url.query}"
-    print(f"[ADMIN HOST GATE] redirect {host} -> {ADMIN_HOST} path={request.url.path}")
-    # 307로 예외 핸들러에서 그대로 Location 사용
-    raise HTTPException(status_code=307, detail="admin-host-redirect", headers={"Location": target})
+@app.middleware("http")
+async def force_admin_host(request: Request, call_next):
+    p = request.url.path or ""
+    h = _norm_host(request.headers.get("host"))
+    if p.startswith("/admin") and h not in (ADMIN_HOST, "localhost", "127.0.0.1"):
+        # 같은 경로로 관리자 호스트로 보냄
+        target = f"https://{ADMIN_HOST}{p}"
+        if request.url.query:
+            target += f"?{request.url.query}"
+        print(f"[ADMIN HOST] redirect {h} -> {ADMIN_HOST} path={p}")
+        return RedirectResponse(target, status_code=307)
+    return await call_next(request)
+
 
 
 
@@ -611,10 +614,10 @@ def admin_login(request: Request, username: str = Form(...), password: str = For
         httponly=True,
         secure=True,                # HTTPS
         samesite="lax",             # 동일 사이트 탐색/POST에 항상 전송
-        domain="admin.gaonnsurvey.store",  # 관리자 호스트로 고정
         max_age=COOKIE_MAX_AGE,
         path="/",
         )
+    print("[ADMIN LOGIN] set-cookie for host OK")
     return resp
 
 @app.get("/admin/logout")
@@ -876,7 +879,7 @@ def admin_response_two_rows_csv(
 
     def fmt(val):
         if isinstance(val, list):
-            return ";".join(str(v) for v in val)
+            return ",".join(str(v) for v in val)
         return "" if val is None else str(val)
 
     answer_numbers = [fmt(v) for v in answers]
