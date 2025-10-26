@@ -5,30 +5,41 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>응답 목록</title>
   <style>
-    body{font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif;background:#f6f7fb;margin:0;padding:24px}
-    .wrap{max-width:1100px;margin:0 auto}
-    .card{background:#fff;border-radius:16px;box-shadow:0 8px 24px rgba(0,0,0,.06);padding:16px;margin-bottom:16px}
-    .title{font-weight:700;margin:0 0 12px}
-    .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
-    label{font-size:12px;color:#64748b;display:block;margin-bottom:6px}
-    input,select,button{width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:10px;background:#fff}
-    button.primary{background:#111827;color:#fff;border:none}
-    .row{display:flex;gap:12px;align-items:end}
-    .row .grow{flex:1}
-    .actions{display:flex;gap:8px;justify-content:flex-end}
-    table{width:100%;border-collapse:collapse}
-    th,td{border-bottom:1px solid #e5e7eb;padding:10px;font-size:14px;text-align:left}
-    th{background:#f3f4f6}
-    .right{display:flex;gap:8px;justify-content:flex-end}
-    .btn{padding:8px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap; height:34px;}
-    .btn.primary{background:#111827;color:#fff;border:none}
-    .nowrap{white-space:nowrap}
-    .muted{color:#6b7280}
-    .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#eef2ff}
-   .w-date{ width: 160px; }  /* 날짜 입력 폭 */
-   .w-status{ width: 220px; }/* 상태 콤보 폭(한글 ~15자 정도) */
-   .w-text{ width: 480px; }  /* 텍스트 검색(~30자) */
-  </style>
+  /* 테이블 공통 */
+  table.admin { width:100%; border-collapse: collapse; table-layout: fixed; }
+  table.admin th, table.admin td { text-align:center; vertical-align:middle; padding:8px 10px; }
+  table.admin th { white-space:nowrap; }
+
+  /* 기본 폰트: 10pt */
+  table.admin td { font-size:10pt; }
+
+  /* 컬럼별 너비/특성 */
+  .col-serial    { white-space:nowrap; min-width: 86px; }      /* 신청번호: 줄바꿈 방지 + 살짝 넓힘 */
+  .col-applicant,
+  .col-uploaded,
+  .col-status,
+  .col-created,
+  .col-submitted { width: 12rem; }                              /* 요청: 동일 너비 */
+  .col-filename  { font-size:12pt; }                            /* PDF 파일명: 12pt */
+
+  /* 리포트 열의 아이콘을 가운데 정렬 */
+  .report-cell .icon-btn {
+    width:28px; height:28px;
+    display:inline-flex; align-items:center; justify-content:center;
+    border:1px solid #e5e7eb; border-radius:6px; background:#fff; cursor:pointer;
+  }
+  .report-cell img { width:16px; height:16px; display:block; }
+
+  /* 버튼: 하늘색 계열 */
+  .btn {
+    display:inline-flex; align-items:center; justify-content:center;
+    padding:8px 12px; height:34px;
+    border:1px solid #bae6fd; border-radius:8px;
+    background:#e0f2ff; color:#0369a1;
+    white-space:nowrap; cursor:pointer;
+  }
+  .btn:hover { background:#bae6fd; }
+</style>
 </head>
 <body>
 <div class="wrap">
@@ -76,7 +87,7 @@
 
 <!-- 4행: 가운데 정렬된 조회 버튼 -->
 <div class="row" style="margin-top:8px;justify-content:center">
-  <button class="btn" type="submit" style="min-width:140px;padding:10px 14px">조회</button>
+<button class="btn" type="submit" style="min-width:140px;">조회</button>
 </div>
   </form>
 </div>
@@ -84,71 +95,91 @@
 
   <!-- 검색조건 아래 우측 버튼 -->
   <div class="card" style="display:flex;justify-content:flex-end;gap:8px">
-    <form id="acceptForm" method="post" action="/admin/responses/accept">
-      <input type="hidden" name="ids" id="acceptIds"/>
-      <button class="btn" type="button" onclick="bulkAccept()">접수 완료 처리</button>
-    </form>
-    <form id="xlsxForm" method="post" action="/admin/responses/export.xlsx">
-      <input type="hidden" name="ids" id="xlsxIds"/>
-      <button class="btn" type="button" onclick="bulkXlsx()">엑셀 다운로드</button>
-    </form>
+<form method="post" action="/admin/responses/accept" class="controls">
+  <input type="hidden" name="ids" id="acceptIds"/>
+  <button class="btn" type="button" onclick="bulkAccept()">접수 완료 처리</button>
+</form>
+<form id="xlsxForm" method="post" action="/admin/responses/export.xlsx" class="controls">
+  <input type="hidden" name="ids" id="xlsxIds"/>
+  <button class="btn" type="button" onclick="bulkXlsx()">엑셀 다운로드</button>
+</form>
   </div>
 
   <!-- 조회 테이블 -->
-  <div class="card">
+  <div class="admin">
 <table>
   <thead>
-    <tr>
       <th><input type="checkbox" id="chkAll" onclick="toggleAll(this)"/></th>
-      <th>신청번호</th>
-      <th>신청자</th>
-      <th>PDF 파일명</th>
-      <th>업로드 날짜</th>
-      <th>진행 상태값</th>
-      <th>신청일</th>
-      <th>제출일</th>
+      <th class="col-serial">신청번호</th>
+      <th class="col-applicant">신청자</th>
+      <th class="col-filename">PDF 파일명</th>
+      <th class="col-uploaded">업로드 날짜</th>
+      <th class="col-status">진행 상태값</th>
+      <th class="col-created">신청일</th>
+      <th class="col-submitted">제출일</th>
       <th>리포트</th>
-    </tr>
   </thead>
-  <tbody>
-  {% for sr, resp, user, rf in rows %}
-    <tr>
-      <td><input type="checkbox" class="rowChk" value="{{ sr.id }}"/></td>
-      <td class="nowrap">{{ resp.serial_no or '' }}</td>
-      <td>{{ resp.applicant_name or user.name_enc or '-' }} ({{ resp.birth_date or '' }}, {{ resp.gender or user.gender or '-' }})</td>
-      <td>{{ rf.filename if rf else '' }}</td>
-      <td>{{ to_kst_str(rf.uploaded_at) if rf else '' }}</td>
-      <td>
-        {% if resp.status=='submitted' %}<span class="tag">신청완료</span>
-        {% elif resp.status=='accepted' %}<span class="tag">접수완료</span>
-        {% elif resp.status=='report_uploaded' %}<span class="tag">리포트 업로드 완료</span>
-        {% else %}<span class="muted">{{ resp.status }}</span>{% endif %}
-      </td>
-      <td>{{ to_kst_str(resp.created_at) }}</td>
-      <td>{{ to_kst_str(sr.submitted_at) }}</td>
-      <td class="nowrap">
-        <!-- 업로드: 작은 정사각 아이콘 -->
-        <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report" enctype="multipart/form-data">
-          <input id="file_{{ sr.id }}" type="file" name="file" accept="application/pdf" style="display:none" onchange="this.form.submit()"/>
-          <label for="file_{{ sr.id }}" title="리포트 등록"
-                 style="cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid #e5e7eb;border-radius:6px">
-            <img src="/static/icons/plus.svg" alt="등록" style="width:16px;height:16px"/>
-          </label>
-        </form>
+<tbody>
+{% for sr, resp, user, rf in rows %}
+  <tr>
+    <td><input type="checkbox" class="rowChk" value="{{ sr.id }}"/></td>
 
-        <!-- 삭제: 작은 정사각 아이콘 -->
-        {% if rf %}
-        <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report/delete">
-          <button type="submit" title="리포트 삭제"
-                  style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid #e5e7eb;border-radius:6px;background:#fff;cursor:pointer">
-            <img src="/static/icons/trash.svg" alt="삭제" style="width:16px;height:16px"/>
-          </button>
-        </form>
-        {% endif %}
-      </td>
-    </tr>
-  {% endfor %}
-  </tbody>
+    <!-- 신청번호 -->
+    <td class="col-serial">{{ resp.serial_no or '' }}</td>
+
+    <!-- 신청자: 이름(생년월일, 성별) -->
+    <td class="col-applicant">
+      {{ resp.applicant_name or user.name_enc or '-' }}
+      ({{ resp.birth_date or '' }}, {{ resp.gender or user.gender or '-' }})
+    </td>
+
+    <!-- PDF 파일명 -->
+    <td class="col-filename">{{ rf.filename if rf else '' }}</td>
+
+    <!-- 업로드 날짜 -->
+    <td class="col-uploaded">{{ to_kst_str(rf.uploaded_at) if rf else '' }}</td>
+
+    <!-- 진행 상태값 -->
+    <td class="col-status">
+      {% if resp.status == 'submitted' %}
+        <span class="tag">신청완료</span>
+      {% elif resp.status == 'accepted' %}
+        <span class="tag">접수완료</span>
+      {% elif resp.status == 'report_uploaded' %}
+        <span class="tag">리포트 업로드 완료</span>
+      {% else %}
+        <span class="muted">{{ resp.status or '' }}</span>
+      {% endif %}
+    </td>
+
+    <!-- 신청일 / 제출일 -->
+    <td class="col-created">{{ to_kst_str(resp.created_at) }}</td>
+    <td class="col-submitted">{{ to_kst_str(sr.submitted_at) }}</td>
+
+    <!-- 리포트 아이콘 -->
+    <td class="report-cell">
+      <!-- 등록 버튼 (파일 선택하면 자동 submit) -->
+      <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report" enctype="multipart/form-data">
+        <input id="file_{{ sr.id }}" type="file" name="file" accept="application/pdf" style="display:none"
+               onchange="this.form.submit()"/>
+        <label for="file_{{ sr.id }}" class="icon-btn" title="리포트 등록">
+          <img src="/static/icons/plus.svg" alt="등록"/>
+        </label>
+      </form>
+
+      <!-- 삭제 버튼 (파일이 있을 때만) -->
+      {% if rf %}
+      <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report/delete">
+        <button type="submit" class="icon-btn" title="리포트 삭제">
+          <img src="/static/icons/trash.svg" alt="삭제"/>
+        </button>
+      </form>
+      {% endif %}
+    </td>
+  </tr>
+{% endfor %}
+</tbody>
+
 </table>
 
 </div>

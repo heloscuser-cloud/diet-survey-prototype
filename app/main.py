@@ -538,9 +538,15 @@ ADMIN_ALLOWED_HOSTS = {
     "localhost", "127.0.0.1"    # 로컬 테스트
 }
 
+def _norm_host(h: str) -> str:
+    return (h or "").split(":")[0].strip().lower().rstrip(".")
+
 def require_admin_host(request: Request):
     host = (request.headers.get("host") or "").split(":")[0].lower()
     if host not in ADMIN_ALLOWED_HOSTS:
+        raise HTTPException(status_code=404, detail="Not found")
+        # 디버그 로그 추가
+        print(f"[ADMIN HOST GATE] blocked host={host}")
         raise HTTPException(status_code=404, detail="Not found")
 
 
