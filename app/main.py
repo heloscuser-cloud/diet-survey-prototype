@@ -13,6 +13,9 @@ from random import randint
 from sqlalchemy import func, Column, LargeBinary, Integer, text
 from sqlalchemy import text as sa_text
 from itsdangerous import TimestampSigner, BadSignature, SignatureExpired, URLSafeSerializer
+import smtplib
+from email.message import EmailMessage
+from fastapi import BackgroundTasks
 import zipfile
 import csv
 import itsdangerous
@@ -225,6 +228,56 @@ def hash_phone(phone: str) -> str:
 def get_session():
     with Session(engine) as session:
         yield session
+
+#---- 이메일 접수 알림 헬퍼 ----
+def mask_second_char(name: str | None) -> str:
+    """신청자 이름의 두 번째 글자를 *로 가림 (한글 포함, 1글자면 그대로)"""
+    if not name:
+        return ""
+    s = list(name)
+    if len(s) >= 2:
+        s[1] = "*"
+    return "".join(s)
+
+def send_submission_email(serial_no: int, applicant_name: str, created_at_kst_str: str):
+    """신청 완료 알림 메일 발송 (네이버 SMTP/STARTTLS)"""
+    host = os.getenv("SMTP_HOST", "smtp.naver.com")
+    port = int(os.getenv("SMTP_PORT", "587"))
+    user = os.getenv("SMTP_USER")
+    password = os.getenv("SMTP_PASS")
+    from_addr = os.getenv("SMTP_FROM", user or "")
+    to_addr = os.getenv("SMTP_TO")
+
+    if not (user and password and to_addr and from_addr):
+        print("[EMAIL] SMTP env not configured, skip.")
+        return
+
+    masked = mask_second_char(applicant_name or "")
+    subject = f"[서비스 접수 알림] 신청번호:{serial_no} / 신청자:{masked} / 신청일:{created_at_kst_str}"
+    body = (
+        "문진이 접수되었습니다.\n"
+        f"신청번호:{serial_no}\n"
+        f"신청자:{masked}\n"
+        f"신청일:{created_at_kst_str}"
+    )
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    msg.set_content(body)
+
+    try:
+        with smtplib.SMTP(host, port, timeout=15) as s:
+            s.ehlo()
+            s.starttls()  # TLS
+            s.ehlo()
+            s.login(user, password)
+            s.send_message(msg)
+        print("[EMAIL] sent OK")
+    except Exception as e:
+        print("[EMAIL] send failed:", repr(e))
+
 
 # ---- OTP helpers ----
 def issue_otp(session: Session, phone: str) -> str:
@@ -549,21 +602,19 @@ def admin_logout():
     resp.delete_cookie(COOKIE_NAME, path="/")
     return resp
 
-from typing import Optional
-# 필요 시: from fastapi import Query
 
-@admin_router.get("/admin/responses", response_class=HTMLResponse)
+
+# 목록
+@admin_router.get("/responses", response_class=HTMLResponse)
 def admin_responses(
     request: Request,
     page: int = 1,
     q: Optional[str] = None,
     min_score: Optional[str] = None,   # ← int 대신 str로 받기
-    status: Optional[str] = None,  # all | submitted | accepted | report_uploaded
+    status: Optional[str] = None,      # all | submitted | accepted | report_uploaded
     from_: Optional[str] = Query(None, alias="from"),
     to: Optional[str] = Query(None, alias="to"),
     session: Session = Depends(get_session),
-    _h: None = Depends(require_admin_host),
-    _auth: None = Depends(admin_required),
 ):
     PAGE_SIZE = 20
     page = max(1, page)
@@ -592,6 +643,7 @@ def admin_responses(
     if min_score_i is not None:
         stmt = stmt.where(SurveyResponse.score >= min_score_i)
 
+    # KST 날짜 → UTC naive 범위 변환 함수 사용
     def parse_date(s: Optional[str]):
         try: return datetime.strptime(s, "%Y-%m-%d").date()
         except: return None
@@ -602,13 +654,17 @@ def admin_responses(
         stmt = stmt.where(Respondent.created_at >= start_utc)
     if end_utc:
         stmt = stmt.where(Respondent.created_at < end_utc)
-        
+
     if status in ("submitted", "accepted", "report_uploaded"):
         stmt = stmt.where(Respondent.status == status)
-        
+
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = session.exec(count_stmt).one()
-    rows = session.exec(stmt.order_by(SurveyResponse.submitted_at.desc()).offset((page-1)*PAGE_SIZE).limit(PAGE_SIZE)).all()
+    rows = session.exec(
+        stmt.order_by(SurveyResponse.submitted_at.desc())
+            .offset((page-1)*PAGE_SIZE)
+            .limit(PAGE_SIZE)
+    ).all()
     total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
 
     to_kst_str = lambda dt: to_kst(dt).strftime("%Y-%m-%d %H:%M")
@@ -621,13 +677,12 @@ def admin_responses(
         "to_kst_str": to_kst_str,
     })
 
-#접수완료처리
-@admin_router.get("/admin/responses/accept")
+
+# 접수완료 처리 (POST + Form)
+@admin_router.post("/responses/accept")
 def admin_bulk_accept(
     ids: str = Form(...),  # "1,2,3"
     session: Session = Depends(get_session),
-    _h: None = Depends(require_admin_host),
-    _auth: None = Depends(admin_required),
 ):
     id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
     if not id_list:
@@ -641,14 +696,13 @@ def admin_bulk_accept(
     session.commit()
     return RedirectResponse(url="/admin/responses", status_code=303)
 
-#리포트 업로드
-@admin_router.get("/admin/response/{rid}/report")
+
+# 리포트 업로드 (POST + multipart/form-data)
+@admin_router.post("/response/{rid}/report")
 async def admin_upload_report(
     rid: int,
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
-    _h: None = Depends(require_admin_host),
-    _auth: None = Depends(admin_required),
 ):
     sr = session.get(SurveyResponse, rid)
     if not sr:
@@ -674,13 +728,12 @@ async def admin_upload_report(
     session.commit()
     return RedirectResponse(url="/admin/responses", status_code=303)
 
-#리포트 삭제
-@admin_router.get("/admin/response/{rid}/report/delete")
+
+# 리포트 삭제 (POST)
+@admin_router.post("/response/{rid}/report/delete")
 def admin_delete_report(
     rid: int,
     session: Session = Depends(get_session),
-    _h: None = Depends(require_admin_host),
-    _auth: None = Depends(admin_required),
 ):
     sr = session.get(SurveyResponse, rid)
     if not sr:
@@ -697,31 +750,21 @@ def admin_delete_report(
     return RedirectResponse(url="/admin/responses", status_code=303)
 
 
-@admin_router.get("/admin/responses.csv")
+# CSV (GET)
+@admin_router.get("/responses.csv")
 def admin_responses_csv(
     q: Optional[str] = None,
-    min_score: Optional[str] = None,   # 의미 없어도 기존 인터페이스 유지
+    min_score: Optional[str] = None,
     from_: Optional[str] = Query(None, alias="from"),
     to: Optional[str] = Query(None, alias="to"),
-    status: Optional[str] = None,      # ← 추가되었다면 받기
+    status: Optional[str] = None,
     session: Session = Depends(get_session),
-    _h: None = Depends(require_admin_host),
-    _auth: None = Depends(admin_required),
 ):
-    # 안전 파싱
     def parse_date(s: Optional[str]):
-        try:
-            return datetime.strptime(s, "%Y-%m-%d").date()
-        except:
-            return None
+        try: return datetime.strptime(s, "%Y-%m-%d").date()
+        except: return None
     d_from, d_to = parse_date(from_), parse_date(to)
 
-    try:
-        min_score_i = int(min_score) if (min_score not in (None, "")) else None
-    except ValueError:
-        min_score_i = None
-
-    # KST 포맷 유틸 (이 함수 안에서도 보장)
     def to_kst_str(dt):
         return to_kst(dt).strftime("%Y-%m-%d %H:%M") if dt else ""
 
@@ -741,22 +784,27 @@ def admin_responses_csv(
             (ReportFile.filename.ilike(like)) |
             (func.to_char(Respondent.created_at, 'YYYY-MM-DD').ilike(like))
         )
+
+    try:
+        min_score_i = int(min_score) if (min_score not in (None, "")) else None
+    except ValueError:
+        min_score_i = None
     if min_score_i is not None:
         stmt = stmt.where(SurveyResponse.score >= min_score_i)
 
-    if d_from:
-        stmt = stmt.where(Respondent.created_at >= datetime(d_from.year, d_from.month, d_from.day))
-    if d_to:
-        stmt = stmt.where(Respondent.created_at < datetime(d_to.year, d_to.month, d_to.day) + timedelta(days=1))
+    # 날짜 필터(KST→UTC)
+    start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
+    if start_utc:
+        stmt = stmt.where(Respondent.created_at >= start_utc)
+    if end_utc:
+        stmt = stmt.where(Respondent.created_at < end_utc)
 
     if status in ("submitted", "accepted", "report_uploaded"):
         stmt = stmt.where(Respondent.status == status)
 
     def generate():
-        # UTF-8 BOM
         yield "\ufeff"
         s = StringIO(); w = csv.writer(s)
-        # 요구 사양 헤더
         w.writerow(["신청번호","신청자","PDF 파일명","업로드 날짜","진행 상태값","신청일","제출일"])
         yield s.getvalue(); s.seek(0); s.truncate(0)
 
@@ -765,7 +813,7 @@ def admin_responses_csv(
             applicant = f"{resp.applicant_name or (user.name_enc or '')} ({(resp.birth_date or '')}, {resp.gender or (user.gender or '')})"
             status_h = "신청완료" if resp.status=="submitted" else "접수완료" if resp.status=="accepted" else "리포트 업로드 완료" if resp.status=="report_uploaded" else (resp.status or "")
             row = [
-                idx,
+                resp.serial_no or "",
                 applicant,
                 (rf.filename if rf else ""),
                 (to_kst_str(rf.uploaded_at) if rf else ""),
@@ -781,14 +829,13 @@ def admin_responses_csv(
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="responses.csv"'}
     )
-    
-    
-@admin_router.get("/admin/response/{rid}.csv")
+
+
+# 개별 응답 2행 CSV (GET)
+@admin_router.get("/response/{rid}.csv")
 def admin_response_two_rows_csv(
     rid: int,
     session: Session = Depends(get_session),
-    _h: None = Depends(require_admin_host),
-    _auth: None = Depends(admin_required),
 ):
     sr = session.get(SurveyResponse, rid)
     if not sr:
@@ -801,13 +848,14 @@ def admin_response_two_rows_csv(
 
     answers = payload.get("answers_indices") or []
 
-    # 질문 타이틀 추출(질문 id 오름차순)
-    questions = [q["title"] for q in sorted(ALL_QUESTIONS, key=lambda x: x["id"])]
+    # 질문 타이틀 추출(질문 id 오름차순, 키 다양성 대응)
+    def q_title(q: dict):
+        return q.get("title") or q.get("text") or q.get("label") or q.get("question") or q.get("prompt") or q.get("name") or f"Q{q.get('id','')}"
+    questions = [q_title(q) for q in sorted(ALL_QUESTIONS, key=lambda x: x["id"])]
 
-    # 두 번째 줄: 답 번호(다중선택은 "1;3;4")
     def fmt(val):
         if isinstance(val, list):
-            return ",".join(str(v) for v in val)
+            return ";".join(str(v) for v in val)
         return "" if val is None else str(val)
 
     answer_numbers = [fmt(v) for v in answers]
@@ -821,7 +869,7 @@ def admin_response_two_rows_csv(
     return Response(
         content=csv_bytes,
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="response_{rid}.csv"'},
+        headers={"Content-Disposition": f'attachment; filename=\"response_{rid}.csv\"'},
     )
 
 #---- 문진 가져오기 ----#
