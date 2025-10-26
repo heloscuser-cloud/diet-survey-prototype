@@ -544,14 +544,13 @@ def _norm_host(h: str) -> str:
 
 def require_admin_host(request: Request):
     host = _norm_host(request.headers.get("host"))
-    if host == ADMIN_HOST or host in ("localhost", "127.0.0.1"):
+    if host in (ADMIN_HOST, "localhost", "127.0.0.1"):
         return
-    # 잘못된 호스트 → 같은 경로로 관리자 호스트로 302 리다이렉트
     target = f"https://{ADMIN_HOST}{request.url.path}"
     if request.url.query:
         target += f"?{request.url.query}"
-    # 디버그 로그
     print(f"[ADMIN HOST GATE] redirect {host} -> {ADMIN_HOST} path={request.url.path}")
+    # 307 + detail로 예외 핸들러에서 그대로 Location 사용
     raise HTTPException(status_code=307, detail="admin-host-redirect", headers={"Location": target})
 
 
@@ -578,6 +577,8 @@ def validate_admin_cookie(token: str) -> bool:
 def admin_required(request: Request):
     token = request.cookies.get(COOKIE_NAME)
     #진단 로그 임시
+    print("[ADMIN AUTH]", request.method, request.url.path, "has_cookie=", bool(token))
+    print("[ADMIN AUTH] cookie header =", request.headers.get("cookie"))
     print("[ADMIN AUTH]", request.method, request.url.path, "has_cookie=", bool(token))
     if not token or not validate_admin_cookie(token):
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -607,12 +608,12 @@ def admin_login(request: Request, username: str = Form(...), password: str = For
         )
     resp = RedirectResponse(url="/admin/responses", status_code=303)
     resp.set_cookie(
-        COOKIE_NAME,                         # ← key (필수)
-        create_admin_cookie(),               # ← value (필수)
+        COOKIE_NAME,                 # ← key (예: "admin")
+        create_admin_cookie(),       # ← value
         httponly=True,
-        secure=True,              # HTTPS
-        samesite="lax",           # 동일 사이트 내 탐색/POST에 항상 전송
-        domain="admin.gaonnsurvey.store",  # 관리자 호스트로 고정
+        secure=True,                 # HTTPS 필수
+        samesite="none",             # 어떤 탐색/POST에서도 전송
+        domain=".gaonnsurvey.store", # 모든 서브도메인 공유 (admin 전용이면 'admin.gaonnsurvey.store'도 OK)
         max_age=COOKIE_MAX_AGE,
         path="/",
     )
