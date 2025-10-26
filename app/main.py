@@ -571,6 +571,8 @@ def validate_admin_cookie(token: str) -> bool:
 
 def admin_required(request: Request):
     token = request.cookies.get(COOKIE_NAME)
+    #진단 로그 임시
+    print("[ADMIN AUTH]", request.method, request.url.path, "has_cookie=", bool(token))
     if not token or not validate_admin_cookie(token):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -598,8 +600,13 @@ def admin_login(request: Request, username: str = Form(...), password: str = For
             status_code=401
         )
     resp = RedirectResponse(url="/admin/responses", status_code=303)
-    resp.set_cookie(COOKIE_NAME, create_admin_cookie(), httponly=True, secure=SECURE_COOKIE,
-                    samesite="lax", max_age=COOKIE_MAX_AGE, path="/")
+    resp.set_cookie(
+        httponly=True,
+        secure=True,              # HTTPS 강제
+        samesite="none",          # 어떤 요청에서도 전송되게
+        domain=".gaonnsurvey.store",  # 모든 서브도메인에서 공유
+        max_age=COOKIE_MAX_AGE,
+        path="/")
     return resp
 
 @app.get("/admin/logout")
@@ -1157,6 +1164,9 @@ def admin_export_xlsx(
                 if isinstance(v, list):
                     # 체크박스: 숫자 문자열들만
                     tmp.append([int(x) for x in v if str(x).isdigit()])
+                elif isinstance(v, str) and "," in v:
+                    # 체크박스가 "1,3" 같은 문자열로 저장된 경우
+                    tmp.append([int(x) for x in v.split(",") if x.strip().isdigit()])
                 elif v == "" or v is None:
                     tmp.append("")
                 else:
