@@ -10,7 +10,7 @@ from typing import Optional, List
 from fastapi import Query
 from datetime import datetime, timedelta, date, timezone
 from random import randint
-from sqlalchemy import func, Column, LargeBinary
+from sqlalchemy import func, Column, LargeBinary, Integer
 from itsdangerous import TimestampSigner, BadSignature, SignatureExpired, URLSafeSerializer
 import zipfile
 import csv
@@ -39,6 +39,22 @@ def to_kst(dt: datetime) -> datetime:
 
 def now_kst() -> datetime:
     return datetime.now(tz=KST)
+
+def kst_date_range_to_utc_datetimes(d_from: date | None, d_to: date | None):
+    """
+    KST 날짜 구간 [d_from, d_to] (둘 다 포함)을 UTC naive datetime 구간
+    [start_utc, end_utc) 로 변환한다.
+    DB의 naive UTC(datetime.utcnow())와 비교하기 위해 tzinfo 제거.
+    """
+    start_kst = datetime(d_from.year, d_from.month, d_from.day, 0, 0, 0, tzinfo=KST) if d_from else None
+    end_kst   = datetime(d_to.year,   d_to.month,   d_to.day,   23,59,59,999999, tzinfo=KST) if d_to else None
+    if d_to:
+        # end exclusive: 다음날 00:00 KST
+        end_kst = datetime(d_to.year, d_to.month, d_to.day, 0,0,0, tzinfo=KST) + timedelta(days=1)
+
+    start_utc = start_kst.astimezone(timezone.utc).replace(tzinfo=None) if start_kst else None
+    end_utc   = end_kst.astimezone(timezone.utc).replace(tzinfo=None)   if end_kst   else None
+    return start_utc, end_utc
 
 def ensure_not_completed(survey_completed: str | None = Cookie(default=None)):
     if survey_completed == "1":
@@ -164,6 +180,14 @@ class ReportFile(SQLModel, table=True):
     content: bytes = Field(sa_column=Column(LargeBinary))
     uploaded_at: datetime = Field(default_factory=datetime.utcnow)
 
+#신청번호 자동채우기
+class Respondent(SQLModel, table=True):
+    ...
+    serial_no: Optional[int] = Field(
+        default=None,
+        sa_column=Column(Integer, server_default=text("nextval('respondent_serial_no_seq')"), unique=True, index=True)
+    )
+    
 class Otp(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     phone: str = Field(index=True)
@@ -553,11 +577,12 @@ def admin_responses(
         except: return None
     d_from = parse_date(from_)
     d_to = parse_date(to)
-    if d_from:
-        stmt = stmt.where(Respondent.created_at >= datetime(d_from.year, d_from.month, d_from.day))
-    if d_to:
-        stmt = stmt.where(Respondent.created_at < datetime(d_to.year, d_to.month, d_to.day) + timedelta(days=1))
-
+    start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
+    if start_utc:
+        stmt = stmt.where(Respondent.created_at >= start_utc)
+    if end_utc:
+        stmt = stmt.where(Respondent.created_at < end_utc)
+        
     if status in ("submitted", "accepted", "report_uploaded"):
         stmt = stmt.where(Respondent.status == status)
         
@@ -982,19 +1007,60 @@ def admin_export_xlsx(
     if not id_list:
         return RedirectResponse(url="/admin/responses", status_code=303)
 
-    # 질문 타이틀
-    def q_title(q):
-        return q.get("title") or q.get("text") or q.get("label") or f"Q{q.get('id','')}"
-    questions = [q_title(q) for q in sorted(ALL_QUESTIONS, key=lambda x: x["id"])]
-
-    # 워크북/시트
+    # 엑셀 워크북/시트 준비 ← ★ ws 정의는 여기!
     wb = Workbook()
     ws = wb.active
     ws.title = "문진결과"
 
-    # 헤더 구성
+    # 질문 타이틀
+    def q_title(q: dict):
+        return (
+            q.get("title") or q.get("text") or q.get("label") or
+            q.get("question") or q.get("prompt") or q.get("name") or
+            f"Q{q.get('id','')}"
+        )
+    questions_sorted = sorted(ALL_QUESTIONS, key=lambda x: x["id"])
+    questions = [q_title(q) for q in questions_sorted]
+
     fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별", "신장", "체중"]
     ws.append(fixed_headers + questions)
+
+    # ... 루프 안에서 answers 파싱:
+    try:
+        payload = json.loads(sr.answers_json) if sr.answers_json else {}
+    except Exception:
+        payload = {}
+
+    answers = payload.get("answers_indices")
+    if not answers:
+        # q1..qN 형태에서 인덱스 배열 재구성
+        tmp = []
+        for q in questions_sorted:
+            key = f"q{q['id']}"
+            v = payload.get(key)
+            if isinstance(v, list):
+                tmp.append([int(x) for x in v if str(x).isdigit()])
+            elif v is None or v == "":
+                tmp.append("")
+            else:
+                tmp.append(int(v) if str(v).isdigit() else "")
+        answers = tmp
+
+    def fmt(v):
+        if isinstance(v, list):
+            return ";".join(str(x) for x in v)
+        return "" if v is None else str(v)
+    row = [
+        idx,
+        (resp.serial_no if resp and resp.serial_no is not None else ""),
+        name,
+        (bd.isoformat() if bd else ""),
+        age,
+        gender,
+        ("" if height is None else height),
+        ("" if weight is None else weight),
+    ] + [fmt(v) for v in answers]
+    ws.append(row)
 
     # 나이 계산 함수(만 나이)
     def calc_age(bd, ref_date):
