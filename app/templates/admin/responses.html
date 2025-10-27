@@ -84,12 +84,12 @@
 
   <!-- 검색조건 아래 우측 버튼 -->
   <div class="card" style="display:flex;justify-content:flex-end;gap:8px">
-<form method="post" action="/admin/responses/accept">
+<form id="acceptForm" method="post" action="/admin/responses/accept">
   <input type="hidden" name="ids" id="acceptIds"/>
   <button class="btn" type="button" onclick="bulkAccept()">접수 완료 처리</button>
 </form>
 
-<form id="xlsxForm" method="post" action="/admin/responses/export.xlsx">
+<form id="xlsxForm"   method="post" action="/admin/responses/export.xlsx">
   <input type="hidden" name="ids"/>
   <button class="btn" type="button" onclick="bulkXlsx()">엑셀 다운로드</button>
 </form>

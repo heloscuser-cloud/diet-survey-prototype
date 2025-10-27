@@ -545,18 +545,22 @@ ADMIN_ALLOWED_HOSTS = {ADMIN_HOST, "localhost", "127.0.0.1"}
 def _norm_host(h: str) -> str:
     return (h or "").split(":")[0].strip().lower().rstrip(".")
 
-def require_admin_host(request: Request):
-    """라우트 의존성에서만 사용 (미들웨어 아님!)"""
-    host = _norm_host(request.headers.get("host"))
-    if host in ADMIN_ALLOWED_HOSTS:
-        return
-    # 관리자 호스트로 리다이렉트
-    target = f"https://{ADMIN_HOST}{request.url.path}"
-    if request.url.query:
-        target += f"?{request.url.query}"
-    # 로그(선택)
-    print(f"[ADMIN HOST GATE] redirect {host} -> {ADMIN_HOST} path={request.url.path}")
-    raise HTTPException(status_code=307, detail="admin-host-redirect", headers={"Location": target})
+@app.middleware("http")
+async def force_admin_host_mw(request: Request, call_next):
+    p = request.url.path or ""
+    if p == "/healthz":   # 헬스체크는 그대로 통과
+        return await call_next(request)
+
+    h = _norm_host(request.headers.get("host"))
+    if p.startswith("/admin") and h not in (ADMIN_HOST, "localhost", "127.0.0.1"):
+        # 같은 경로 + 쿼리로 관리자 호스트로 307
+        target = f"https://{ADMIN_HOST}{p}"
+        if request.url.query:
+            target += f"?{request.url.query}"
+        print(f"[ADMIN HOST] redirect {h} -> {ADMIN_HOST} path={p}")
+        return RedirectResponse(target, status_code=307)
+
+    return await call_next(request)
 
 @app.middleware("http")
 async def force_admin_host_mw(request: Request, call_next):
@@ -598,9 +602,7 @@ def validate_admin_cookie(token: str) -> bool:
 
 def admin_required(request: Request):
     token = request.cookies.get(COOKIE_NAME)
-    #진단 로그 임시
-    print("[ADMIN AUTH]", request.method, request.url.path, "has_cookie=", bool(token))
-    print("[ADMIN AUTH] cookie header =", request.headers.get("cookie"))
+    #임시 진단 로그
     print("[ADMIN AUTH]", request.method, request.url.path, "has_cookie=", bool(token))
     if not token or not validate_admin_cookie(token):
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -608,8 +610,9 @@ def admin_required(request: Request):
 # 관리자 전용 라우터
 admin_router = APIRouter(
     prefix="/admin",
-    dependencies=[Depends(require_admin_host), Depends(admin_required)]
+    dependencies=[Depends(admin_required)]
 )
+app.include_router(admin_router)
 
 @app.get("/admin/login", response_class=HTMLResponse)
 def admin_login_form(request: Request, _h: None = Depends(require_admin_host)):
@@ -630,15 +633,16 @@ def admin_login(request: Request, username: str = Form(...), password: str = For
         )
     resp = RedirectResponse(url="/admin/responses", status_code=303)
     resp.set_cookie(
-        COOKIE_NAME,                # key
-        create_admin_cookie(),      # value
+        COOKIE_NAME,               # key
+        create_admin_cookie(),     # value
         httponly=True,
-        secure=True,                # HTTPS
-        samesite="lax",             # 동일 사이트 탐색/POST에 항상 전송
+        secure=True,               # HTTPS
+        samesite="lax",            # 동일 사이트 내 탐색/POST에 전송
+        # domain= 생략 (host-only로 설정)  ← 중요
         max_age=COOKIE_MAX_AGE,
         path="/",
-        )
-    print("[ADMIN LOGIN] set-cookie for host OK")
+    )
+        print("[ADMIN LOGIN] set-cookie for host OK")
     return resp
 
 @app.get("/admin/logout")
