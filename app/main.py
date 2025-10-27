@@ -545,7 +545,7 @@ def _norm_host(h: str) -> str:
     return (h or "").split(":")[0].strip().lower().rstrip(".")
 
 @app.middleware("http")
-async def force_admin_host_mw(request: Request, call_next):
+async def require_admin_host_mw(request: Request, call_next):
     p = request.url.path or ""
     if p == "/healthz":   # 헬스체크는 그대로 통과
         return await call_next(request)
