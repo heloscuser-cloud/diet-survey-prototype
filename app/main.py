@@ -545,14 +545,13 @@ def _norm_host(h: str) -> str:
     return (h or "").split(":")[0].strip().lower().rstrip(".")
 
 @app.middleware("http")
-async def require_admin_host(request: Request, call_next):
+async def force_admin_host_mw(request: Request, call_next):
     p = request.url.path or ""
-    if p == "/healthz":   # 헬스체크는 그대로 통과
+    if p == "/healthz":
         return await call_next(request)
 
     h = _norm_host(request.headers.get("host"))
     if p.startswith("/admin") and h not in (ADMIN_HOST, "localhost", "127.0.0.1"):
-        # 같은 경로 + 쿼리로 관리자 호스트로 307
         target = f"https://{ADMIN_HOST}{p}"
         if request.url.query:
             target += f"?{request.url.query}"
@@ -597,11 +596,11 @@ admin_router = APIRouter(
 app.include_router(admin_router)
 
 @app.get("/admin/login", response_class=HTMLResponse)
-def admin_login_form(request: Request, _h: None = Depends(require_admin_host)):
+def admin_login_form(request: Request):
     return templates.TemplateResponse("admin/login.html", {"request": request, "error": None})
 
 @app.post("/admin/login")
-def admin_login(request: Request, username: str = Form(...), password: str = Form(...), _h: None = Depends(require_admin_host)):
+def admin_login(request: Request, username: str = Form(...), password: str = Form(...)):
     ok = (
         ADMIN_USER and ADMIN_PASS and
         secrets.compare_digest(username, ADMIN_USER) and
@@ -1099,9 +1098,8 @@ def survey_finish(request: Request,
 
 @app.post("/admin/responses/export.xlsx")
 def admin_export_xlsx(
-    ids: str = Form(...),  # "1,2,3"
+    ids: str = Form(...),
     session: Session = Depends(get_session),
-    _h: None = Depends(require_admin_host),
     _auth: None = Depends(admin_required),
 ):
     # 디버그 로그
