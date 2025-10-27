@@ -540,23 +540,26 @@ def portal(request: Request, auth: str | None = Cookie(default=None, alias=AUTH_
 
 # --- Admin host gate ---
 ADMIN_HOST = "admin.gaonnsurvey.store"
-ADMIN_ALLOWED_HOSTS = {ADMIN_HOST, "localhost", "127.0.0.1"}
 
 def _norm_host(h: str) -> str:
     return (h or "").split(":")[0].strip().lower().rstrip(".")
 
-def require_admin_host(request: Request):
-    """라우트 의존성에서만 사용 (미들웨어 아님!)"""
-    host = _norm_host(request.headers.get("host"))
-    if host in ADMIN_ALLOWED_HOSTS:
-        return
-    # 관리자 호스트로 리다이렉트
-    target = f"https://{ADMIN_HOST}{request.url.path}"
-    if request.url.query:
-        target += f"?{request.url.query}"
-    # 로그(선택)
-    print(f"[ADMIN HOST GATE] redirect {host} -> {ADMIN_HOST} path={request.url.path}")
-    raise HTTPException(status_code=307, detail="admin-host-redirect", headers={"Location": target})
+@app.middleware("http")
+async def force_admin_host_mw(request: Request, call_next):
+    p = request.url.path or ""
+    if p == "/healthz":   # 헬스체크는 그대로 통과
+        return await call_next(request)
+
+    h = _norm_host(request.headers.get("host"))
+    if p.startswith("/admin") and h not in (ADMIN_HOST, "localhost", "127.0.0.1"):
+        # 같은 경로 + 쿼리로 관리자 호스트로 307
+        target = f"https://{ADMIN_HOST}{p}"
+        if request.url.query:
+            target += f"?{request.url.query}"
+        print(f"[ADMIN HOST] redirect {h} -> {ADMIN_HOST} path={p}")
+        return RedirectResponse(target, status_code=307)
+
+    return await call_next(request)
 
 
 
