@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.routing import APIRoute
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import RedirectResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, StreamingResponse, PlainTextResponse
 from fastapi.requests import Request
 from sqlmodel import SQLModel, Field, Session, create_engine, select, Relationship
 from pydantic import BaseModel
@@ -315,6 +315,10 @@ def info_form(request: Request, auth: str | None = Cookie(default=None, alias=AU
         return RedirectResponse(url="/login", status_code=302)
     return templates.TemplateResponse("info.html", {"request": request})
 
+@app.get("/healthz")
+def healthz():
+    return PlainTextResponse("ok", status_code=200)
+
 @app.post("/info")
 async def info_submit(
     request: Request,
@@ -543,6 +547,8 @@ def _norm_host(h: str) -> str:
 @app.middleware("http")
 async def require_admin_host(request: Request, call_next):
     p = request.url.path or ""
+    if p == "/healthz":                 # ← 헬스체크는 무조건 통과
+        return await call_next(request)
     h = _norm_host(request.headers.get("host"))
     if p.startswith("/admin") and h not in (ADMIN_HOST, "localhost", "127.0.0.1"):
         # 같은 경로로 관리자 호스트로 보냄
