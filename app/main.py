@@ -75,6 +75,36 @@ def ensure_not_completed(survey_completed: str | None = Cookie(default=None)):
         # 이미 완료된 세션은 설문으로 접근 시 포털로 보냄
         raise HTTPException(status_code=307, detail="completed")
 
+# --- 쿠키 재발급 유틸 ---
+def reissue_admin_cookie_if_needed(request: Request, response):
+    token = request.cookies.get(COOKIE_NAME)
+    if token and validate_admin_cookie(token):
+        return
+    at = request.query_params.get("at")
+    if at and validate_admin_at(at):
+        # at 유효 → 새 관리자 쿠키 심어서 세션 복구
+        response.set_cookie(
+            COOKIE_NAME, create_admin_cookie(),
+            httponly=True, secure=True, samesite="none",
+            max_age=COOKIE_MAX_AGE, path="/"
+        )
+
+async def reissue_admin_cookie_if_needed_post(request: Request, response):
+    token = request.cookies.get(COOKIE_NAME)
+    if token and validate_admin_cookie(token):
+        return
+    try:
+        form = await request.form()
+    except Exception:
+        form = {}
+    at = form.get("at")
+    if at and validate_admin_at(at):
+        response.set_cookie(
+            COOKIE_NAME, create_admin_cookie(),
+            httponly=True, secure=True, samesite="none",
+            max_age=COOKIE_MAX_AGE, path="/"
+        )
+
 
 #관리자 쿠키 보조토큰
 ADMIN_AT_SALT = "admin-at"         # 보조 토큰용 salt
@@ -166,7 +196,7 @@ else:
     DEFAULT_FONT_BOLD = "Helvetica-Bold"
 
 AUTH_COOKIE_NAME = "auth"
-AUTH_MAX_AGE = 3600 * 6  # 6 hours
+AUTH_MAX_AGE = 3600 * 1  # 1 hours
 
 def sign_user(user_id: int) -> str:
     return signer.sign(f"user:{user_id}").decode("utf-8")
@@ -676,7 +706,9 @@ def admin_logout():
 # 목록
 @admin_router.get("/responses", response_class=HTMLResponse)
 def admin_responses(
+    
     request: Request,
+    response: Response,
     page: int = 1,
     q: Optional[str] = None,
     min_score: Optional[str] = None,   # ← int 대신 str로 받기
@@ -738,6 +770,7 @@ def admin_responses(
 
     to_kst_str = lambda dt: to_kst(dt).strftime("%Y-%m-%d %H:%M")
 
+    reissue_admin_cookie_if_needed(request, response)
     return templates.TemplateResponse("admin/responses.html", {
         "request": request, "rows": rows, "page": page,
         "total": total, "total_pages": total_pages,
@@ -750,10 +783,14 @@ def admin_responses(
 
 # 접수완료 처리 (POST + Form)
 @admin_router.post("/responses/accept")
-def admin_bulk_accept(
+async def admin_bulk_accept(
+    request: Request,
+    response: Response, 
     ids: str = Form(...),  # "1,2,3"
     session: Session = Depends(get_session),
 ):
+    await reissue_admin_cookie_if_needed_post(request, response)
+    # ... 나머지 처리 및 RedirectResponse 반환
     id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
     if not id_list:
         return RedirectResponse(url="/admin/responses", status_code=303)
@@ -1137,11 +1174,14 @@ def survey_finish(request: Request,
 
 
 @app.post("/admin/responses/export.xlsx")
-def admin_export_xlsx(
+async def admin_export_xlsx(
+    request: Request,
+    response: Response,
     ids: str = Form(...),
     session: Session = Depends(get_session),
     _auth: None = Depends(admin_required),
 ):
+    await reissue_admin_cookie_if_needed_post(request, response)
     # 디버그 로그
     print("export.xlsx ids raw:", repr(ids))
 
