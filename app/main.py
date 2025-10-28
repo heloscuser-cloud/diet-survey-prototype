@@ -629,7 +629,6 @@ def admin_login(request: Request, username: str = Form(...), password: str = For
 
     return RedirectResponse(url="/admin/responses", status_code=303)
 
-app.include_router(admin_router)
 
 @app.get("/admin/logout")
 def admin_logout(request: Request):
@@ -950,6 +949,7 @@ def admin_response_two_rows_csv(
         headers={"Content-Disposition": f'attachment; filename=\"response_{rid}.csv\"'},
     )
 
+app.include_router(admin_router)
 
 #---- 문진 가져오기 ----#
 
