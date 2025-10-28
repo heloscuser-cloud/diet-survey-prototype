@@ -34,6 +34,14 @@ import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+APP_SECRET = os.environ.get("APP_SECRET", "dev-secret")
+ADMIN_USER = os.environ.get("ADMIN_USER")
+ADMIN_PASS = os.environ.get("ADMIN_PASS")
+_signer = itsdangerous.URLSafeSerializer(APP_SECRET, salt="admin-cookie")
+COOKIE_NAME = "admin"
+COOKIE_MAX_AGE = 30  # 로그인 세션 유지 시간 30분 설정
+SECURE_COOKIE = os.environ.get("SECURE_COOKIE", "1") == "1"
+
 KST = ZoneInfo("Asia/Seoul")
 
 def to_kst(dt: datetime) -> datetime:
@@ -66,6 +74,7 @@ def ensure_not_completed(survey_completed: str | None = Cookie(default=None)):
     if survey_completed == "1":
         # 이미 완료된 세션은 설문으로 접근 시 포털로 보냄
         raise HTTPException(status_code=307, detail="completed")
+
 
 #관리자 쿠키 보조토큰
 ADMIN_AT_SALT = "admin-at"         # 보조 토큰용 salt
@@ -584,14 +593,6 @@ async def force_admin_host_mw(request: Request, call_next):
 
 
 #---- 관리자 로그인 ----#
-
-APP_SECRET = os.environ.get("APP_SECRET", "dev-secret")
-ADMIN_USER = os.environ.get("ADMIN_USER")
-ADMIN_PASS = os.environ.get("ADMIN_PASS")
-_signer = itsdangerous.URLSafeSerializer(APP_SECRET, salt="admin-cookie")
-COOKIE_NAME = "admin"
-COOKIE_MAX_AGE = 30  # 로그인 세션 유지 시간 30분 설정
-SECURE_COOKIE = os.environ.get("SECURE_COOKIE", "1") == "1"
 
 def create_admin_cookie() -> str:
     return _signer.dumps({"role": "admin", "iat": int(datetime.utcnow().timestamp())})
