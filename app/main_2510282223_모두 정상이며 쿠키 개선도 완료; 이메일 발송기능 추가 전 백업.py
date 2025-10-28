@@ -1,8 +1,4 @@
-from fastapi import (
-    FastAPI, Request, Form, Depends, Response,
-    Cookie, HTTPException, UploadFile, File,
-    APIRouter, BackgroundTasks
-)
+from fastapi import FastAPI, Request, Form, Depends, Response, Cookie, HTTPException, UploadFile, File, APIRouter
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.routing import APIRoute
@@ -19,10 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from random import randint
 from sqlalchemy import func, Column, LargeBinary, Integer, text
 from sqlalchemy import text as sa_text
-from itsdangerous import (
-    TimestampSigner, BadSignature, SignatureExpired,
-    URLSafeSerializer, URLSafeTimedSerializer
-)
+from itsdangerous import TimestampSigner, BadSignature, SignatureExpired, URLSafeSerializer, URLSafeTimedSerializer
 import smtplib
 from email.message import EmailMessage
 from fastapi import BackgroundTasks
@@ -377,6 +370,8 @@ async def info_submit(
         user.weight_kg = w_kg
         session.add(user)
         session.commit()   
+        session.add(user)
+        session.commit()
 
     # 설문 시작
     return RedirectResponse(url="/survey", status_code=303)
@@ -401,8 +396,8 @@ async def rolling_session_middleware(request: Request, call_next):
     if request.session.get("admin"):
         now = int(datetime.now(timezone.utc).timestamp())
         issued_at = int(request.session.get("_iat", 0))
-        # 남은 시간 < 5분이면 갱신
-        if now - issued_at > (SESSION_MAX_AGE - 300):
+        # 남은 시간 < 60분이면 갱신
+        if now - issued_at > (SESSION_MAX_AGE - 3600):
             request.session["_iat"] = now  # 세션 값 변경 -> Set-Cookie 재발급
 
     return response
@@ -461,15 +456,7 @@ def login_verify(request: Request, t: str = Form(...), code: str = Form(...), se
         session.refresh(user)
    
     resp = RedirectResponse(url="/info", status_code=303)  # 로그인 → 인적정보 → 설문
-    SECURE_COOKIE = bool(int(os.getenv("SECURE_COOKIE", "1")))
-    resp.set_cookie(
-        AUTH_COOKIE_NAME,
-        sign_user(user.id),
-        httponly=True,
-        secure=SECURE_COOKIE,
-        samesite="lax",
-        max_age=AUTH_MAX_AGE
-    )
+    resp.set_cookie(AUTH_COOKIE_NAME, sign_user(user.id), httponly=True, secure=False, samesite="lax", max_age=AUTH_MAX_AGE)
     # 혹시 남아있을 수도 있는 완료 쿠키 제거(새 설문 시작을 방해하지 않도록)
     resp.delete_cookie("survey_completed")
     return resp
@@ -585,6 +572,12 @@ def portal(request: Request, auth: str | None = Cookie(default=None, alias=AUTH_
         "request": request,
     })
 
+
+# ===== Host 강제 미들웨어 =====
+ADMIN_HOST = "admin.gaonnsurvey.store"
+
+def _norm_host(h: str) -> str:
+    return (h or "").split(":")[0].strip().lower().rstrip(".")
 
 #---- 관리자 로그인 ----#
 
@@ -949,6 +942,8 @@ def admin_response_two_rows_csv(
     )
 
 
+app.include_router(admin_router)
+
 #---- 문진 가져오기 ----#
 
 @app.get("/survey")
@@ -1070,7 +1065,6 @@ async def survey_step_post(request: Request, step: int,
 def survey_finish(request: Request,
                   acc: str,
                   rtoken: str,
-                  background_tasks: BackgroundTasks,
                   session: Session = Depends(get_session)):
     respondent_id = verify_token(rtoken)
     if respondent_id < 0:
@@ -1135,32 +1129,7 @@ def survey_finish(request: Request,
         session.commit()
         session.refresh(resp)
 
-    # --- 알림 메일 비동기 발송 트리거 ---
-    user = session.get(User, resp.user_id) if resp else None
-    try:
-        applicant_name = (resp.applicant_name or (user.name_enc if 'user' in locals() and user else "")) if resp else ""
-        created_at_kst_str = to_kst(resp.created_at).strftime("%Y-%m-%d %H:%M") if resp and resp.created_at else now_kst().strftime("%Y-%m-%d %H:%M")
-        serial_no_val = resp.serial_no or 0
-
-        # 환경 구성 체크 로그
-        print("[EMAIL] TRY send",
-            "SMTP_HOST=", os.getenv("SMTP_HOST"),
-            "SMTP_USER=", os.getenv("SMTP_USER"),
-            "SMTP_FROM=", os.getenv("SMTP_FROM"),
-            "SMTP_TO=", os.getenv("SMTP_TO"))
-
-        # BackgroundTasks로 비동기 발송
-        background_tasks.add_task(
-            send_submission_email,
-            serial_no_val,
-            applicant_name,
-            created_at_kst_str
-        )
-    except Exception as e:
-        print("[EMAIL] enqueue failed:", repr(e))
-
     response = RedirectResponse(url="/portal", status_code=302)
-    
     # 설문 완료 플래그(브라우저 뒤로가기로 입력 복귀 차단용)
     response.set_cookie("survey_completed", "1", max_age=60*60*24*7, httponly=True, samesite="Lax", secure=bool(int(os.getenv("SECURE_COOKIE","1"))))
     return response

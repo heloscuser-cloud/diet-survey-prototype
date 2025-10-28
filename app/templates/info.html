@@ -49,7 +49,7 @@
         oninput="format1dpAutoDot(this)" onblur="ensure1dp(this)"/>
   <span class="unit">cm</span>
  <input type="text" name="weight_kg" class="w-compact" placeholder="예: 67.5" inputmode="numeric"
-        oninput="format1dpAutoDot(this)" onblur="ensure1dp(this)"/>
+        oninput="format2dpAutoDot(this)" onblur="ensure1dp(this)"/>
   <span class="unit">kg</span>
 </div>
 
@@ -88,6 +88,17 @@ function format1dpAutoDot(el){
   // 아직 점이 없으면, 숫자가 3자리 넘는 순간 자동 점 삽입
   if (!v.includes('.')) {
     if (v.length > 3) v = v.slice(0,3) + '.' + v.slice(3);
+  }
+  // 점 뒤는 1자리만 유지
+  const [a,b=''] = v.split('.');
+  el.value = a.replace(/\D/g,'').slice(0,3) + (v.includes('.') ? '.' + b.replace(/\D/g,'').slice(0,1) : '');
+}
+function format2dpAutoDot(el){
+  let v = (el.value || "").replace(/[^\d.]/g,'');  // 숫자/점 이외 제거
+  v = v.replace(/\.+/g,'.');                       // 점 연속 입력 방지
+  // 아직 점이 없으면, 숫자가 2자리 넘는 순간 자동 점 삽입
+  if (!v.includes('.')) {
+    if (v.length > 2) v = v.slice(0,2) + '.' + v.slice(2);
   }
   // 점 뒤는 1자리만 유지
   const [a,b=''] = v.split('.');
