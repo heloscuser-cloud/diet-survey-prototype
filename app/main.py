@@ -625,6 +625,7 @@ def admin_login(request: Request, username: str = Form(...), password: str = For
         max_age=COOKIE_MAX_AGE,
         path="/",
     )
+    return resp
 
 @app.get("/admin/logout")
 def admin_logout():
