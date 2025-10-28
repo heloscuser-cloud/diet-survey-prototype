@@ -18,7 +18,7 @@
     html,body{height:100%}
     body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
     /* 전체 폭 꽉 채우기 */
-    .page{width:100%; max-width:1280px; margin:0 auto; padding:20px}
+    .page{width:100%; max-width:1366px; margin:0 auto; padding:20px}
     /* 카드 */
     .card{background:var(--card); border:1px solid var(--border); border-radius:16px; box-shadow:0 6px 18px rgba(0,0,0,.04)}
     /* 검색 카드: 왼쪽 정렬 */
@@ -36,8 +36,7 @@
     /* 테이블: 화면 가득 */
     .table-card{padding:0; overflow:auto}
     table{width:100%; border-collapse:collapse; table-layout:auto; background:#fff}
-  th, td{padding:10px 12px; border-bottom:1px solid var(--border); font-size:14px; text-align:center}
-
+    th, td{padding:10px 12px; border-bottom:1px solid var(--border); font-size:14px; text-align:center}
     th{background:#f3f4f6; text-align:left}
     .nowrap{white-space:nowrap}
     .tag{display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:#eef2ff}
@@ -64,6 +63,7 @@
     .pagesize-card{display:flex; align-items:center; gap:8px; padding:8px 12px; margin-bottom:10px}
     /* 파일 아이콘 */
     .ico{width:16px; height:16px}
+table thead th, table tbody td { text-align: center !important; }
   </style>
 </head>
 <body>

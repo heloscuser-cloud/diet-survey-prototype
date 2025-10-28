@@ -736,44 +736,54 @@ def admin_responses(
     request: Request,
     response: Response,
     page: int = 1,
-    page_size: str = "50",          # ← 추가: "50"(기본) / "100" / "all"
+    page_size: str = "50",  # "50"(기본) / "100" / "all"
     q: Optional[str] = None,
-    status: Optional[str] = None,   # submitted/accepted/report_uploaded or ""
+    status: Optional[str] = None,  # submitted/accepted/report_uploaded or ""
     from_: Optional[str] = Query(None, alias="from"),
     to: Optional[str] = None,
     session: Session = Depends(get_session),
 ):
-    page = max(1, int(page) if str(page).isdigit() else 1)
+    # 안전 파싱
+    try:
+        page = max(1, int(page))
+    except Exception:
+        page = 1
 
-    # page_size 해석
+    # --- page_size 해석 ---
     page_size_norm = (page_size or "50").lower()
     if page_size_norm == "100":
         PAGE_SIZE = 100
     elif page_size_norm == "all":
-        PAGE_SIZE = None   # 전체 보기
+        PAGE_SIZE = None  # 전체 보기
     else:
         PAGE_SIZE = 50
 
+    # --- 기본 쿼리 ---
     stmt = (
         select(SurveyResponse, Respondent, User, ReportFile)
         .join(Respondent, Respondent.id == SurveyResponse.respondent_id)
         .join(User, User.id == Respondent.user_id)
         .join(ReportFile, ReportFile.survey_response_id == SurveyResponse.id, isouter=True)
     )
+
+    # --- 검색어 필터 ---
     if q:
         like = f"%{q}%"
         stmt = stmt.where(
-            (User.name_enc.ilike(like)) |
-            (User.phone_hash.ilike(like)) |
-            (SurveyResponse.answers_json.ilike(like)) |
-            (ReportFile.filename.ilike(like)) |
-            (func.to_char(Respondent.created_at, 'YYYY-MM-DD').ilike(like))
+            (User.name_enc.ilike(like))
+            | (User.phone_hash.ilike(like))
+            | (SurveyResponse.answers_json.ilike(like))
+            | (ReportFile.filename.ilike(like))
+            | (func.to_char(Respondent.created_at, "YYYY-MM-DD").ilike(like))
         )
 
-    # KST 날짜 → UTC naive 범위 변환 함수 사용
+    # --- 날짜 필터 ---
     def parse_date(s: Optional[str]):
-        try: return datetime.strptime(s, "%Y-%m-%d").date()
-        except: return None
+        try:
+            return datetime.strptime(s, "%Y-%m-%d").date()
+        except Exception:
+            return None
+
     d_from = parse_date(from_)
     d_to = parse_date(to)
     start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
@@ -782,20 +792,23 @@ def admin_responses(
     if end_utc:
         stmt = stmt.where(Respondent.created_at < end_utc)
 
+    # --- 상태 필터 ---
     if status in ("submitted", "accepted", "report_uploaded"):
         stmt = stmt.where(Respondent.status == status)
 
-    # 전체 개수
+    # --- 정렬: 최신 제출일 → 응답 ID 내림차순 ---
+    stmt = stmt.order_by(
+        SurveyResponse.submitted_at.desc(),
+        SurveyResponse.id.desc()
+    )
+
+    # --- 전체 개수 ---
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = session.exec(count_stmt).one()
-    
-    rows = session.exec(
-        stmt.order_by(SurveyResponse.submitted_at.desc(),SurveyResponse.id.desc())
-            .offset((page-1)*PAGE_SIZE)
-            .limit(PAGE_SIZE)
-    ).all()
-    
-    if PAGE_SIZE is None:  # 전체 보기
+
+    # --- 페이징 ---
+    if PAGE_SIZE is None:
+        # 전체보기: offset/limit 제거
         rows = session.exec(stmt).all()
         total_pages = 1
         page = 1
@@ -805,25 +818,30 @@ def admin_responses(
         ).all()
         total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
 
-
+    # --- 출력 변환 ---
     to_kst_str = lambda dt: to_kst(dt).strftime("%Y-%m-%d %H:%M")
 
-    # (선택) AT로 들어왔으면 쿠키 즉시 재발급해 세션 복구
+    # (선택) at로 들어온 경우 쿠키 재발급
     reissue_admin_cookie_if_needed(request, response)
-    return templates.TemplateResponse("admin/responses.html", {
-        "request": request,
-        "rows": rows,
-        "page": page,
-        "total": total,
-        "total_pages": total_pages,
-        "from": from_,
-        "to": to,
-        "status": status or "",
-        "q": q,
-        "page_size": page_size_norm,     # ← 템플릿에서 selected 처리에 사용
-        "to_kst_str": to_kst_str,
-        "admin_at": create_admin_at(),   # ← 링크/폼에 항상 실어주기
-    })
+
+    # --- 렌더 ---
+    return templates.TemplateResponse(
+        "admin/responses.html",
+        {
+            "request": request,
+            "rows": rows,
+            "page": page,
+            "total": total,
+            "total_pages": total_pages,
+            "from": from_,
+            "to": to,
+            "status": status or "",
+            "q": q,
+            "page_size": page_size_norm,
+            "to_kst_str": to_kst_str,
+            "admin_at": create_admin_at(),
+        },
+    )
 
 
 # 접수완료 처리 (POST + Form)
