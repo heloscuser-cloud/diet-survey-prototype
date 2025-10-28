@@ -83,14 +83,14 @@
 
 
   <!-- 검색조건 아래 우측 버튼 -->
-  <div class="card" style="display:flex;justify-content:flex-end;gap:8px">
 <form id="acceptForm" method="post" action="/admin/responses/accept">
-  <input type="hidden" name="ids" id="acceptIds"/>
+  <input type="hidden" name="ids" id="acceptIds">
   <button class="btn" type="button" onclick="bulkAccept()">접수 완료 처리</button>
 </form>
+</form>
 
-<form id="xlsxForm"   method="post" action="/admin/responses/export.xlsx">
-  <input type="hidden" name="ids"/>
+<form id="xlsxForm" method="post" action="/admin/responses/export.xlsx">
+  <input type="hidden" name="ids" id="xlsxIds">
   <button class="btn" type="button" onclick="bulkXlsx()">엑셀 다운로드</button>
 </form>
   </div>
@@ -114,7 +114,7 @@
   <tbody>
   {% for sr, resp, user, rf in rows %}
     <tr>
-      <td><input type="checkbox" class="rowChk" value="{{ sr.id }}"/></td>
+      <td><input type="checkbox" class="rowChk" value="{{ sr.id }}"></td>
       <td class="nowrap">{{ resp.serial_no or '' }}</td>
       <td>{{ resp.applicant_name or user.name_enc or '-' }} ({{ resp.birth_date or '' }}, {{ resp.gender or user.gender or '-' }})</td>
       <td>{{ rf.filename if rf else '' }}</td>
@@ -162,25 +162,23 @@ function shiftDays(n){let [f,t]=getDates();let fd=f.value?new Date(f.value):new 
 function setToday(){let [f,t]=getDates();let d=new Date();f.value=fmt(d);t.value=fmt(d);}
 function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.setDate(td.getDate()-6);f.value=fmt(fd);t.value=fmt(td);}
 
-function getSelectedIds() {
-  return Array.from(document.querySelectorAll('.rowChk:checked'))
-    .map(el => el.value)
-    .filter(Boolean);
+function getSelectedIds(){
+  return Array.from(document.querySelectorAll('.rowChk:checked')).map(el=>el.value).filter(Boolean);
 }
 function bulkAccept(){
-  const ids=[...document.querySelectorAll('.rowChk:checked')].map(c=>c.value);
-  if(ids.length===0){alert('선택된 항목이 없습니다.');return;}
+  const ids = getSelectedIds();
+  if(ids.length===0){ alert('선택된 항목이 없습니다.'); return; }
   document.getElementById('acceptIds').value = ids.join(',');
   document.getElementById('acceptForm').submit();
 }
 function bulkXlsx(){
-  const ids=[...document.querySelectorAll('.rowChk:checked')].map(c=>c.value);
-  if(ids.length===0){alert('선택된 항목이 없습니다.');return;}
+  const ids = getSelectedIds();
+  if(ids.length===0){ alert('선택된 항목이 없습니다.'); return; }
   document.getElementById('xlsxIds').value = ids.join(',');
   document.getElementById('xlsxForm').submit();
 }
-function toggleAll(master) {
-  document.querySelectorAll('.rowChk').forEach(cb => cb.checked = master.checked);
+function toggleAll(master){
+  document.querySelectorAll('.rowChk').forEach(cb=>cb.checked=master.checked);
 }
 document.querySelectorAll('.date-ymd').forEach(inp=>{
   inp.addEventListener('input', e=>{

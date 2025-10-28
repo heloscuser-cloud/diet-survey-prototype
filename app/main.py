@@ -538,7 +538,8 @@ def portal(request: Request, auth: str | None = Cookie(default=None, alias=AUTH_
         "request": request,
     })
 
-# --- Admin host gate ---
+
+# ===== Host 강제 미들웨어 =====
 ADMIN_HOST = "admin.gaonnsurvey.store"
 
 def _norm_host(h: str) -> str:
@@ -559,6 +560,7 @@ async def force_admin_host_mw(request: Request, call_next):
         return RedirectResponse(target, status_code=307)
 
     return await call_next(request)
+
 
 
 
@@ -583,8 +585,8 @@ def validate_admin_cookie(token: str) -> bool:
 
 def admin_required(request: Request):
     token = request.cookies.get(COOKIE_NAME)
-    #임시 진단 로그
     print("[ADMIN AUTH]", request.method, request.url.path, "has_cookie=", bool(token))
+    print("[ADMIN AUTH] host =", (request.headers.get("host") or ""))
     if not token or not validate_admin_cookie(token):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -614,17 +616,15 @@ def admin_login(request: Request, username: str = Form(...), password: str = For
         )
     resp = RedirectResponse(url="/admin/responses", status_code=303)
     resp.set_cookie(
-        COOKIE_NAME,               # key
-        create_admin_cookie(),     # value
+        COOKIE_NAME,                 # key (예: "admin")
+        create_admin_cookie(),       # value
         httponly=True,
-        secure=True,               # HTTPS
-        samesite="lax",            # 동일 사이트 내 탐색/POST에 전송
-        # domain= 생략 (host-only로 설정)  ← 중요
+        secure=True,                 # HTTPS 필수
+        samesite="none",             # 리다이렉트/탐색/서브도메인 이동에서도 항상 전송
+        # domain= (명시하지 않음: host-only로 설정)  ← 이게 더 안정적입니다
         max_age=COOKIE_MAX_AGE,
         path="/",
     )
-    print("[ADMIN LOGIN] set-cookie for host OK")
-    return resp
 
 @app.get("/admin/logout")
 def admin_logout():
