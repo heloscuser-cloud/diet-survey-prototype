@@ -125,7 +125,6 @@ table thead th, table tbody td { text-align: center !important; }
 
   <!-- 조회 시 유지할 hidden들 -->
   <input type="hidden" name="page" value="1">
-  <input type="hidden" name="at"   value="{{ admin_at }}">
 </div>
     </form>
   </div>
@@ -177,7 +176,6 @@ table thead th, table tbody td { text-align: center !important; }
           <td class="nowrap">
             <!-- 업로드: 파일 선택 → 즉시 submit (at 포함) -->
             <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report" enctype="multipart/form-data">
-              <input type="hidden" name="at" value="{{ admin_at }}">
               <input id="file_{{ sr.id }}" type="file" name="file" accept="application/pdf" style="display:none" onchange="this.form.submit()"/>
               <label for="file_{{ sr.id }}" title="리포트 등록" class="iconbtn">
                 <img class="ico" src="/static/icons/plus.svg" alt="등록"/>
@@ -186,8 +184,7 @@ table thead th, table tbody td { text-align: center !important; }
             <!-- 삭제 -->
             {% if rf %}
             <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report/delete">
-              <input type="hidden" name="at" value="{{ admin_at }}">
-              <button type="submit" title="리포트 삭제" class="iconbtn2">
+                <button type="submit" title="리포트 삭제" class="iconbtn2">
                 <img class="ico" src="/static/icons/trash.svg" alt="삭제"/>
               </button>
             </form>
@@ -215,7 +212,6 @@ table thead th, table tbody td { text-align: center !important; }
 </div>
 
 <script>
-  const ADMIN_AT = "{{ admin_at }}";
 
   // 날짜 유틸
   function z(n){return String(n).padStart(2,'0')}

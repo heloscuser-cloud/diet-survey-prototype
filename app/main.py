@@ -590,9 +590,11 @@ def portal(request: Request, auth: str | None = Cookie(default=None, alias=AUTH_
 
 def admin_required(request: Request):
     # 세션에 admin 플래그가 있으면 통과
-    if request.session.get("admin"):
-        return
-    # 없으면 401
+    try:
+        if request.session.get("admin"):
+            return
+    except Exception:
+        pass
     raise HTTPException(status_code=401)
 
 
@@ -601,7 +603,6 @@ admin_router = APIRouter(
     prefix="/admin",
     dependencies=[Depends(admin_required)]
 )
-app.include_router(admin_router)
 
 @app.get("/admin/login", response_class=HTMLResponse)
 def admin_login_form(request: Request):
@@ -628,6 +629,7 @@ def admin_login(request: Request, username: str = Form(...), password: str = For
 
     return RedirectResponse(url="/admin/responses", status_code=303)
 
+app.include_router(admin_router)
 
 @app.get("/admin/logout")
 def admin_logout(request: Request):
