@@ -48,10 +48,10 @@
     .btn-primary{background:var(--btn1)}
     .btn-cyan{background:var(--btn2)}
     .btn-sky{background:var(--btn3)}
-    .btn-sm{padding:.4rem .8rem; font-weight:600; background:var(--btn2)}
+    .btn-sm{padding:.4rem .8rem; font-weight:600;}
     /* 아이콘 버튼(정사각, 테두리 제거) */
-    .iconbtn{width:28px; height:28px; border:none; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; background:#0ea5e9; cursor:pointer}
-    .iconbtn2{width:28px; height:28px; border:none; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; background:#ff7878; cursor:pointer}
+    .iconbtn{width:28px; height:28px; border:none; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; background:#7ED2FF; cursor:pointer}
+    .iconbtn2{width:28px; height:28px; border:none; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; background:#FFB4B4; cursor:pointer}
     .iconbtn:hover{opacity:.9}
     /* 페이지네이션 */
     .pagination{display:flex; justify-content:center; gap:6px; margin:16px 0}
@@ -82,10 +82,10 @@ table thead th, table tbody td { text-align: center !important; }
           <input class="w-date date-ymd" type="text" name="to" inputmode="numeric" placeholder="YYYY-MM-DD" value="{{ to or '' }}"/>
         </div>
         <div>
-          <button type="button" class="btn btn-sm" onclick="shiftDays(-1)">◀</button>
-          <button type="button" class="btn btn-sm" onclick="shiftDays(1)">▶</button>
-          <button type="button" class="btn btn-sm" onclick="setToday()">오늘</button>
-          <button type="button" class="btn btn-sm" onclick="setWeek()">일주일</button>
+          <button type="button" class="btn btn-sm btn-cyan" onclick="shiftDays(-1)">◀</button>
+          <button type="button" class="btn btn-sm btn-cyan" onclick="shiftDays(1)">▶</button>
+          <button type="button" class="btn btn-sm btn-cyan" onclick="setToday()">오늘</button>
+          <button type="button" class="btn btn-sm btn-cyan" onclick="setWeek()">일주일</button>
         </div>
       </div>
 

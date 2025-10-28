@@ -39,6 +39,10 @@ from zoneinfo import ZoneInfo
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret")
 ADMIN_USER = os.environ.get("ADMIN_USER")
 ADMIN_PASS = os.environ.get("ADMIN_PASS")
+_signer = itsdangerous.URLSafeSerializer(APP_SECRET, salt="admin-cookie")
+COOKIE_NAME = "admin"
+COOKIE_MAX_AGE = 30  # 로그인 세션 유지 시간 30분 설정
+SECURE_COOKIE = os.environ.get("SECURE_COOKIE", "1") == "1"
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -73,6 +77,56 @@ def ensure_not_completed(survey_completed: str | None = Cookie(default=None)):
         # 이미 완료된 세션은 설문으로 접근 시 포털로 보냄
         raise HTTPException(status_code=307, detail="completed")
 
+# --- 쿠키 재발급 유틸 ---
+def reissue_admin_cookie_if_needed(request: Request, response):
+    token = request.cookies.get(COOKIE_NAME)
+    if token and validate_admin_cookie(token):
+        return
+    at = request.query_params.get("at")
+    if at and validate_admin_at(at):
+        # at 유효 → 새 관리자 쿠키 심어서 세션 복구
+        response.set_cookie(
+            COOKIE_NAME, create_admin_cookie(),
+            httponly=True, secure=True, samesite="none",
+            max_age=COOKIE_MAX_AGE, path="/"
+        )
+
+async def reissue_admin_cookie_if_needed_post(request: Request, response):
+    token = request.cookies.get(COOKIE_NAME)
+    if token and validate_admin_cookie(token):
+        return
+    try:
+        form = await request.form()
+    except Exception:
+        form = {}
+    at = form.get("at")
+    if at and validate_admin_at(at):
+        response.set_cookie(
+            COOKIE_NAME, create_admin_cookie(),
+            httponly=True, secure=True, samesite="none",
+            max_age=COOKIE_MAX_AGE, path="/"
+        )
+
+
+#관리자 쿠키 보조토큰
+ADMIN_AT_SALT = "admin-at"         # 보조 토큰용 salt
+ADMIN_AT_TTL  = 60                 # 유효기간(초): 60초
+
+_admin_at = URLSafeTimedSerializer(APP_SECRET, salt=ADMIN_AT_SALT)
+
+def create_admin_at() -> str:
+    # 내용은 간단: {"role":"admin"} 정도
+    return _admin_at.dumps({"role": "admin"})
+
+def validate_admin_at(token: str) -> bool:
+    if not token:
+        return False
+    try:
+        data = _admin_at.loads(token, max_age=ADMIN_AT_TTL)
+        return data.get("role") == "admin"
+    except (BadSignature, SignatureExpired):
+        return False
+
 # 질문 로드 (앱 기동시 1회)
 QUESTIONS_PATH = Path("app/data/survey_questions.json")
 with QUESTIONS_PATH.open("r", encoding="utf-8") as f:
@@ -80,7 +134,6 @@ with QUESTIONS_PATH.open("r", encoding="utf-8") as f:
 
 # 페이지 그룹: (start_id, end_id)
 SURVEY_STEPS = [(1, 8), (9, 16), (17, 23)]
-
 
 def get_questions_for_step(step: int):
     start_id, end_id = SURVEY_STEPS[step-1]
@@ -98,32 +151,6 @@ engine = create_engine(DATABASE_URL, echo=False)
 
 
 app = FastAPI(title="Diet Survey Prototype")
-# --- Session (admin 인증 단일 쿠키) ---
-SESSION_MAX_AGE = 30 * 60  # 30분
-
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=APP_SECRET,   # (이미 위쪽에 APP_SECRET가 있음)
-    max_age=SESSION_MAX_AGE, # 초 단위
-    same_site="none",        # 서브도메인/리다이렉트 고려
-    https_only=True          # Secure
-)
-
-@app.middleware("http")
-async def rolling_session_middleware(request: Request, call_next):
-    # 요청 처리
-    response = await call_next(request)
-
-    # admin 세션이면 만료 임박 시 갱신(쿠키 재발급)
-    if request.session.get("admin"):
-        now = int(datetime.now(timezone.utc).timestamp())
-        issued_at = int(request.session.get("_iat", 0))
-        # 남은 시간 < 60분이면 갱신
-        if now - issued_at > (SESSION_MAX_AGE - 3600):
-            request.session["_iat"] = now  # 세션 값 변경 -> Set-Cookie 재발급
-
-    return response
-
 app.mount("/static", StaticFiles(directory=os.path.join(ROOT_DIR, "app", "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(ROOT_DIR, "app", "templates"))
 
@@ -152,6 +179,32 @@ async def no_store_for_survey(request: Request, call_next):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
     return response
+
+#보조 리다이렉트 미들웨어
+@app.middleware("http")
+async def ensure_admin_at_mw(request: Request, call_next):
+    p = request.url.path or ""
+    # 관리 영역 외, 혹은 로그인/정적 파일은 무시
+    if not p.startswith("/admin") or p.startswith("/admin/login") or p.startswith("/static"):
+        return await call_next(request)
+
+    # 쿠키 있으면 통과
+    token = request.cookies.get(COOKIE_NAME)
+    if token and validate_admin_cookie(token):
+        return await call_next(request)
+
+    # at 쿼리 있으면 통과 (admin_required에서 추가 검사/재발급)
+    at = request.query_params.get("at")
+    if at:
+        return await call_next(request)
+
+    # 둘 다 없으면: 새 at 발급해서 동일 URL로 302
+    u = request.url
+    q = dict(request.query_params)
+    q["at"] = create_admin_at()
+    new_q = "&".join([f"{k}={v}" for k, v in q.items()])
+    to = str(u.replace(query=new_q))
+    return RedirectResponse(url=to, status_code=302)
 
 # ---- Font registration (optional for Korean) ----
 FONT_DIR = os.path.join(ROOT_DIR, "app", "fonts")
@@ -578,15 +631,60 @@ ADMIN_HOST = "admin.gaonnsurvey.store"
 def _norm_host(h: str) -> str:
     return (h or "").split(":")[0].strip().lower().rstrip(".")
 
+@app.middleware("http")
+async def force_admin_host_mw(request: Request, call_next):
+    p = request.url.path or ""
+    if p == "/healthz":
+        return await call_next(request)
+
+    h = _norm_host(request.headers.get("host"))
+    if p.startswith("/admin") and h not in (ADMIN_HOST, "localhost", "127.0.0.1"):
+        target = f"https://{ADMIN_HOST}{p}"
+        if request.url.query:
+            target += f"?{request.url.query}"
+        print(f"[ADMIN HOST] redirect {h} -> {ADMIN_HOST} path={p}")
+        return RedirectResponse(target, status_code=307)
+
+    return await call_next(request)
+
+
+
+
 #---- 관리자 로그인 ----#
 
-def admin_required(request: Request):
-    # 세션에 admin 플래그가 있으면 통과
-    if request.session.get("admin"):
-        return
-    # 없으면 401
-    raise HTTPException(status_code=401)
+def create_admin_cookie() -> str:
+    return _signer.dumps({"role": "admin", "iat": int(datetime.utcnow().timestamp())})
 
+def validate_admin_cookie(token: str) -> bool:
+    try:
+        return _signer.loads(token).get("role") == "admin"
+    except itsdangerous.BadSignature:
+        return False
+
+
+async def admin_required(request: Request):
+    # 1) 쿠키 우선
+    token = request.cookies.get(COOKIE_NAME)
+    if token and validate_admin_cookie(token):
+        print("[ADMIN AUTH]", request.method, request.url.path, "cookie=✔ host=", (request.headers.get("host") or ""))
+        return
+
+    # 2) 보조 토큰(at) 보조 인증 (GET: query, POST: form)
+    at = request.query_params.get("at")
+    if not at and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        try:
+            form = await request.form()
+            at = form.get("at")
+        except Exception:
+            at = None
+
+    if at and validate_admin_at(at):
+        print("[ADMIN AUTH]", request.method, request.url.path, "cookie=✖  at=✔ host=", (request.headers.get("host") or ""))
+        return
+
+    # 모두 없으면 401
+    print("[ADMIN AUTH]", request.method, request.url.path, "cookie=✖  at=✖ host=", (request.headers.get("host") or ""))
+    raise HTTPException(status_code=401, detail="Unauthorized")
 
 # 관리자 전용 라우터
 admin_router = APIRouter(
@@ -612,21 +710,23 @@ def admin_login(request: Request, username: str = Form(...), password: str = For
             {"request": request, "error": "아이디 또는 비밀번호가 올바르지 않습니다."},
             status_code=401
         )
-
-    # --- 세션 발급 ---
-    request.session.clear()
-    request.session["admin"] = True
-    request.session["_iat"] = int(datetime.now(timezone.utc).timestamp())
-
-    return RedirectResponse(url="/admin/responses", status_code=303)
-
+    resp = RedirectResponse(url="/admin/responses", status_code=303)
+    resp.set_cookie(
+        COOKIE_NAME,
+        create_admin_cookie(),
+        httponly=True,
+        secure=True,        # HTTPS
+        samesite="none",    # 리다이렉트/탐색에서도 항상 전송
+        # domain=  생략 (host-only 권장)
+        max_age=COOKIE_MAX_AGE,
+        path="/",
+    )
+    return resp
 
 @app.get("/admin/logout")
-def admin_logout(request: Request):
-    request.session.clear()
+def admin_logout():
     resp = RedirectResponse(url="/admin/login", status_code=303)
-    # 세션 쿠키 이름은 기본 "session"
-    resp.delete_cookie("session", path="/")
+    resp.delete_cookie(COOKIE_NAME, path="/")
     return resp
 
 
@@ -722,6 +822,8 @@ def admin_responses(
     # --- 출력 변환 ---
     to_kst_str = lambda dt: to_kst(dt).strftime("%Y-%m-%d %H:%M")
 
+    # (선택) at로 들어온 경우 쿠키 재발급
+    reissue_admin_cookie_if_needed(request, response)
 
     # --- 렌더 ---
     return templates.TemplateResponse(
@@ -738,6 +840,7 @@ def admin_responses(
             "q": q,
             "page_size": page_size_norm,
             "to_kst_str": to_kst_str,
+            "admin_at": create_admin_at(),
         },
     )
 
@@ -750,7 +853,7 @@ async def admin_bulk_accept(
     ids: str = Form(...),  # "1,2,3"
     session: Session = Depends(get_session),
 ):
-
+    await reissue_admin_cookie_if_needed_post(request, response)
     # ... 나머지 처리 및 RedirectResponse 반환
     id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
     if not id_list:
@@ -1142,7 +1245,7 @@ async def admin_export_xlsx(
     session: Session = Depends(get_session),
     _auth: None = Depends(admin_required),
 ):
-
+    await reissue_admin_cookie_if_needed_post(request, response)
     # 디버그 로그
     print("export.xlsx ids raw:", repr(ids))
 
