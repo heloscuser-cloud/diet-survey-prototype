@@ -18,9 +18,9 @@
     .center{text-align:center}
     .inline{display:inline-block;margin:0 .5rem}
     .btn{cursor:pointer;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;border-radius:6px;border:none}
-    .btn-primary{background:#1e40af;color:#fff;padding:.5rem 1rem,border:none}
-    .btn-sky{background:#0ea5e9;color:#fff;padding:.4rem .8rem,border:none}
-    .btn-cyan{background:#06b6d4;color:#fff;padding:.4rem .8rem,border:none}
+    .btn-primary{background:#1e40af;color:#fff;padding:.5rem 1rem}
+    .btn-sky{background:#0ea5e9;color:#fff;padding:.4rem .8rem}
+    .btn-cyan{background:#06b6d4;color:#fff;padding:.4rem .8rem}
     /* 검색 박스는 적당한 폭, 테이블은 화면 가득 */
     .search-box{display:inline-block;max-width:720px;width:100%}
     .table-wrap{max-width:none;width:100%}
@@ -41,42 +41,42 @@
   <div class="card">
     <h2 class="title">검색 조건</h2>
     <form id="searchForm" method="get" action="/admin/responses" class="search-box center" style="margin:0 auto;">
-<!-- 1행: 신청일 + 빠른버튼 (바짝 붙이기) -->
-<div class="row" style="gap:8px; align-items:center">
-  <div class="row" style="gap:6px; align-items:center">
-    <label style="margin:0">신청일</label>
-    <input class="w-date date-ymd" type="text" name="from" inputmode="numeric" placeholder="YYYY-MM-DD" value="{{ from or '' }}"/>
-    <span>~</span>
-    <input class="w-date date-ymd" type="text" name="to" inputmode="numeric" placeholder="YYYY-MM-DD" value="{{ to or '' }}"/>
-  </div>
-  <div class="row" style="gap:6px; align-items:center">
-    <button type="button" class="btn" onclick="shiftDays(-1)">◀</button>
-    <button type="button" class="btn" onclick="shiftDays(1)">▶</button>
-    <button type="button" class="btn" onclick="setToday()">오늘</button>
-    <button type="button" class="btn" onclick="setWeek()">일주일</button>
-  </div>
+      <!-- 1행: 신청일 + 빠른 버튼 -->
+      <div class="row center" style="justify-content:center; gap:6px;">
+        <div>
+          <label style="margin:0 0 4px 4px;text-align:left;">신청일</label>
+          <input class="w-date date-ymd" type="text" name="from" inputmode="numeric" placeholder="YYYY-MM-DD" value="{{ from or '' }}"/>
+          <span>~</span>
+          <input class="w-date date-ymd" type="text" name="to" inputmode="numeric" placeholder="YYYY-MM-DD" value="{{ to or '' }}"/>
+        </div>
+        <div class="row" style="gap:6px;">
+          <button type="button" class="btn" onclick="shiftDays(-1)">◀</button>
+          <button type="button" class="btn" onclick="shiftDays(1)">▶</button>
+          <button type="button" class="btn" onclick="setToday()">오늘</button>
+          <button type="button" class="btn" onclick="setWeek()">일주일</button>
+        </div>
       </div>
 
-    <!-- 2행: 진행 상태 -->
-    <div class="row" style="margin-top:8px">
-      <div class="grow">
-        <label>진행 상태</label>
-       <select name="status" class="w-status">
-          <option value="" {{ 'selected' if not status }}>전체</option>
-          <option value="submitted" {{ 'selected' if status=='submitted' }}>신청완료</option>
-          <option value="accepted" {{ 'selected' if status=='accepted' }}>접수완료</option>
-          <option value="report_uploaded" {{ 'selected' if status=='report_uploaded' }}>리포트 업로드 완료</option>
-        </select>
+      <!-- 2행: 진행 상태 -->
+      <div class="row center" style="justify-content:center;gap:12px;margin-top:8px;">
+        <div>
+          <label>진행 상태</label>
+          <select name="status" class="w-status">
+            <option value="" {{ 'selected' if not status }}>전체</option>
+            <option value="submitted" {{ 'selected' if status=='submitted' }}>신청완료</option>
+            <option value="accepted" {{ 'selected' if status=='accepted' }}>접수완료</option>
+            <option value="report_uploaded" {{ 'selected' if status=='report_uploaded' }}>리포트 업로드 완료</option>
+          </select>
+        </div>
       </div>
-    </div>
 
-<!-- 3행: 텍스트 검색 -->
-<div class="row" style="margin-top:8px">
-  <div class="grow">
-    <label>텍스트 검색</label>
-    <input type="text" name="q" class="w-text" value="{{ q or '' }}" placeholder="신청자 이름, 신청자 생년월일(YYYY-MM-DD), PDF 파일명으로 검색"/>
-  </div>
-</div>
+      <!-- 3행: 텍스트 검색 -->
+      <div class="row center" style="justify-content:center;margin-top:8px;">
+        <div>
+          <label>텍스트 검색</label>
+          <input type="text" name="q" class="w-text" value="{{ q or '' }}" placeholder="신청자 이름, 신청자 생년월일(YYYY-MM-DD), PDF 파일명으로 검색"/>
+        </div>
+      </div>
 
       <!-- 4행: 조회 버튼 -->
       <div style="margin-top:8px;">
@@ -97,8 +97,28 @@
     </div>
   </div>
 
+<!-- 페이지당 조회 수 (테이블 상단 좌측) -->
+<div class="card" style="padding:8px 12px; margin-bottom:8px; display:flex; justify-content:flex-start; align-items:center; gap:8px;">
+  <form id="pageSizeForm" method="get" action="/admin/responses" style="display:flex; align-items:center; gap:8px; margin:0;">
+    <label for="page_size" style="font-size:12px; color:#64748b;">페이지당 조회 수</label>
+    <select name="page_size" id="page_size" style="width:120px; padding:6px 8px; border:1px solid #e5e7eb; border-radius:6px;">
+      <option value="50"  {{ 'selected' if (page_size or '50') == '50'  }}>50</option>
+      <option value="100" {{ 'selected' if page_size == '100' }}>100</option>
+      <option value="all" {{ 'selected' if page_size == 'all' }}>전체</option>
+    </select>
+    <!-- 현재 필터를 그대로 유지하기 위한 hidden들 -->
+    <input type="hidden" name="from"   value="{{ from or '' }}">
+    <input type="hidden" name="to"     value="{{ to or '' }}">
+    <input type="hidden" name="status" value="{{ status or '' }}">
+    <input type="hidden" name="q"      value="{{ q or '' }}">
+    <input type="hidden" name="page"   value="1">
+    <input type="hidden" name="at"     value="{{ admin_at }}">
+    <input type="hidden" name="page_size" value="{{ page_size or '50' }}
+  </form>
+</div>
+
   <!-- 조회 테이블 (화면 가득) -->
-  <div class="table-wrap" style="padding:0;">
+  <div class="table-wrap card" style="padding:0;">
     <table class="admin">
       <thead>
         <tr>
@@ -156,7 +176,7 @@
 
 </div>
 
-<!-- 페이지네이션 블록 -->
+<!-- 페이지네이션 -->
 <div class="pagination" style="text-align:center; margin-top:20px;">
   {% if total_pages > 1 %}
     {% for p in range(1, total_pages + 1) %}
@@ -165,7 +185,7 @@
           {{ p }}
         </span>
       {% else %}
-        <a href="/admin/responses?page={{ p }}&from={{ from }}&to={{ to }}&status={{ status }}&q={{ q }}&at={{ admin_at }}"
+        <a href="/admin/responses?page={{ p }}&page_size={{ page_size or '50' }}&from={{ from }}&to={{ to }}&status={{ status }}&q={{ q }}&at={{ admin_at }}"
            style="display:inline-block; min-width:28px; padding:6px 10px; margin:2px; background:#e5e7eb; color:#1e293b; border-radius:6px; text-decoration:none;">
           {{ p }}
         </a>
@@ -213,6 +233,17 @@
         if (!u.searchParams.get('at')) u.searchParams.set('at', at);
         a.setAttribute('href', u.pathname + (u.search || '') + (u.hash || ''));
       }catch(e){}
+    });
+  })();
+
+  // 콤보 변경 시 현재 필터 유지 + page=1 로 재조회
+  (function(){
+    const sel = document.getElementById('page_size');
+    const form = document.getElementById('pageSizeForm');
+    if(!sel || !form) return;
+    sel.addEventListener('change', function(){
+      // 폼에 이미 hidden들이 들어있으므로 그냥 submit
+      form.submit();
     });
   })();
 

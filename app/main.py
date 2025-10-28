@@ -706,25 +706,26 @@ def admin_logout():
 # 목록
 @admin_router.get("/responses", response_class=HTMLResponse)
 def admin_responses(
-    
     request: Request,
     response: Response,
     page: int = 1,
+    page_size: str = "50",          # ← 추가: "50"(기본) / "100" / "all"
     q: Optional[str] = None,
-    min_score: Optional[str] = None,   # ← int 대신 str로 받기
-    status: Optional[str] = None,      # all | submitted | accepted | report_uploaded
+    status: Optional[str] = None,   # submitted/accepted/report_uploaded or ""
     from_: Optional[str] = Query(None, alias="from"),
-    to: Optional[str] = Query(None, alias="to"),
+    to: Optional[str] = None,
     session: Session = Depends(get_session),
 ):
-    PAGE_SIZE = 20
-    page = max(1, page)
+    page = max(1, int(page) if str(page).isdigit() else 1)
 
-    # 안전 파싱
-    try:
-        min_score_i = int(min_score) if (min_score is not None and min_score != "") else None
-    except ValueError:
-        min_score_i = None
+    # page_size 해석
+    page_size_norm = (page_size or "50").lower()
+    if page_size_norm == "100":
+        PAGE_SIZE = 100
+    elif page_size_norm == "all":
+        PAGE_SIZE = None   # 전체 보기
+    else:
+        PAGE_SIZE = 50
 
     stmt = (
         select(SurveyResponse, Respondent, User, ReportFile)
@@ -741,8 +742,6 @@ def admin_responses(
             (ReportFile.filename.ilike(like)) |
             (func.to_char(Respondent.created_at, 'YYYY-MM-DD').ilike(like))
         )
-    if min_score_i is not None:
-        stmt = stmt.where(SurveyResponse.score >= min_score_i)
 
     # KST 날짜 → UTC naive 범위 변환 함수 사용
     def parse_date(s: Optional[str]):
@@ -759,25 +758,46 @@ def admin_responses(
     if status in ("submitted", "accepted", "report_uploaded"):
         stmt = stmt.where(Respondent.status == status)
 
+    # 전체 개수
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = session.exec(count_stmt).one()
+    
     rows = session.exec(
         stmt.order_by(SurveyResponse.submitted_at.desc())
             .offset((page-1)*PAGE_SIZE)
             .limit(PAGE_SIZE)
     ).all()
-    total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
+    
+    if PAGE_SIZE is None:   # 전체 보기
+        rows = session.exec(stmt).all()
+        total_pages = 1
+        page = 1
+    else:
+        rows = session.exec(
+            stmt.offset((page-1) * PAGE_SIZE).limit(PAGE_SIZE)
+        ).all()
+        total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
 
     to_kst_str = lambda dt: to_kst(dt).strftime("%Y-%m-%d %H:%M")
 
+
+    to_kst_str = lambda dt: to_kst(dt).strftime("%Y-%m-%d %H:%M")
+
+    # (선택) AT로 들어왔으면 쿠키 즉시 재발급해 세션 복구
     reissue_admin_cookie_if_needed(request, response)
     return templates.TemplateResponse("admin/responses.html", {
-        "request": request, "rows": rows, "page": page,
-        "total": total, "total_pages": total_pages,
-        "q": q, "min_score": min_score, "from": from_, "to": to,
-        "status": status,
+        "request": request,
+        "rows": rows,
+        "page": page,
+        "total": total,
+        "total_pages": total_pages,
+        "from": from_,
+        "to": to,
+        "status": status or "",
+        "q": q,
+        "page_size": page_size_norm,     # ← 템플릿에서 selected 처리에 사용
         "to_kst_str": to_kst_str,
-        "admin_at": create_admin_at(),
+        "admin_at": create_admin_at(),   # ← 링크/폼에 항상 실어주기
     })
 
 
