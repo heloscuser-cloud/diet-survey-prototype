@@ -76,24 +76,32 @@
 
 <!-- 4행: 가운데 정렬된 조회 버튼 -->
 <div class="row" style="margin-top:8px;justify-content:center">
-  <button class="btn" type="submit" style="min-width:140px;padding:10px 14px">조회</button>
+    <button class="btn" type="submit"
+      style="display:block; margin:1rem auto; width:200px; padding:0.5rem 1rem; font-size:16px; background:#1e40af; color:white; border-radius:6px; border:none;">
+      조회
+    </button>
 </div>
   </form>
-</div>
 
 
   <!-- 검색조건 아래 우측 버튼 -->
-<form id="acceptForm" method="post" action="/admin/responses/accept">
-  <input type="hidden" name="ids" id="acceptIds">
-  <button class="btn" type="button" onclick="bulkAccept()">접수 완료 처리</button>
-</form>
-</form>
+<div class="control-area" style="text-align:center; margin:1rem 0;">
+  <form id="acceptForm" method="post" action="/admin/responses/accept" style="display:inline-block; margin:0 0.5rem;">
+    <input type="hidden" name="ids" id="acceptIds">
+    <button class="btn" type="button" onclick="bulkAccept()"
+      style="width:120px; padding:0.4rem 0.5rem; background:#0284c7; color:white; border:none; border-radius:6px;">
+      접수 완료
+    </button>
+  </form>
 
-<form id="xlsxForm" method="post" action="/admin/responses/export.xlsx">
-  <input type="hidden" name="ids" id="xlsxIds">
-  <button class="btn" type="button" onclick="bulkXlsx()">엑셀 다운로드</button>
-</form>
-  </div>
+  <form id="xlsxForm" method="post" action="/admin/responses/export.xlsx" style="display:inline-block; margin:0 0.5rem;">
+    <input type="hidden" name="ids" id="xlsxIds">
+    <button class="btn" type="button" onclick="bulkXlsx()"
+      style="width:120px; padding:0.4rem 0.5rem; background:#0ea5e9; color:white; border:none; border-radius:6px;">
+      엑셀 다운로드
+    </button>
+  </form>
+</div>
 
   <!-- 조회 테이블 -->
   <div class="card">
@@ -156,30 +164,72 @@
 
 
 <script>
+const ADMIN_AT = "{{ admin_at }}";
+
+
 function fmt(d){const z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
 function getDates(){const f=document.querySelector('input[name=from]');const t=document.querySelector('input[name=to]');return [f,t];}
 function shiftDays(n){let [f,t]=getDates();let fd=f.value?new Date(f.value):new Date();let td=t.value?new Date(t.value):new Date();fd.setDate(fd.getDate()+n);td.setDate(td.getDate()+n);f.value=fmt(fd);t.value=fmt(td);}
 function setToday(){let [f,t]=getDates();let d=new Date();f.value=fmt(d);t.value=fmt(d);}
 function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.setDate(td.getDate()-6);f.value=fmt(fd);t.value=fmt(td);}
+  
+// --- 검색 폼(GET) ---
+  (function patchSearchForm() {
+    const f = document.getElementById("searchForm");
+    if (!f) return;
+    f.addEventListener("submit", function (e) {
+      try {
+        const u = new URL(f.action || location.href, location.origin);
+        u.searchParams.set("at", ADMIN_AT);
+        const fd = new FormData(f);
+        for (const [k, v] of fd.entries()) {
+          if (k) u.searchParams.set(k, v);
+        }
+        e.preventDefault();
+        window.location.assign(u.toString());
+      } catch (err) {
+        console.warn("search at attach failed", err);
+      }
+    }, { once: false });
+  })();
 
-function getSelectedIds(){
-  return Array.from(document.querySelectorAll('.rowChk:checked')).map(el=>el.value).filter(Boolean);
-}
-function bulkAccept(){
-  const ids = getSelectedIds();
-  if(ids.length===0){ alert('선택된 항목이 없습니다.'); return; }
-  document.getElementById('acceptIds').value = ids.join(',');
-  document.getElementById('acceptForm').submit();
-}
-function bulkXlsx(){
-  const ids = getSelectedIds();
-  if(ids.length===0){ alert('선택된 항목이 없습니다.'); return; }
-  document.getElementById('xlsxIds').value = ids.join(',');
-  document.getElementById('xlsxForm').submit();
-}
-function toggleAll(master){
-  document.querySelectorAll('.rowChk').forEach(cb=>cb.checked=master.checked);
-}
+  // --- POST 폼(접수/엑셀) ---
+  function ensureAtHidden(form) {
+    let hid = form.querySelector('input[name="at"]');
+    if (!hid) {
+      hid = document.createElement('input');
+      hid.type = 'hidden';
+      hid.name = 'at';
+      form.appendChild(hid);
+    }
+    hid.value = ADMIN_AT;
+  }
+  function getSelectedIds() {
+    return Array.from(document.querySelectorAll('.rowChk:checked'))
+      .map(el => el.value).filter(Boolean);
+  }
+
+  function bulkAccept() {
+    const ids = getSelectedIds();
+    if (ids.length === 0) { alert('선택된 항목이 없습니다.'); return; }
+    const f = document.getElementById('acceptForm');
+    document.getElementById('acceptIds').value = ids.join(',');
+    ensureAtHidden(f);
+    f.submit();
+  }
+
+  function bulkXlsx() {
+    const ids = getSelectedIds();
+    if (ids.length === 0) { alert('선택된 항목이 없습니다.'); return; }
+    const f = document.getElementById('xlsxForm');
+    document.getElementById('xlsxIds').value = ids.join(',');
+    ensureAtHidden(f);
+    f.submit();
+  }
+
+  function toggleAll(master) {
+    document.querySelectorAll('.rowChk').forEach(cb => cb.checked = master.checked);
+  }
 document.querySelectorAll('.date-ymd').forEach(inp=>{
   inp.addEventListener('input', e=>{
     let v = e.target.value.replace(/[^\d]/g,'').slice(0,8);

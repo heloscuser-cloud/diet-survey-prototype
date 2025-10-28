@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, date, timezone
 from random import randint
 from sqlalchemy import func, Column, LargeBinary, Integer, text
 from sqlalchemy import text as sa_text
-from itsdangerous import TimestampSigner, BadSignature, SignatureExpired, URLSafeSerializer
+from itsdangerous import TimestampSigner, BadSignature, SignatureExpired, URLSafeSerializer, URLSafeTimedSerializer
 import smtplib
 from email.message import EmailMessage
 from fastapi import BackgroundTasks
@@ -33,6 +33,7 @@ import secrets
 import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
 KST = ZoneInfo("Asia/Seoul")
 
 def to_kst(dt: datetime) -> datetime:
@@ -66,6 +67,24 @@ def ensure_not_completed(survey_completed: str | None = Cookie(default=None)):
         # 이미 완료된 세션은 설문으로 접근 시 포털로 보냄
         raise HTTPException(status_code=307, detail="completed")
 
+#관리자 쿠키 보조토큰
+ADMIN_AT_SALT = "admin-at"         # 보조 토큰용 salt
+ADMIN_AT_TTL  = 60                 # 유효기간(초): 60초
+
+_admin_at = URLSafeTimedSerializer(APP_SECRET, salt=ADMIN_AT_SALT)
+
+def create_admin_at() -> str:
+    # 내용은 간단: {"role":"admin"} 정도
+    return _admin_at.dumps({"role": "admin"})
+
+def validate_admin_at(token: str) -> bool:
+    if not token:
+        return False
+    try:
+        data = _admin_at.loads(token, max_age=ADMIN_AT_TTL)
+        return data.get("role") == "admin"
+    except (BadSignature, SignatureExpired):
+        return False
 
 # 질문 로드 (앱 기동시 1회)
 QUESTIONS_PATH = Path("app/data/survey_questions.json")
@@ -583,12 +602,30 @@ def validate_admin_cookie(token: str) -> bool:
     except itsdangerous.BadSignature:
         return False
 
-def admin_required(request: Request):
+
+async def admin_required(request: Request):
+    # 1) 쿠키 우선
     token = request.cookies.get(COOKIE_NAME)
-    print("[ADMIN AUTH]", request.method, request.url.path, "has_cookie=", bool(token))
-    print("[ADMIN AUTH] host =", (request.headers.get("host") or ""))
-    if not token or not validate_admin_cookie(token):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    if token and validate_admin_cookie(token):
+        print("[ADMIN AUTH]", request.method, request.url.path, "cookie=✔ host=", (request.headers.get("host") or ""))
+        return
+
+    # 2) 보조 토큰(at) 보조 인증 (GET: query, POST: form)
+    at = request.query_params.get("at")
+    if not at and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        try:
+            form = await request.form()
+            at = form.get("at")
+        except Exception:
+            at = None
+
+    if at and validate_admin_at(at):
+        print("[ADMIN AUTH]", request.method, request.url.path, "cookie=✖  at=✔ host=", (request.headers.get("host") or ""))
+        return
+
+    # 모두 없으면 401
+    print("[ADMIN AUTH]", request.method, request.url.path, "cookie=✖  at=✖ host=", (request.headers.get("host") or ""))
+    raise HTTPException(status_code=401, detail="Unauthorized")
 
 # 관리자 전용 라우터
 admin_router = APIRouter(
@@ -616,12 +653,12 @@ def admin_login(request: Request, username: str = Form(...), password: str = For
         )
     resp = RedirectResponse(url="/admin/responses", status_code=303)
     resp.set_cookie(
-        COOKIE_NAME,                 # key (예: "admin")
-        create_admin_cookie(),       # value
+        COOKIE_NAME,
+        create_admin_cookie(),
         httponly=True,
-        secure=True,                 # HTTPS 필수
-        samesite="none",             # 리다이렉트/탐색/서브도메인 이동에서도 항상 전송
-        # domain= (명시하지 않음: host-only로 설정)  ← 이게 더 안정적입니다
+        secure=True,        # HTTPS
+        samesite="none",    # 리다이렉트/탐색에서도 항상 전송
+        # domain=  생략 (host-only 권장)
         max_age=COOKIE_MAX_AGE,
         path="/",
     )
@@ -706,6 +743,7 @@ def admin_responses(
         "q": q, "min_score": min_score, "from": from_, "to": to,
         "status": status,
         "to_kst_str": to_kst_str,
+        "admin_at": create_admin_at(),
     })
 
 
