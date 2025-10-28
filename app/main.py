@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from fastapi import Query
 from datetime import datetime, timedelta, date, timezone
+from starlette.responses import RedirectResponse
 from random import randint
 from sqlalchemy import func, Column, LargeBinary, Integer, text
 from sqlalchemy import text as sa_text
@@ -177,6 +178,32 @@ async def no_store_for_survey(request: Request, call_next):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
     return response
+
+#보조 리다이렉트 미들웨어
+@app.middleware("http")
+async def ensure_admin_at_mw(request: Request, call_next):
+    p = request.url.path or ""
+    # 관리 영역 외, 혹은 로그인/정적 파일은 무시
+    if not p.startswith("/admin") or p.startswith("/admin/login") or p.startswith("/static"):
+        return await call_next(request)
+
+    # 쿠키 있으면 통과
+    token = request.cookies.get(COOKIE_NAME)
+    if token and validate_admin_cookie(token):
+        return await call_next(request)
+
+    # at 쿼리 있으면 통과 (admin_required에서 추가 검사/재발급)
+    at = request.query_params.get("at")
+    if at:
+        return await call_next(request)
+
+    # 둘 다 없으면: 새 at 발급해서 동일 URL로 302
+    u = request.url
+    q = dict(request.query_params)
+    q["at"] = create_admin_at()
+    new_q = "&".join([f"{k}={v}" for k, v in q.items()])
+    to = str(u.replace(query=new_q))
+    return RedirectResponse(url=to, status_code=302)
 
 # ---- Font registration (optional for Korean) ----
 FONT_DIR = os.path.join(ROOT_DIR, "app", "fonts")
@@ -763,22 +790,20 @@ def admin_responses(
     total = session.exec(count_stmt).one()
     
     rows = session.exec(
-        stmt.order_by(SurveyResponse.submitted_at.desc())
+        stmt.order_by(SurveyResponse.submitted_at.desc(),SurveyResponse.id.desc())
             .offset((page-1)*PAGE_SIZE)
             .limit(PAGE_SIZE)
     ).all()
     
-    if PAGE_SIZE is None:   # 전체 보기
+    if PAGE_SIZE is None:  # 전체 보기
         rows = session.exec(stmt).all()
         total_pages = 1
         page = 1
     else:
         rows = session.exec(
-            stmt.offset((page-1) * PAGE_SIZE).limit(PAGE_SIZE)
+            stmt.offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)
         ).all()
         total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE
-
-    to_kst_str = lambda dt: to_kst(dt).strftime("%Y-%m-%d %H:%M")
 
 
     to_kst_str = lambda dt: to_kst(dt).strftime("%Y-%m-%d %H:%M")
