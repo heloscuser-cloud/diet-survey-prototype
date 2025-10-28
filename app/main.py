@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.routing import APIRoute
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import RedirectResponse, HTMLResponse, StreamingResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse
 from fastapi.requests import Request
 from sqlmodel import SQLModel, Field, Session, create_engine, select, Relationship
 from pydantic import BaseModel
@@ -98,31 +98,6 @@ engine = create_engine(DATABASE_URL, echo=False)
 
 
 app = FastAPI(title="Diet Survey Prototype")
-# --- Session (admin 인증 단일 쿠키) ---
-SESSION_MAX_AGE = 30 * 60  # 30분
-
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=APP_SECRET,   # (이미 위쪽에 APP_SECRET가 있음)
-    max_age=SESSION_MAX_AGE, # 초 단위
-    same_site="none",        # 서브도메인/리다이렉트 고려
-    https_only=True          # Secure
-)
-
-@app.middleware("http")
-async def rolling_session_middleware(request: Request, call_next):
-    # 요청 처리
-    response = await call_next(request)
-
-    # admin 세션이면 만료 임박 시 갱신(쿠키 재발급)
-    if request.session.get("admin"):
-        now = int(datetime.now(timezone.utc).timestamp())
-        issued_at = int(request.session.get("_iat", 0))
-        # 남은 시간 < 60분이면 갱신
-        if now - issued_at > (SESSION_MAX_AGE - 3600):
-            request.session["_iat"] = now  # 세션 값 변경 -> Set-Cookie 재발급
-
-    return response
 
 app.mount("/static", StaticFiles(directory=os.path.join(ROOT_DIR, "app", "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(ROOT_DIR, "app", "templates"))
@@ -400,6 +375,32 @@ async def info_submit(
 
     # 설문 시작
     return RedirectResponse(url="/survey", status_code=303)
+
+# --- Session (admin 인증 단일 쿠키) ---
+SESSION_MAX_AGE = 30 * 60  # 30분
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=APP_SECRET,   # (이미 위쪽에 APP_SECRET가 있음)
+    max_age=SESSION_MAX_AGE, # 초 단위
+    same_site="none",        # 서브도메인/리다이렉트 고려
+    https_only=True          # Secure
+)
+
+@app.middleware("http")
+async def rolling_session_middleware(request: Request, call_next):
+    # 요청 처리
+    response = await call_next(request)
+
+    # admin 세션이면 만료 임박 시 갱신(쿠키 재발급)
+    if request.session.get("admin"):
+        now = int(datetime.now(timezone.utc).timestamp())
+        issued_at = int(request.session.get("_iat", 0))
+        # 남은 시간 < 60분이면 갱신
+        if now - issued_at > (SESSION_MAX_AGE - 3600):
+            request.session["_iat"] = now  # 세션 값 변경 -> Set-Cookie 재발급
+
+    return response
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
