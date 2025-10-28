@@ -14,7 +14,20 @@
     label.opt { display:block; padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px; margin:6px 0; }
     input[type="radio"], input[type="checkbox"] { margin-right:8px; }
     .nav { display:flex; gap:8px; margin-top:12px; }
-    .btn { flex:1; padding:14px; border-radius:12px; border:0; font-weight:600; }
+.btn {
+  flex: 1;
+  padding: 14px;
+  border-radius: 12px;
+  border: 0;
+  font-weight: 600;
+  font-size: 16px;       /* ← 버튼/링크 모두 동일 폰트 크기 */
+  font-family: inherit;  /* ← 시스템 폰트 상속으로 통일 */
+}
+a.btn {
+  text-decoration: none;   /* ← 링크 밑줄 제거 */
+  display: inline-block;   /* ← 버튼과 레이아웃 일치 */
+  text-align: center;      /* ← 가운데 정렬 보장 */
+}
     .btn.prev { background:#111827; color:#fff; }
     .btn.next { background:#111827; color:#fff; opacity:.5; }
     .btn.next.enabled { opacity:1; }

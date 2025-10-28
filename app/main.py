@@ -23,13 +23,12 @@ from itsdangerous import (
     TimestampSigner, BadSignature, SignatureExpired,
     URLSafeSerializer, URLSafeTimedSerializer
 )
-import smtplib
+import os, smtplib, ssl, socket, traceback
 from email.message import EmailMessage
 from fastapi import BackgroundTasks
 import zipfile
 import csv
 import itsdangerous
-import os
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
@@ -257,43 +256,80 @@ def mask_second_char(name: str | None) -> str:
     return "".join(s)
 
 def send_submission_email(serial_no: int, applicant_name: str, created_at_kst_str: str):
-    """신청 완료 알림 메일 발송 (네이버 SMTP/STARTTLS)"""
-    host = os.getenv("SMTP_HOST", "smtp.naver.com")
-    port = int(os.getenv("SMTP_PORT", "587"))
-    user = os.getenv("SMTP_USER")
-    password = os.getenv("SMTP_PASS")
-    from_addr = os.getenv("SMTP_FROM", user or "")
-    to_addr = os.getenv("SMTP_TO")
+    host = os.getenv("SMTP_HOST")
+    port_env = os.getenv("SMTP_PORT", "").strip()
+    user = (os.getenv("SMTP_USER") or "").strip()
+    password = (os.getenv("SMTP_PASS") or "").strip()
+    mail_from = (os.getenv("SMTP_FROM") or "").strip()
+    mail_to = (os.getenv("SMTP_TO") or "").strip()
+    timeout = int(os.getenv("SMTP_TIMEOUT", "25"))  # 넉넉히 25초
 
-    if not (user and password and to_addr and from_addr):
+    # 환경 체크
+    if not (host and user and password and mail_from and mail_to):
         print("[EMAIL] SMTP env not configured, skip.")
         return
 
-    masked = mask_second_char(applicant_name or "")
-    subject = f"[서비스 접수 알림] 신청번호:{serial_no} / 신청자:{masked} / 신청일:{created_at_kst_str}"
-    body = (
-        "문진이 접수되었습니다.\n"
-        f"신청번호:{serial_no}\n"
-        f"신청자:{masked}\n"
-        f"신청일:{created_at_kst_str}"
-    )
+    # 네이버는 보통 '전체 이메일 주소'로 로그인해야 안정적
+    login_user = user if "@" in user else f"{user}@naver.com"
 
+    # 메일 만들기
     msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = from_addr
-    msg["To"] = to_addr
+    msg["Subject"] = f"[GaonnSurvey] 새 문진 접수 #{serial_no}"
+    msg["From"] = mail_from
+    msg["To"] = mail_to
+    body = (
+        f"새 문진이 접수되었습니다.\n"
+        f"- 일련번호: {serial_no}\n"
+        f"- 신청자: {applicant_name or '(미입력)'}\n"
+        f"- 접수시각(KST): {created_at_kst_str}\n"
+        f"\n관리자 페이지에서 확인하세요."
+    )
     msg.set_content(body)
 
-    try:
-        with smtplib.SMTP(host, port, timeout=15) as s:
+    ctx = ssl.create_default_context()
+
+    def try_587():
+        print("[EMAIL] connecting 587 STARTTLS...")
+        with smtplib.SMTP(host, 587, timeout=timeout) as s:
+            s.set_debuglevel(1)  # SMTP 대화 로그 출력
             s.ehlo()
-            s.starttls()  # TLS
+            s.starttls(context=ctx)
             s.ehlo()
-            s.login(user, password)
+            s.login(login_user, password)
             s.send_message(msg)
-        print("[EMAIL] sent OK")
-    except Exception as e:
-        print("[EMAIL] send failed:", repr(e))
+        print("[EMAIL] sent OK via 587")
+
+    def try_465():
+        print("[EMAIL] connecting 465 SSL...")
+        with smtplib.SMTP_SSL(host, 465, timeout=timeout, context=ctx) as s:
+            s.set_debuglevel(1)
+            s.login(login_user, password)
+            s.send_message(msg)
+        print("[EMAIL] sent OK via 465")
+
+    # IPv6 경로가 느린 환경에서 타임아웃을 줄이기 위해(선택) IPv4 우선 DNS 확인 로그
+    try:
+        ipv4s = [ai[4][0] for ai in socket.getaddrinfo(host, None, socket.AF_INET)]
+        print(f"[EMAIL] DNS A records (IPv4): {ipv4s}")
+    except Exception as _e:
+        print("[EMAIL] DNS A lookup failed (non-fatal):", repr(_e))
+
+    # 시도: 587 → 실패 시 465 폴백
+    try:
+        try_587()
+        return
+    except Exception as e1:
+        print("[EMAIL] 587 failed:", repr(e1))
+        traceback.print_exc()
+
+    try:
+        try_465()
+        return
+    except Exception as e2:
+        print("[EMAIL] 465 failed:", repr(e2))
+        traceback.print_exc()
+
+    print("[EMAIL] send failed: both 587 and 465 attempts failed")
 
 
 # ---- OTP helpers ----
