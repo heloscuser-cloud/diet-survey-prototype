@@ -142,4 +142,40 @@ function ensure1dp(el){
   // "175." 형태면 ".0" 보정
   if (el.value.endsWith('.')) el.value = el.value + '0';
 }
+/* --- 자동 점(.)을 백스페이스/딜리트로 부드럽게 지우기 --- */
+/**
+ * selector: 인풋 셀렉터 (예: 'input[name="height_cm"]')
+ * intDigits: 소수점 앞 자리수 (키: 3자리, 몸무게: 2자리 기준)
+ */
+function enableDotBackspaceFor(selector, intDigits){
+  const el = document.querySelector(selector);
+  if (!el) return;
+
+  el.addEventListener('keydown', function(e){
+    const v = el.value || "";
+    const pos = el.selectionStart ?? v.length; // 커서 위치
+    const hasDot = v.includes('.');
+    const dotIdx = intDigits; // 점이 들어갈 인덱스(앞자리수 길이)
+
+    // 점 바로 뒤에서 Backspace 누르면 점만 지우기
+    if (e.key === 'Backspace' && hasDot && pos === dotIdx + 1 && v.charAt(dotIdx) === '.') {
+      e.preventDefault();
+      el.value = v.slice(0, dotIdx) + v.slice(dotIdx + 1); // 점 제거
+      el.setSelectionRange(dotIdx, dotIdx);                // 커서를 점 위치로 이동
+      return;
+    }
+
+    // 점 위치에서 Delete 누르면 점만 지우기
+    if (e.key === 'Delete' && hasDot && pos === dotIdx && v.charAt(dotIdx) === '.') {
+      e.preventDefault();
+      el.value = v.slice(0, dotIdx) + v.slice(dotIdx + 1); // 점 제거
+      el.setSelectionRange(dotIdx, dotIdx);
+      return;
+    }
+  });
+}
+
+// 현재 폼 기준: 신장(정수 3자리 + 소수 1자리), 체중(정수 2자리 + 소수 1자리)
+enableDotBackspaceFor('input[name="height_cm"]', 3);
+enableDotBackspaceFor('input[name="weight_kg"]', 2);
 </script>
