@@ -42,7 +42,11 @@ import secrets
 import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from app.tilko.client import TilkoClient, TilkoError
+try:
+    from app.tilko.client import TilkoClient, TilkoError
+except ModuleNotFoundError:
+    # 로컬 실행 / 경로차 대응 (app 패키지 인식 안 될 때)
+    from tilko.client import TilkoClient, TilkoError
 
 
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret")
