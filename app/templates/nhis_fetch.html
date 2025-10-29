@@ -111,58 +111,61 @@
     const statusEl = $('#status');
     const preview  = $('#preview');
 
-    btnStart.addEventListener('click', async ()=>{
-      const name  = $('#name').value.trim();
-      const phone = $('#phone').value.trim();
-      const birth = getBirth();
-      if(!name || !phone || !birth){ alert('이름/휴대폰/생년월일을 모두 입력해 주세요.'); return; }
-      try{
-        statusEl.textContent = '간편인증을 요청하는 중...';
-        const rsp = await fetch('/api/nhis/auth/start', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ name, phone, birth })
-        });
-        if(!rsp.ok) throw new Error('간편인증 요청 실패');
-        await rsp.json(); // 사용: TxId 등 (서버/세션 보관 가정)
-        btnFetch.disabled = false;
-        statusEl.textContent = '휴대폰에서 본인인증을 완료한 뒤, "데이터 불러오기"를 눌러주세요.';
-      }catch(err){
-        console.error(err);
-        alert('간편인증 시작에 실패했습니다. 잠시 후 다시 시도해 주세요.');
-        statusEl.textContent = '간편인증 시작 실패';
-      }
-    });
+  let NHIS_TX_ID = null;
 
-    btnFetch.addEventListener('click', async ()=>{
-      try{
-        statusEl.textContent = '건강검진 데이터를 불러오는 중...';
-        const now = new Date();
-        const fy = String(now.getFullYear()-9), ty = String(now.getFullYear());
-        const rsp = await fetch('/api/nhis/health-check/fetch', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ txId: 'dummy', fromYear: fy, toYear: ty })
-        });
-        if(!rsp.ok) throw new Error('불러오기 실패');
-        const data = await rsp.json(); // { exam_date, items:[], raw:... }
-        const exam = data?.exam_date || '';
-        const items = Array.isArray(data?.items) ? data.items : [];
-        // 미리보기 & 다음버튼 활성화
-        preview.style.display = 'block';
-        preview.innerHTML = `
-          <div style="font-weight:600">검진일자: ${exam || '-'}</div>
-          <ul style="margin:6px 0 0 18px">${items.slice(0,6).map(it=>`<li>${(it.name||'-')} : ${(it.value||'-')} ${(it.unit||'')}</li>`).join('')}</ul>
-          ${items.length>6 ? `<div class="muted" style="margin-top:6px">외 ${items.length-6}개 항목</div>` : '' }
-        `;
-        statusEl.textContent = items.length ? '건강검진 데이터가 연결되었습니다.' : '최근 10년 데이터가 없거나 항목이 비어 있습니다.';
-        btnNext.style.pointerEvents = 'auto';
-        btnNext.style.opacity = '1';
-        btnNext.setAttribute('aria-disabled','false');
-      }catch(err){
-        console.error(err);
-        alert('데이터 불러오기에 실패했습니다. 인증 완료 여부를 확인한 뒤 다시 시도해 주세요.');
-        statusEl.textContent = '불러오기 실패';
-      }
-    });
+  btnStart.addEventListener('click', async ()=>{
+    const name  = $('#name').value.trim();
+    const phone = $('#phone').value.trim();
+    const birth = getBirth();
+    if(!name || !phone || !birth){ alert('이름/휴대폰/생년월일을 모두 입력해 주세요.'); return; }
+    try{
+      statusEl.textContent = '간편인증을 요청하는 중...';
+      const rsp = await fetch('/api/nhis/auth/start', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name, phone, birth })
+      });
+      if(!rsp.ok) throw new Error('간편인증 요청 실패');
+      const data = await rsp.json();
+      NHIS_TX_ID = data?.txId || null;  // 서버가 표준화해 준 txId 사용
+      btnFetch.disabled = false;
+      statusEl.textContent = '휴대폰에서 본인인증을 완료한 뒤, "데이터 불러오기"를 눌러주세요.';
+    }catch(err){
+      console.error(err);
+      alert('간편인증 시작에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+      statusEl.textContent = '간편인증 시작 실패';
+    }
+  });
+
+  btnFetch.addEventListener('click', async ()=>{
+    try{
+      if(!NHIS_TX_ID){ alert('TxId가 없습니다. 간편인증을 먼저 시작하고 인증 완료 후 시도하세요.'); return; }
+      statusEl.textContent = '건강검진 데이터를 불러오는 중...';
+      const now = new Date();
+      const fy = String(now.getFullYear()-9), ty = String(now.getFullYear());
+      const rsp = await fetch('/api/nhis/health-check/fetch', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ txId: NHIS_TX_ID, fromYear: fy, toYear: ty })
+      });
+      if(!rsp.ok) throw new Error('불러오기 실패');
+      const data = await rsp.json();
+      const exam = data?.exam_date || '';
+      const items = Array.isArray(data?.items) ? data.items : [];
+      preview.style.display = 'block';
+      preview.innerHTML = `
+        <div style="font-weight:600">검진일자: ${exam || '-'}</div>
+        <ul style="margin:6px 0 0 18px">${items.slice(0,6).map(it=>`<li>${(it.name||'-')} : ${(it.value||'-')} ${(it.unit||'')}</li>`).join('')}</ul>
+        ${items.length>6 ? `<div class="muted" style="margin-top:6px">외 ${items.length-6}개 항목</div>` : '' }
+      `;
+      statusEl.textContent = items.length ? '건강검진 데이터가 연결되었습니다.' : '최근 10년 데이터가 없거나 항목이 비어 있습니다.';
+      btnNext.style.pointerEvents = 'auto';
+      btnNext.style.opacity = '1';
+      btnNext.setAttribute('aria-disabled','false');
+    }catch(err){
+      console.error(err);
+      alert('데이터 불러오기에 실패했습니다. 인증 완료 여부를 확인한 뒤 다시 시도해 주세요.');
+      statusEl.textContent = '불러오기 실패';
+    }
+  });
   </script>
 </body>
 </html>

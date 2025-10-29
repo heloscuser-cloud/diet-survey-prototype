@@ -517,7 +517,7 @@ def login_verify(request: Request, t: str = Form(...), code: str = Form(...), se
         session.commit()
         session.refresh(user)
    
-    resp = RedirectResponse(url="/info", status_code=303)  # 로그인 → 인적정보 → 설문
+    resp = RedirectResponse(url="/nhis", status_code=303)  # 로그인 → NHIS 조회 → info
     SECURE_COOKIE = bool(int(os.getenv("SECURE_COOKIE", "1")))
     resp.set_cookie(
         AUTH_COOKIE_NAME,
@@ -1223,6 +1223,7 @@ def survey_finish(request: Request,
 
     # DB에는 깔끔하게 번호만 저장
     normalized_payload = {"answers_indices": answers_indices}
+    resp = session.get(Respondent, respondent_id)
 
     nhis = request.session.get("nhis_latest")
     if nhis:
@@ -1237,7 +1238,7 @@ def survey_finish(request: Request,
         score=None
     )
     session.add(sr)
-    resp = session.get(Respondent, respondent_id)
+    
     if resp:
         resp.status = "submitted"
         session.add(resp)
@@ -1430,14 +1431,10 @@ async def admin_export_xlsx(
 from fastapi import Body
 
 @app.post("/api/nhis/auth/start")
-def nhis_auth_start(payload: dict = Body(...)):
+def nhis_auth_start(payload: dict = Body(...), request: Request = None):
     """
     요청 JSON 예:
-    {
-      "name": "홍길동",
-      "phone": "01012345678",
-      "birth": "19900307"  // YYYYMMDD
-    }
+    { "name": "홍길동", "phone": "01012345678", "birth": "19900307" }
     """
     try:
         name  = (payload.get("name")  or "").strip()
@@ -1446,14 +1443,26 @@ def nhis_auth_start(payload: dict = Body(...)):
         if not (name and phone and birth):
             raise HTTPException(status_code=400, detail="name/phone/birth는 필수입니다.")
         rsp = TILKO.nhis_simpleauth_request(name, phone, birth)
-        # rsp 안의 TxId(또는 동등 값)를 프런트/DB에 전달/저장해 두었다가,
-        # 사용자가 인증(패스/카카오/페이코 등) 완료한 뒤 /fetch에서 사용.
-        return rsp
+
+        # ── TxId 추출(응답 형태 다양성 대비)
+        tx = None
+        if isinstance(rsp, dict):
+            res = rsp.get("Result") if isinstance(rsp.get("Result"), dict) else {}
+            tx = res.get("TxId") or res.get("TxID") or rsp.get("TxId") or rsp.get("TxID")
+        if request is not None and tx:
+            request.session["nhis_tx"] = tx
+
+        # 프런트가 쉽게 쓰도록 표준화 키로 돌려줌
+        out = dict(rsp)
+        if tx is not None:
+            out["txId"] = tx
+        return out
     except TilkoError as e:
         raise HTTPException(502, f"TILKO error: {e}")
     except Exception as e:
         raise HTTPException(500, f"Internal error: {e}")
-
+    
+    
 def _pick_latest_general_checkup(tilko_result: dict) -> dict | None:
     """
     Tilko 응답에서 '최근 10년 중 가장 최근의 일반검진 1건'만 골라서
@@ -1537,23 +1546,24 @@ def _pick_latest_general_checkup(tilko_result: dict) -> dict | None:
 def nhis_health_check_fetch(payload: dict = Body(...), request: Request = None):
     """
     요청 JSON 예:
-    {
-      "txId": "간편인증 시작 응답에서 받은 TxId",
-      "fromYear": "2016",
-      "toYear":   "2025"
-    }
-    응답: { exam_date, items: [{name, value, unit, ref}, ...], raw: {...최신원본조각...} }
+    { "txId": "...", "fromYear": "2016", "toYear": "2025" }
     """
     try:
         tx  = (payload.get("txId") or "").strip()
+        if not tx and request is not None:
+            tx = (request.session.get("nhis_tx") or "").strip()
+
         fy  = (payload.get("fromYear") or "2015").strip()
         ty  = (payload.get("toYear")   or "2025").strip()
         if not tx:
-            raise HTTPException(status_code=400, detail="txId는 필수입니다.")
+            raise HTTPException(status_code=400, detail="txId가 없습니다. 간편인증을 먼저 완료하세요.")
+
         tilko_rsp = TILKO.nhis_healthcheck_after_auth(tx, fy, ty)
         picked = _pick_latest_general_checkup(tilko_rsp)
-        # 세션에 저장해서 이후 폼 제출 시 서버가 꺼내 쓰게 함
-        request.session["nhis_latest"] = picked or {"exam_date": "", "items": [], "raw": tilko_rsp}
+
+        if request is not None:
+            request.session["nhis_latest"] = picked or {"exam_date": "", "items": [], "raw": tilko_rsp}
+
         return picked or {"exam_date": "", "items": [], "raw": tilko_rsp}
     except TilkoError as e:
         raise HTTPException(502, f"TILKO error: {e}")
