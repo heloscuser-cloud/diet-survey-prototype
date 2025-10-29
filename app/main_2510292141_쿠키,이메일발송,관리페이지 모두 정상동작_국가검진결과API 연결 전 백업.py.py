@@ -42,8 +42,6 @@ import secrets
 import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from app.tilko.client import TilkoClient, TilkoError
-
 
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret")
 ADMIN_USER = os.environ.get("ADMIN_USER")
@@ -107,9 +105,6 @@ engine = create_engine(DATABASE_URL, echo=False)
 
 
 app = FastAPI(title="Diet Survey Prototype")
-
-TILKO = TilkoClient(api_key=os.getenv("TILKO_API_KEY", ""), host=os.getenv("TILKO_API_HOST"))
-
 
 app.mount("/static", StaticFiles(directory=os.path.join(ROOT_DIR, "app", "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(ROOT_DIR, "app", "templates"))
@@ -1399,143 +1394,6 @@ async def admin_export_xlsx(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="responses.xlsx"'}
     )
-
-
-# ============================================================
-# NHIS (Tilko) - 간편인증 시작 + 인증 후 건강검진 조회 (최신 1건만)
-# ============================================================
-
-from fastapi import Body
-
-@app.post("/api/nhis/auth/start")
-def nhis_auth_start(payload: dict = Body(...)):
-    """
-    요청 JSON 예:
-    {
-      "name": "홍길동",
-      "phone": "01012345678",
-      "birth": "19900307"  // YYYYMMDD
-    }
-    """
-    try:
-        name  = (payload.get("name")  or "").strip()
-        phone = (payload.get("phone") or "").strip()
-        birth = (payload.get("birth") or "").strip()
-        if not (name and phone and birth):
-            raise HTTPException(status_code=400, detail="name/phone/birth는 필수입니다.")
-        rsp = TILKO.nhis_simpleauth_request(name, phone, birth)
-        # rsp 안의 TxId(또는 동등 값)를 프런트/DB에 전달/저장해 두었다가,
-        # 사용자가 인증(패스/카카오/페이코 등) 완료한 뒤 /fetch에서 사용.
-        return rsp
-    except TilkoError as e:
-        raise HTTPException(502, f"TILKO error: {e}")
-    except Exception as e:
-        raise HTTPException(500, f"Internal error: {e}")
-
-def _pick_latest_general_checkup(tilko_result: dict) -> dict | None:
-    """
-    Tilko 응답에서 '최근 10년 중 가장 최근의 일반검진 1건'만 골라서
-    { exam_date, items: [{name, value, unit, ref}], raw: {...원본조각...} } 형태로 반환.
-    (응답 스키마 확정 전이므로, 가능한 키 패턴을 넓게 커버하도록 작성)
-    """
-    data = tilko_result or {}
-    res  = data.get("Result") if isinstance(data, dict) else {}
-    # 후보 리스트를 가능한 키들에서 추출
-    candidates = None
-    for key in ("HealthCheckList", "Checks", "List", "Items", "Data"):
-        val = res.get(key) if isinstance(res, dict) else None
-        if isinstance(val, list) and val:
-            candidates = val
-            break
-    if not candidates:
-        return None
-
-    def parse_date_any(x):
-        from datetime import datetime
-        if not x: return None
-        for fmt in ("%Y-%m-%d", "%Y%m%d", "%Y.%m.%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S"):
-            try: return datetime.strptime(str(x)[:len(fmt)], fmt)
-            except: pass
-        return None
-
-    # 일반검진만 필터링(필드명이 확정되면 여길 조정)
-    def is_general(row: dict) -> bool:
-        text = " ".join([str(row.get(k, "")) for k in ("Type","CheckupType","Category","검진구분","구분")]).lower()
-        return ("일반" in text) or ("general" in text) or (text == "")
-
-    rows = [r for r in candidates if isinstance(r, dict) and is_general(r)]
-    if not rows:
-        rows = [r for r in candidates if isinstance(r, dict)]  # 일반 없으면 전체 중에서
-
-    # 최신 1건 선택(검사일자/접수일 등에서 날짜를 추출)
-    def row_date(r: dict):
-        for k in ("ExamDate","CheckupDate","검사일자","검진일자","수검일자","Date","Created","CreateDt"):
-            d = parse_date_any(r.get(k))
-            if d: return d
-        return None
-
-    rows.sort(key=lambda r: row_date(r) or parse_date_any("1900-01-01"), reverse=True)
-    latest = rows[0] if rows else None
-    if not latest: return None
-
-    # 항목/결과 파싱(가능 키 스펙트럼)
-    # 행 내부의 항목 리스트가 따로 있을 수도 있고(예: Details, Items),
-    # 행 자체가 이미 항목 1개일 수도 있어 보편적으로 처리
-    items_src = None
-    for k in ("Details","Items","Results","검사항목"):
-        v = latest.get(k)
-        if isinstance(v, list) and v:
-            items_src = v
-            break
-    items = []
-    if items_src:
-        for it in items_src:
-            if not isinstance(it, dict): continue
-            name  = it.get("ItemName") or it.get("Name") or it.get("항목명") or ""
-            value = it.get("Result")   or it.get("Value") or it.get("결과")   or ""
-            unit  = it.get("Unit")     or it.get("단위")  or ""
-            ref   = it.get("Ref")      or it.get("Reference") or it.get("참고치") or ""
-            items.append({"name": str(name), "value": str(value), "unit": str(unit), "ref": str(ref)})
-    else:
-        # latest가 이미 '한 항목'일 가능성
-        name  = latest.get("ItemName") or latest.get("Name") or latest.get("항목명") or ""
-        value = latest.get("Result")   or latest.get("Value") or latest.get("결과")   or ""
-        unit  = latest.get("Unit")     or latest.get("단위")  or ""
-        ref   = latest.get("Ref")      or latest.get("Reference") or latest.get("참고치") or ""
-        if any([name, value, unit, ref]):
-            items.append({"name": str(name), "value": str(value), "unit": str(unit), "ref": str(ref)})
-
-    # 대표 날짜 뽑기
-    exam_date = row_date(latest)
-    exam_date_str = exam_date.strftime("%Y-%m-%d") if exam_date else ""
-
-    return {"exam_date": exam_date_str, "items": items, "raw": latest}
-
-@app.post("/api/nhis/health-check/fetch")
-def nhis_health_check_fetch(payload: dict = Body(...)):
-    """
-    요청 JSON 예:
-    {
-      "txId": "간편인증 시작 응답에서 받은 TxId",
-      "fromYear": "2016",
-      "toYear":   "2025"
-    }
-    응답: { exam_date, items: [{name, value, unit, ref}, ...], raw: {...최신원본조각...} }
-    """
-    try:
-        tx  = (payload.get("txId") or "").strip()
-        fy  = (payload.get("fromYear") or "2015").strip()
-        ty  = (payload.get("toYear")   or "2025").strip()
-        if not tx:
-            raise HTTPException(status_code=400, detail="txId는 필수입니다.")
-        tilko_rsp = TILKO.nhis_healthcheck_after_auth(tx, fy, ty)
-        picked = _pick_latest_general_checkup(tilko_rsp)
-        return picked or {"exam_date": "", "items": [], "raw": tilko_rsp}
-    except TilkoError as e:
-        raise HTTPException(502, f"TILKO error: {e}")
-    except Exception as e:
-        raise HTTPException(500, f"Internal error: {e}")
-
 
 
 @app.get("/_routes")
