@@ -1443,6 +1443,14 @@ def nhis_auth_start(payload: dict = Body(...), request: Request = None):
         if not (name and phone and birth):
             raise HTTPException(status_code=400, detail="name/phone/birth는 필수입니다.")
         rsp = TILKO.nhis_simpleauth_request(name, phone, birth)
+        
+        # 디버그: 응답 요약 로그
+        try:
+            print("[NHIS][AUTH][RSP-RAW]", {k: type(v).__name__ for k,v in (rsp or {}).items()})
+            print("[NHIS][AUTH][RSP-JSON]", str(rsp)[:1000])
+        except Exception:
+            pass
+
 
         # ── TxId 추출(응답 형태 다양성 대비)
         tx = None
@@ -1569,6 +1577,16 @@ def nhis_health_check_fetch(payload: dict = Body(...), request: Request = None):
         raise HTTPException(502, f"TILKO error: {e}")
     except Exception as e:
         raise HTTPException(500, f"Internal error: {e}")
+
+
+#Tilko 공개키 확인용 헬스 체크 라우트
+@app.get("/debug/tilko/public-key")
+def tilko_public_key_debug():
+    try:
+        pk = TILKO._ensure_public_key()
+        return {"ok": True, "publicKeyLen": len(pk)}
+    except Exception as e:
+        return {"ok": False, "error": repr(e)}
 
 
 

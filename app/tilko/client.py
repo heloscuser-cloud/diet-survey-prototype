@@ -55,6 +55,7 @@ class TilkoClient:
         return base64.b64encode(enc).decode("utf-8")
 
     def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        import traceback
         aes_key = os.urandom(16)
         enc_key = self._rsa_encrypt_aes_key(aes_key)
 
@@ -64,7 +65,6 @@ class TilkoClient:
             "ENC-KEY": enc_key,
         }
 
-        # payload 내 "__encrypt__" 배열에 명시된 키만 AES 암호화
         enc_fields = payload.get("__encrypt__", [])
         body = {
             k: (self._aes_encrypt_cbc_zero_iv(aes_key, v) if k in enc_fields else v)
@@ -72,13 +72,37 @@ class TilkoClient:
         }
 
         url = f"{self.host}{path}"
-        r = requests.post(url, headers=headers, json=body, timeout=25)
-        r.raise_for_status()
-        data = r.json()
-        # Tilko API 에러 포맷 방어
-        if isinstance(data, dict) and data.get("Status") not in (None, "OK"):
-            raise TilkoError(f"TILKO API error: {data}")
-        return data
+
+        # --- 디버그: 요청 요약(민감정보 마스킹) ---
+        try:
+            masked_headers = dict(headers)
+            if "API-KEY" in masked_headers:
+                masked_headers["API-KEY"] = masked_headers["API-KEY"][:6] + "****"
+            print("[TILKO][REQ]", url, "hdr=", masked_headers, "enc_fields=", enc_fields, "keys=", list(body.keys()))
+        except Exception:
+            pass
+
+        try:
+            r = requests.post(url, headers=headers, json=body, timeout=25)
+            print("[TILKO][RES]", r.status_code)
+            r.raise_for_status()
+            data = r.json()
+            # Tilko 포맷에 따라 Status 체크(없으면 OK로 간주)
+            if isinstance(data, dict) and data.get("Status") not in (None, "OK"):
+                print("[TILKO][ERR] payload:", data)
+                raise TilkoError(f"TILKO API error: {data}")
+            return data
+        except Exception as e:
+            # HTTP 오류/타임아웃/JSON 파싱 문제 모두 여기로
+            try:
+                print("[TILKO][EXC]", repr(e))
+                if 'r' in locals():
+                    print("[TILKO][RES-TEXT]", getattr(r, "text", "")[:2000])
+            except Exception:
+                pass
+            traceback.print_exc()
+            raise
+
 
     # ---------- 공개 API ----------
     def nhis_simpleauth_request(self, name: str, phone: str, birth_yyyymmdd: str) -> Dict[str, Any]:
