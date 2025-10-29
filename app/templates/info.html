@@ -41,7 +41,7 @@ input, select, button { box-sizing: border-box; } /* 패딩 포함 폭 계산 */
          let n=this.value.replace(/[^0-9]/g,'').slice(0,2);
          if(n===''){ this.value=''; autoNext(this,'bd_d',2); return; }
          let num=parseInt(n,10);
-         if(num<1){ n='1'; } else if(num>12){ n='12'; }
+         if(num<=0){ n='0'; } else if(num>12){ n='12'; }
          this.value=n; 
          if(n.length===2){ autoNext(this,'bd_d',2); }
        " />

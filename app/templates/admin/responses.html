@@ -203,7 +203,7 @@ table thead th, table tbody td { text-align: center !important; }
         {% if p == page %}
           <span>{{ p }}</span>
         {% else %}
-          <a href="/admin/responses?page={{ p }}&page_size={{ page_size or '50' }}&from={{ from }}&to={{ to }}&status={{ status }}&q={{ q }}&at={{ admin_at }}">{{ p }}</a>
+<a href="/admin/responses?page={{ p }}&page_size={{ page_size or '50' }}&from={{ from }}&to={{ to }}&status={{ status }}&q={{ q }}">{{ p }}</a>
         {% endif %}
       {% endfor %}
     {% endif %}
@@ -213,36 +213,23 @@ table thead th, table tbody td { text-align: center !important; }
 
 <script>
 
-  // 날짜 유틸
-  function z(n){return String(n).padStart(2,'0')}
-  function fmt(d){return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`}
-  function getDates(){const f=document.querySelector('input[name=from]');const t=document.querySelector('input[name=to]');return [f,t]}
-  function shiftDays(n){let [f,t]=getDates();let fd=f.value?new Date(f.value):new Date();let td=t.value?new Date(t.value):new Date();fd.setDate(fd.getDate()+n);td.setDate(td.getDate()+n);f.value=fmt(fd);t.value=fmt(td)}
-  function setToday(){let [f,t]=getDates();let d=new Date();f.value=fmt(d);t.value=fmt(d)}
-  function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.setDate(td.getDate()-6);f.value=fmt(fd);t.value=fmt(td)}
+// 날짜 유틸 (그대로 유지)
+function z(n){return String(n).padStart(2,'0')}
+function fmt(d){return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`}
+function getDates(){const f=document.querySelector('input[name=from]');const t=document.querySelector('input[name=to]');return [f,t]}
+function shiftDays(n){let [f,t]=getDates();let fd=f.value?new Date(f.value):new Date();let td=t.value?new Date(t.value):new Date();fd.setDate(fd.getDate()+n);td.setDate(td.getDate()+n);f.value=fmt(fd);t.value=fmt(td)}
+function setToday(){let [f,t]=getDates();let d=new Date();f.value=fmt(d);t.value=fmt(d)}
+function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.setDate(td.getDate()-6);f.value=fmt(fd);t.value=fmt(td)}
 
-  // 검색 폼 → URL에 at 자동 부착
-  (function patchSearchForm(){
-    const f = document.getElementById("searchForm");
-    if (!f) return;
-    f.addEventListener("submit", function(e){
-      try{
-        const u = new URL(f.action || location.href, location.origin);
-        const fd = new FormData(f);
-        for (const [k,v] of fd.entries()) { if (k) u.searchParams.set(k, v); }
-        u.searchParams.set("at", ADMIN_AT);
-        e.preventDefault();
-        window.location.assign(u.toString());
-      }catch(err){ console.warn("search at attach failed", err); }
-    });
-  })();
+// (교체) 검색 폼: 기본 GET 제출만
+(function(){
+  const f = document.getElementById("searchForm");
+  if (!f) return;
+  f.addEventListener("submit", function(){
+    // hidden page=1은 그대로, 추가 작업 없음
+  });
+})();
 
-  // POST 폼들에 at hidden 자동 부착
-  function ensureAtHidden(form){
-    let hid = form.querySelector('input[name="at"]');
-    if (!hid) { hid = document.createElement('input'); hid.type='hidden'; hid.name='at'; form.appendChild(hid); }
-    hid.value = ADMIN_AT;
-  }
   function getSelectedIds(){
     return Array.from(document.querySelectorAll('.rowChk:checked')).map(el=>el.value).filter(Boolean);
   }
@@ -251,7 +238,6 @@ table thead th, table tbody td { text-align: center !important; }
     if(ids.length===0){ alert('선택된 항목이 없습니다.'); return; }
     const f = document.getElementById('acceptForm');
     document.getElementById('acceptIds').value = ids.join(',');
-    ensureAtHidden(f);
     f.submit();
   }
   function bulkXlsx(){
@@ -259,7 +245,6 @@ table thead th, table tbody td { text-align: center !important; }
     if(ids.length===0){ alert('선택된 항목이 없습니다.'); return; }
     const f = document.getElementById('xlsxForm');
     document.getElementById('xlsxIds').value = ids.join(',');
-    ensureAtHidden(f);
     f.submit();
   }
   function toggleAll(master){
@@ -276,18 +261,6 @@ table thead th, table tbody td { text-align: center !important; }
     });
   });
 
-  // 모든 /admin/ 링크에 at이 없다면 자동 부착 (예방)
-  (function attachAtToLinks(){
-    const at = ADMIN_AT;
-    document.querySelectorAll('a[href^="/admin/"]').forEach(a=>{
-      const href = a.getAttribute('href'); if(!href) return;
-      try{
-        const u = new URL(href, location.origin);
-        if (!u.searchParams.get('at')) u.searchParams.set('at', at);
-        a.setAttribute('href', u.pathname + (u.search || '') + (u.hash || ''));
-      }catch(e){}
-    });
-  })();
 </script>
 </body>
 </html>
