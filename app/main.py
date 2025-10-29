@@ -4,6 +4,7 @@ from fastapi import (
     APIRouter, BackgroundTasks
 )
 from fastapi.staticfiles import StaticFiles
+import re
 from fastapi.templating import Jinja2Templates
 from fastapi.routing import APIRoute
 from fastapi.exception_handlers import http_exception_handler
@@ -621,6 +622,22 @@ def portal(request: Request, auth: str | None = Cookie(default=None, alias=AUTH_
         "request": request,
     })
 
+def _normalize_date_str(s: str) -> str | None:
+    """
+    'YYYY-M-D' 같이 들어와도 'YYYY-MM-DD'로 0패딩해서 돌려줍니다.
+    날짜 형식이 아니면 None.
+    """
+    s = (s or "").strip()
+    m = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", s)
+    if not m:
+        return None
+    y, mm, dd = m.groups()
+    try:
+        return f"{int(y):04d}-{int(mm):02d}-{int(dd):02d}"
+    except ValueError:
+        return None
+
+
 
 #---- 관리자 로그인 ----#
 
@@ -712,16 +729,34 @@ def admin_responses(
         .join(ReportFile, ReportFile.survey_response_id == SurveyResponse.id, isouter=True)
     )
 
-    # --- 검색어 필터 ---
+    # --- 검색어 필터 (생년월일 yyyy-mm-dd 지원) ---
     if q:
         like = f"%{q}%"
-        stmt = stmt.where(
-            (User.name_enc.ilike(like))
-            | (User.phone_hash.ilike(like))
-            | (SurveyResponse.answers_json.ilike(like))
-            | (ReportFile.filename.ilike(like))
-            | (func.to_char(Respondent.created_at, "YYYY-MM-DD").ilike(like))
-        )
+        q_birth = _normalize_date_str(q)
+
+        if q_birth:
+            # 정확한 일자 매칭(=) + 기존 like들
+            stmt = stmt.where(
+                (func.to_char(User.birth_date, "YYYY-MM-DD") == q_birth)
+                | (func.to_char(Respondent.birth_date, "YYYY-MM-DD") == q_birth)
+                | (User.name_enc.ilike(like))
+                | (User.phone_hash.ilike(like))
+                | (SurveyResponse.answers_json.ilike(like))
+                | (ReportFile.filename.ilike(like))
+                | (func.to_char(Respondent.created_at, "YYYY-MM-DD").ilike(like))
+            )
+        else:
+            # 일반 텍스트 검색: 생년월일도 부분검색 허용
+            stmt = stmt.where(
+                (User.name_enc.ilike(like))
+                | (User.phone_hash.ilike(like))
+                | (SurveyResponse.answers_json.ilike(like))
+                | (ReportFile.filename.ilike(like))
+                | (func.to_char(Respondent.created_at, "YYYY-MM-DD").ilike(like))
+                | (func.to_char(User.birth_date, "YYYY-MM-DD").ilike(like))
+                | (func.to_char(Respondent.birth_date, "YYYY-MM-DD").ilike(like))
+            )
+
 
     # --- 날짜 필터 ---
     def parse_date(s: Optional[str]):
@@ -890,13 +925,29 @@ def admin_responses_csv(
 
     if q:
         like = f"%{q}%"
-        stmt = stmt.where(
-            (User.name_enc.ilike(like)) |
-            (User.phone_hash.ilike(like)) |
-            (SurveyResponse.answers_json.ilike(like)) |
-            (ReportFile.filename.ilike(like)) |
-            (func.to_char(Respondent.created_at, 'YYYY-MM-DD').ilike(like))
-        )
+        q_birth = _normalize_date_str(q)
+
+        if q_birth:
+            stmt = stmt.where(
+                (func.to_char(User.birth_date, "YYYY-MM-DD") == q_birth)
+                | (func.to_char(Respondent.birth_date, "YYYY-MM-DD") == q_birth)
+                | (User.name_enc.ilike(like))
+                | (User.phone_hash.ilike(like))
+                | (SurveyResponse.answers_json.ilike(like))
+                | (ReportFile.filename.ilike(like))
+                | (func.to_char(Respondent.created_at, "YYYY-MM-DD").ilike(like))
+            )
+        else:
+            stmt = stmt.where(
+                (User.name_enc.ilike(like))
+                | (User.phone_hash.ilike(like))
+                | (SurveyResponse.answers_json.ilike(like))
+                | (ReportFile.filename.ilike(like))
+                | (func.to_char(Respondent.created_at, "YYYY-MM-DD").ilike(like))
+                | (func.to_char(User.birth_date, "YYYY-MM-DD").ilike(like))
+                | (func.to_char(Respondent.birth_date, "YYYY-MM-DD").ilike(like))
+            )
+
 
     try:
         min_score_i = int(min_score) if (min_score not in (None, "")) else None
