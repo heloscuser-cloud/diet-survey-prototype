@@ -376,6 +376,17 @@ def info_form(request: Request, auth: str | None = Cookie(default=None, alias=AU
         return RedirectResponse(url="/login", status_code=302)
     return templates.TemplateResponse("info.html", {"request": request})
 
+# -----------------------------------------------
+# NHIS 건강검진 조회 페이지 (info 전 단계)
+# -----------------------------------------------
+@app.get("/nhis")
+def nhis_page(request: Request):
+    return templates.TemplateResponse(
+        "nhis_fetch.html",    # 우리가 만든 새 HTML 파일
+        {"request": request, "next_url": "/info"}  # info 페이지로 이동하도록 next_url 전달
+    )
+    
+
 @app.get("/healthz")
 def healthz():
     return PlainTextResponse("ok", status_code=200)
@@ -1213,6 +1224,13 @@ def survey_finish(request: Request,
     # DB에는 깔끔하게 번호만 저장
     normalized_payload = {"answers_indices": answers_indices}
 
+    nhis = request.session.get("nhis_latest")
+    if nhis:
+        resp.nhis_exam_date = nhis.get("exam_date")          # 열 추가가 어렵다면 answers_json에 합쳐 저장해도 됨
+        resp.nhis_items_json = json.dumps(nhis.get("items"))  # TEXT 컬럼
+        # 필요 시 request.session.pop("nhis_latest", None)  # 한 번 쓰고 비우기
+
+
     sr = SurveyResponse(
         respondent_id=respondent_id,
         answers_json=json.dumps(normalized_payload, ensure_ascii=False),
@@ -1516,7 +1534,7 @@ def _pick_latest_general_checkup(tilko_result: dict) -> dict | None:
     return {"exam_date": exam_date_str, "items": items, "raw": latest}
 
 @app.post("/api/nhis/health-check/fetch")
-def nhis_health_check_fetch(payload: dict = Body(...)):
+def nhis_health_check_fetch(payload: dict = Body(...), request: Request = None):
     """
     요청 JSON 예:
     {
@@ -1534,6 +1552,8 @@ def nhis_health_check_fetch(payload: dict = Body(...)):
             raise HTTPException(status_code=400, detail="txId는 필수입니다.")
         tilko_rsp = TILKO.nhis_healthcheck_after_auth(tx, fy, ty)
         picked = _pick_latest_general_checkup(tilko_rsp)
+        # 세션에 저장해서 이후 폼 제출 시 서버가 꺼내 쓰게 함
+        request.session["nhis_latest"] = picked or {"exam_date": "", "items": [], "raw": tilko_rsp}
         return picked or {"exam_date": "", "items": [], "raw": tilko_rsp}
     except TilkoError as e:
         raise HTTPException(502, f"TILKO error: {e}")

@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"/>
+  <title>국가건강검진 데이터 조회</title>
+  <style>
+    :root { --bg:#f6f7fb; --card:#fff; --text:#111; --muted:#667085; --pri:#2563eb; --pri-weak:#e6efff; }
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;}
+    .container{max-width:720px;margin:0 auto;padding:20px;}
+    h1{font-size:20px;margin:4px 0 12px;}
+    p.muted{color:var(--muted);font-size:14px;margin:4px 0 16px;}
+    .card{background:var(--card);border-radius:14px;box-shadow:0 6px 20px rgba(2,6,23,0.05);padding:16px;}
+    .row{display:flex;flex-direction:column;gap:8px;}
+    .row-inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+    label{font-size:14px;color:#1f2937;}
+    input{width:100%;padding:12px;border:1px solid #e5e7eb;border-radius:10px;font-size:16px;box-sizing:border-box}
+    input::placeholder{color:#9ca3af}
+    .w-year{width:9ch} .w-mm,.w-dd{width:5.5ch}
+    .btn{appearance:none;border:0;border-radius:12px;padding:13px 16px;font-weight:600;font-size:16px;cursor:pointer}
+    .btn:disabled{opacity:.45;cursor:not-allowed}
+    .btn-primary{background:var(--pri);color:#fff}
+    .btn-secondary{background:#eef2ff;color:#1e293b}
+    .btn-text{background:transparent;color:var(--pri);padding:10px}
+    .stack{display:flex;gap:10px;flex-wrap:wrap}
+    .stack .btn{flex:1}
+    .preview{background:var(--pri-weak);border-radius:12px;padding:10px;margin-top:8px}
+    .hr{height:1px;background:#eee;margin:16px 0}
+    .footer-actions{position:sticky;bottom:0;left:0;right:0;background:linear-gradient(to top, rgba(246,247,251,.95), rgba(246,247,251,0));padding:16px 0 8px}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>국가건강검진 데이터 조회</h1>
+    <p class="muted">휴대폰 본인인증을 먼저 진행한 뒤 “데이터 불러오기”를 누르면, 최근 10년 중 <b>가장 최근 일반검진 1건</b>을 자동으로 연결합니다.</p>
+
+    <!-- 기본 정보 -->
+    <div class="card" style="margin-bottom:14px">
+      <div class="row">
+        <div>
+          <label for="name">이름</label>
+          <input id="name" type="text" placeholder="홍길동" value="{{ user_name or '' }}">
+        </div>
+        <div>
+          <label for="phone">휴대폰 번호</label>
+          <input id="phone" type="tel" inputmode="numeric" placeholder="01012345678" value="{{ user_phone or '' }}">
+        </div>
+        <div>
+          <label>생년월일</label>
+          <div class="row-inline">
+            <input id="bd_y" class="w-year" inputmode="numeric" maxlength="4" placeholder="YYYY" value="{{ birth_y or '' }}">
+            <input id="bd_m" class="w-mm"   inputmode="numeric" maxlength="2" placeholder="MM"   value="{{ birth_m or '' }}">
+            <input id="bd_d" class="w-dd"   inputmode="numeric" maxlength="2" placeholder="DD"   value="{{ birth_d or '' }}">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 간편인증/불러오기 -->
+    <div class="card">
+      <div class="stack">
+        <button id="btnStart" class="btn btn-primary">간편인증 시작</button>
+        <button id="btnFetch" class="btn btn-secondary" disabled>인증 완료 후 데이터 불러오기</button>
+      </div>
+      <p id="status" class="muted" style="margin-top:10px">간편인증을 시작한 뒤, 안내에 따라 휴대폰에서 인증을 완료하세요.</p>
+      <div id="preview" class="preview" style="display:none"></div>
+    </div>
+
+    <div class="footer-actions">
+      <div class="stack">
+        <a id="btnSkip" class="btn btn-text" href="{{ next_url or '/info' }}">건너뛰고 계속</a>
+        <a id="btnNext" class="btn btn-primary" href="{{ next_url or '/info' }}" aria-disabled="true" style="pointer-events:none;opacity:.5">다음(정보 입력으로)</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 숫자만 허용 & 범위 보정(월/일)
+    function onlyDigits(v){ return (v||'').replace(/[^0-9]/g,''); }
+    const z2 = (n)=>String(n).padStart(2,'0');
+
+    function getBirth(){
+      const y = document.getElementById('bd_y').value.trim();
+      let m = onlyDigits(document.getElementById('bd_m').value).slice(0,2);
+      let d = onlyDigits(document.getElementById('bd_d').value).slice(0,2);
+      if(m){ let mm = Math.min(Math.max(parseInt(m,10),1),12); m = String(mm); }
+      if(d){ let dd = Math.min(Math.max(parseInt(d,10),1),31); d = String(dd); }
+      document.getElementById('bd_m').value = m;
+      document.getElementById('bd_d').value = d;
+      if(!(y && m && d)) return null;
+      return y + z2(m) + z2(d); // YYYYMMDD
+    }
+
+    document.getElementById('phone').addEventListener('input', e=>{
+      e.target.value = onlyDigits(e.target.value).slice(0,11);
+    });
+    document.getElementById('bd_y').addEventListener('input', e=>{
+      e.target.value = onlyDigits(e.target.value).slice(0,4);
+    });
+    document.getElementById('bd_m').addEventListener('input', e=>{
+      e.target.value = onlyDigits(e.target.value).slice(0,2);
+    });
+    document.getElementById('bd_d').addEventListener('input', e=>{
+      e.target.value = onlyDigits(e.target.value).slice(0,2);
+    });
+
+    const $ = (sel)=>document.querySelector(sel);
+    const btnStart = $('#btnStart');
+    const btnFetch = $('#btnFetch');
+    const btnNext  = $('#btnNext');
+    const statusEl = $('#status');
+    const preview  = $('#preview');
+
+    btnStart.addEventListener('click', async ()=>{
+      const name  = $('#name').value.trim();
+      const phone = $('#phone').value.trim();
+      const birth = getBirth();
+      if(!name || !phone || !birth){ alert('이름/휴대폰/생년월일을 모두 입력해 주세요.'); return; }
+      try{
+        statusEl.textContent = '간편인증을 요청하는 중...';
+        const rsp = await fetch('/api/nhis/auth/start', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ name, phone, birth })
+        });
+        if(!rsp.ok) throw new Error('간편인증 요청 실패');
+        await rsp.json(); // 사용: TxId 등 (서버/세션 보관 가정)
+        btnFetch.disabled = false;
+        statusEl.textContent = '휴대폰에서 본인인증을 완료한 뒤, "데이터 불러오기"를 눌러주세요.';
+      }catch(err){
+        console.error(err);
+        alert('간편인증 시작에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+        statusEl.textContent = '간편인증 시작 실패';
+      }
+    });
+
+    btnFetch.addEventListener('click', async ()=>{
+      try{
+        statusEl.textContent = '건강검진 데이터를 불러오는 중...';
+        const now = new Date();
+        const fy = String(now.getFullYear()-9), ty = String(now.getFullYear());
+        const rsp = await fetch('/api/nhis/health-check/fetch', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ txId: 'dummy', fromYear: fy, toYear: ty })
+        });
+        if(!rsp.ok) throw new Error('불러오기 실패');
+        const data = await rsp.json(); // { exam_date, items:[], raw:... }
+        const exam = data?.exam_date || '';
+        const items = Array.isArray(data?.items) ? data.items : [];
+        // 미리보기 & 다음버튼 활성화
+        preview.style.display = 'block';
+        preview.innerHTML = `
+          <div style="font-weight:600">검진일자: ${exam || '-'}</div>
+          <ul style="margin:6px 0 0 18px">${items.slice(0,6).map(it=>`<li>${(it.name||'-')} : ${(it.value||'-')} ${(it.unit||'')}</li>`).join('')}</ul>
+          ${items.length>6 ? `<div class="muted" style="margin-top:6px">외 ${items.length-6}개 항목</div>` : '' }
+        `;
+        statusEl.textContent = items.length ? '건강검진 데이터가 연결되었습니다.' : '최근 10년 데이터가 없거나 항목이 비어 있습니다.';
+        btnNext.style.pointerEvents = 'auto';
+        btnNext.style.opacity = '1';
+        btnNext.setAttribute('aria-disabled','false');
+      }catch(err){
+        console.error(err);
+        alert('데이터 불러오기에 실패했습니다. 인증 완료 여부를 확인한 뒤 다시 시도해 주세요.');
+        statusEl.textContent = '불러오기 실패';
+      }
+    });
+  </script>
+</body>
+</html>
