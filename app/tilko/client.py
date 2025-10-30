@@ -116,8 +116,8 @@ class TilkoClient:
             "Name": name,
             "CellphoneNo": phone,
             "Birth": birth_yyyymmdd,
-            "PrivateAuthType": private_auth_type,
-            "__encrypt__": ["Name", "CellphoneNo", "Birth"],
+            "PrivateAuthType": private_auth_type,  # 0~6
+            "__encrypt__": ["Name", "CellphoneNo", "Birth", "PrivateAuthType"],
         }
         return self._post("/api/v1.0/NhisSimpleAuth/SimpleAuthRequest", payload)
 
