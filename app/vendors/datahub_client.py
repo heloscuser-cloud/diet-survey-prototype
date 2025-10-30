@@ -4,6 +4,8 @@ import requests
 
 from Crypto.Cipher import AES
 
+print("[MOD] datahub_client loaded from", __file__, flush=True)
+
 class DatahubError(Exception):
     pass
 

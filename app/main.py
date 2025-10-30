@@ -41,6 +41,26 @@ import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from app.vendors.datahub_client import DatahubClient, DatahubError, pick_latest_general
+import logging, pathlib
+from app.vendors.datahub_client import DatahubClient, _crypto_selftest, encrypt_field
+
+# ★ 로그 설정(강제적용)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    force=True,
+)
+
+# ★ 현재 실행 파일 경로/버전 태그 찍기
+logging.info("[BOOT] main.py loaded from %s", __file__)
+logging.info("[BOOT] CWD=%s PYTHONPATH=%s", os.getcwd(), sys.path)
+logging.info("[BOOT] BUILD_TS=%s", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
+
+
+# --- DataHub Client ---
+print("[BOOT] creating DATAHUB client...")
+DATAHUB = DatahubClient()
+print("[BOOT] DATAHUB ready")
 
 
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret")
@@ -106,17 +126,30 @@ engine = create_engine(DATABASE_URL, echo=False)
 
 app = FastAPI(title="Diet Survey Prototype")
 
-# --- DataHub Client ---
-print("[BOOT] creating DATAHUB client...")
-DATAHUB = DatahubClient()
-print("[BOOT] DATAHUB ready")
-
-
 app.mount("/static", StaticFiles(directory=os.path.join(ROOT_DIR, "app", "static")), name="static")
 templates = Jinja2Templates(directory=os.path.join(ROOT_DIR, "app", "templates"))
 
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret")
 signer = TimestampSigner(APP_SECRET)
+
+# 임시 라우트 확인 필요
+@app.on_event("startup")
+def _on_startup():
+    global DATAHUB
+    logging.info("[BOOT] startup hook fired")
+    try:
+        if DATAHUB is None:
+            logging.info("[BOOT] startup: creating DATAHUB client again...")
+            DATAHUB = DatahubClient()
+        # selftest 추가 호출(개발 모드에서만)
+        app_env   = (os.getenv("APP_ENV", "dev") or "").strip().lower()
+        st_flag   = (os.getenv("DATAHUB_SELFTEST", "1") or "").strip()
+        logging.info("[BOOT] startup env: APP_ENV=%s SELFTEST=%s", app_env, st_flag)
+        if app_env != "prod" and st_flag == "1":
+            _crypto_selftest()
+    except Exception as e:
+        logging.exception("[BOOT] startup error: %r", e)
+
 
 @app.exception_handler(HTTPException)
 async def completed_redirect_handler(request: Request, exc: HTTPException):
@@ -1523,16 +1556,26 @@ def dh_nhis_result(payload: dict = Body(...), request: Request = None):
 
 
 #임시 디버그 라우트, 로그. 운영 시 삭제
+from fastapi.responses import JSONResponse
+
 @app.get("/debug/datahub-selftest")
 def debug_datahub_selftest():
     plain  = os.getenv("DATAHUB_SELFTEST_PLAIN", "")
     expect = os.getenv("DATAHUB_SELFTEST_EXPECT", "")
     got    = encrypt_field(plain) if plain else ""
+    return JSONResponse({"plain": plain, "got": got, "expect": expect, "match": (got == expect)})
+#임시 디버그 라우트, 로그. 운영 시 삭제
+@app.get("/debug/whoami")
+def debug_whoami():
     return JSONResponse({
-        "plain": plain,
-        "got": got,
-        "expect": expect,
-        "match": (got == expect)
+        "main_file": __file__,
+        "cwd": os.getcwd(),
+        "env": {
+            "APP_ENV": os.getenv("APP_ENV"),
+            "DATAHUB_SELFTEST": os.getenv("DATAHUB_SELFTEST"),
+            "DATAHUB_SELFTEST_PLAIN_set": bool(os.getenv("DATAHUB_SELFTEST_PLAIN")),
+            "DATAHUB_SELFTEST_EXPECT_set": bool(os.getenv("DATAHUB_SELFTEST_EXPECT")),
+        }
     })
 
 @app.get("/_routes")
