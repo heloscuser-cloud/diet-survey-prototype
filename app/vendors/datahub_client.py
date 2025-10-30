@@ -132,67 +132,6 @@ def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
     return key_bytes, iv
 
 
-    def _try_many_formats(s: str, want_len: int | None = None) -> Optional[bytes]:
-        if not s:
-            return None
-        # 1) normalized base64
-        try:
-            t = _normalize_b64(s)
-            b = base64.b64decode(t)
-            if (want_len is None) or (len(b) == want_len) or (want_len in (16, 24, 32) and len(b) in (16, 24, 32)):
-                return b
-        except Exception:
-            pass
-        # 2) hex
-        try:
-            b = bytes.fromhex(s)
-            if (want_len is None) or len(b) == want_len:
-                return b
-        except Exception:
-            pass
-        # 3) plain utf-8
-        try:
-            b = s.encode("utf-8")
-            if (want_len is None) or len(b) == want_len:
-                return b
-        except Exception:
-            pass
-        return None
-
-    # --- KEY ---
-    key_bytes = _try_many_formats(enc_key)
-    if key_bytes is None:
-        key_bytes = b""
-
-    # EncSpec 파싱
-    spec = (os.getenv("DATAHUB_ENC_SPEC", "") or "").strip().upper()
-    algo = spec.split("/")[0] if "/" in spec else spec
-    # '.../256' 같이 뒤에 비트수가 오는 형태도 지원
-    if ("256" in spec) or ("AES256" in algo):
-        key_bytes = (key_bytes[:32]).ljust(32, b"\x00")
-    elif ("128" in spec) or ("AES128" in algo) or ("AES" in algo):
-        key_bytes = (key_bytes[:16]).ljust(16, b"\x00")
-    else:
-        # 기본 32바이트로 보정
-        key_bytes = (key_bytes[:32]).ljust(32, b"\x00")
-
-
-    # --- IV ---
-    iv: Optional[bytes] = None
-    if "IV=" in spec:
-        iv_str = spec.split("IV=")[1].strip()
-        iv = _try_many_formats(iv_str, want_len=16)
-    else:
-        iv = _try_many_formats(iv_env, want_len=16)
-
-    if iv is None:
-        iv = b"\x00" * 16
-    elif len(iv) != 16:
-        iv = (iv[:16]).ljust(16, b"\x00")
-
-    return key_bytes, iv
-
-
 def encrypt_field(plain: str) -> str:
     """
     EncSpec/EncKey/IV에 따라 AES-CBC(+PKCS7/PKCS5)로 암호화 후 Base64 리턴.
