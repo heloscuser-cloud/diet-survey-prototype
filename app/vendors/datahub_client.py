@@ -165,10 +165,24 @@ class DatahubClient:
         raw_base = base or os.getenv("DATAHUB_API_BASE", "https://datahub-dev.scraping.co.kr")
         self.base = (raw_base or "").strip().rstrip("/")
         self.token = (token or os.getenv("DATAHUB_TOKEN", "")).strip()
-                # __init__ 끝나기 직전(마지막 return/raise 전에) 추가
-        if os.getenv("APP_ENV", "dev") != "prod" and os.getenv("DATAHUB_SELFTEST", "1") == "1":
+
+        # 🔍 init 진입 로그 (selftest 실행 조건/ENV 상태 확인)
+        app_env   = (os.getenv("APP_ENV", "dev") or "").strip().lower()
+        st_flag   = (os.getenv("DATAHUB_SELFTEST", "1") or "").strip()
+        st_plain  = os.getenv("DATAHUB_SELFTEST_PLAIN", "")
+        st_expect = os.getenv("DATAHUB_SELFTEST_EXPECT", "")
+        print("[ENC][INIT]",
+              "base=", repr(self.base),
+              "app_env=", app_env,
+              "selftest_flag=", st_flag,
+              "plain_set=", bool(st_plain),
+              "expect_set=", bool(st_expect))
+
+        # ✅ 토큰 유무와 관계없이 selftest 먼저 실행
+        if app_env != "prod" and st_flag == "1":
             _crypto_selftest()
-        
+
+        # 이후 토큰 검증
         if not self.token:
             raise DatahubError("DATAHUB_TOKEN is missing")
             

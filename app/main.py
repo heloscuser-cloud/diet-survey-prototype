@@ -4,6 +4,7 @@ from fastapi import (
     APIRouter, BackgroundTasks
 )
 from fastapi.staticfiles import StaticFiles
+from app.vendors.datahub_client import encrypt_field
 import re
 from fastapi.templating import Jinja2Templates
 from fastapi.routing import APIRoute
@@ -1518,11 +1519,21 @@ def dh_nhis_result(payload: dict = Body(...), request: Request = None):
     except Exception as e:
         raise HTTPException(500, f"Internal error: {e}")
 
-#임시 디버그 라우트 로그
-@app.get("/debug/nhis/session")
-def debug_nhis_session(request: Request):
-    return JSONResponse(request.session.get("nhis_latest") or {})
 
 @app.get("/_routes")
 def _routes():
     return [{"path": r.path, "methods": list(r.methods)} for r in app.routes if isinstance(r, APIRoute)]
+
+
+#임시 디버그 라우트, 로그. 운영 시 삭제
+@app.get("/debug/datahub-selftest")
+def debug_datahub_selftest():
+    plain  = os.getenv("DATAHUB_SELFTEST_PLAIN", "")
+    expect = os.getenv("DATAHUB_SELFTEST_EXPECT", "")
+    got    = encrypt_field(plain) if plain else ""
+    return JSONResponse({
+        "plain": plain,
+        "got": got,
+        "expect": expect,
+        "match": (got == expect)
+    })
