@@ -110,11 +110,13 @@ class TilkoClient:
         간편인증 시작: /api/v1.0/NhisSimpleAuth/SimpleAuthRequest
         - 문서 명세에 따라 [암호화] 항목만 __encrypt__에 넣을 것
         """
+
         payload = {
             "Name": name,
             "CellphoneNo": phone,
             "Birth": birth_yyyymmdd,
-            "__encrypt__": ["Name", "CellphoneNo", "Birth"],
+            "PrivateAuthType": private_auth_type,
+            "__encrypt__": ["Name","CellphoneNo","Birth","PrivateAuthType"],
         }
         return self._post("/api/v1.0/NhisSimpleAuth/SimpleAuthRequest", payload)
 
