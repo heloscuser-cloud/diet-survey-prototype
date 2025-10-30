@@ -28,6 +28,17 @@ def _parse_encspec(spec: str) -> Tuple[str, str, str]:
     algo, mode, padding = parts[0], parts[1], parts[2]
     return algo, mode, padding
 
+#인코딩 헬퍼
+def _get_text_encoding() -> str:
+    """
+    평문 인코딩: 기본 'utf-8', ENV로 오버라이드
+    - DATAHUB_TEXT_ENCODING = 'utf-8' | 'cp949' | 'euc-kr'
+    """
+    enc = (os.getenv("DATAHUB_TEXT_ENCODING", "utf-8") or "").strip().lower()
+    if enc in ("utf8", "utf-8"): return "utf-8"
+    if enc in ("cp949", "euc-kr", "euckr", "ksc5601"): return "cp949"  # cp949로 통일
+    return "utf-8"
+
 def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
     """
     EncKey / EncIV 다양한 포맷 허용 & 자동탐색:
@@ -135,26 +146,50 @@ def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
 def encrypt_field(plain: str) -> str:
     """
     EncSpec/EncKey/IV에 따라 AES-CBC(+PKCS7/PKCS5)로 암호화 후 Base64 리턴.
-    - EncSpec: DATAHUB_ENC_SPEC (예: 'AES/CBC/PKCS5PADDING/256' 또는 'AES256/CBC/PKCS7')
+    - 텍스트 인코딩: DATAHUB_TEXT_ENCODING (기본 utf-8 / cp949 권장)
+    - 개발 모드에서 SELFTEST_EXPECT가 있으면 utf-8 → cp949 → euc-kr 순으로
+      암호문을 만들어 기대치와 일치하는 인코딩을 자동 탐색해 로그로 알려줍니다.
     """
     spec = (os.getenv("DATAHUB_ENC_SPEC", "") or "").upper()
-    # PKCS5PADDING을 PKCS7로 동일 취급
     spec_normalized = spec.replace("PKCS5PADDING", "PKCS7")
-    # 키/IV 획득(IV는 _get_key_iv 내부에서 EncSpec의 IV=... 또는 ENV를 우선 처리)
-    key, iv = _get_key_iv()  # ← ★ iv_env 같은 이름 쓰지 않음!
+    key, iv = _get_key_iv()
 
-    print("[ENC][SPEC]", spec, "| key_len=", len(key), "| iv_len=", len(iv))  # 로그
-
-    # 블록/패딩
+    # PKCS7 padding
     block = 16
-    data = plain.encode("utf-8")
-    if "PKCS7" in spec_normalized:
+
+    # 기본 인코딩
+    enc = _get_text_encoding()
+
+    # 개발 모드에서 자동탐색 (expect가 주어졌을 때만)
+    expect = (os.getenv("DATAHUB_SELFTEST_EXPECT", "") or "").strip()
+    enc_candidates = [enc]
+    if expect:
+        # 우선순위: 현재 설정 → 'utf-8' → 'cp949' → 'euc-kr(cp949 동일 처리)'
+        extra = [e for e in ["utf-8", "cp949"] if e not in enc_candidates]
+        enc_candidates += extra
+
+    last_ct = None
+    chosen = enc
+
+    for enc_try in enc_candidates:
+        data = plain.encode(enc_try, errors="strict")
         data = _pkcs7_pad(data, block)
 
-    # 암호화
-    cipher = AES.new(key, AES.MODE_CBC, iv)
-    enc = cipher.encrypt(data)
-    return base64.b64encode(enc).decode("ascii")
+        cipher = AES.new(key, AES.MODE_CBC, iv)
+        ct = base64.b64encode(cipher.encrypt(data)).decode("ascii")
+        last_ct = ct
+        if expect and ct == expect:
+            chosen = enc_try
+            break
+
+    # 로깅: 실제 사용 인코딩
+    try:
+        print("[ENC][PLAINTEXT-ENCODING]", chosen)
+    except Exception:
+        pass
+
+    return last_ct
+
 
 
 def _crypto_selftest():

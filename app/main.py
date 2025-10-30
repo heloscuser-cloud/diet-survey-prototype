@@ -107,7 +107,9 @@ engine = create_engine(DATABASE_URL, echo=False)
 app = FastAPI(title="Diet Survey Prototype")
 
 # --- DataHub Client ---
+print("[BOOT] creating DATAHUB client...")
 DATAHUB = DatahubClient()
+print("[BOOT] DATAHUB ready")
 
 
 app.mount("/static", StaticFiles(directory=os.path.join(ROOT_DIR, "app", "static")), name="static")
