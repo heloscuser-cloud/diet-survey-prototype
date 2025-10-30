@@ -140,12 +140,22 @@ def encrypt_field(plain: str) -> str:
 
 def _crypto_selftest():
     """
-    공급사 포털 표본(PlainData → EncData)로 암호화가 맞는지 1회 점검.
-    ENV로 끄고 켤 수 있음.
+    공급사 포털에서 제공한 Plain/EncData 쌍으로 즉시 판정.
+    - DATAHUB_SELFTEST_PLAIN : 포털 PlainData (예: !Helo999어드민)
+    - DATAHUB_SELFTEST_EXPECT: 포털 EncData   (예: oXCcQ5Z0iINu+9Oi0u5/... )
     """
+    import os
+    plain  = os.getenv("DATAHUB_SELFTEST_PLAIN", "").strip()
+    expect = os.getenv("DATAHUB_SELFTEST_EXPECT", "").strip()
+
+    if not plain or not expect:
+        print("[ENC][SELFTEST] skipped (set DATAHUB_SELFTEST_PLAIN & DATAHUB_SELFTEST_EXPECT)")
+        return
+
     try:
-        ct = encrypt_field("!Kwic123테스트")
-        print("[ENC][SELFTEST]", ct)
+        got = encrypt_field(plain)
+        ok  = (got == expect)
+        print("[ENC][SELFTEST]", "OK" if ok else "FAIL", "| got=", got, "| expect=", expect)
     except Exception as e:
         print("[ENC][SELFTEST][ERR]", repr(e))
 
@@ -215,6 +225,15 @@ class DatahubClient:
         if tel in ("SKT", "S", "SK"): tel = "1"
         elif tel in ("KT",):           tel = "2"
         elif tel in ("LGU", "LGU+", "L"): tel = "3"
+
+
+        # 디버그: JUMIN 암호문 일부만 노출(앞 6글자만) 로그 꼭 지우기 ################
+        try:
+            _tmp_ct = encrypt_field(jumin_or_birth)
+            print("[ENC][JUMIN][LEN]", len(_tmp_ct), "| head=", _tmp_ct[:6], "***")
+        except Exception as _e:
+            print("[ENC][JUMIN][ERR]", repr(_e))
+
 
         payload = {
             "LOGINOPTION": str(login_option).strip(),
