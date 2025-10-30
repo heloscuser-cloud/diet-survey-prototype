@@ -4,6 +4,8 @@ from typing import Dict, Any, Optional
 from Crypto.Cipher import AES, PKCS1_v1_5
 from Crypto.PublicKey import RSA
 
+
+
 class TilkoError(RuntimeError):
     pass
 
@@ -105,18 +107,17 @@ class TilkoClient:
 
 
     # ---------- 공개 API ----------
-    def nhis_simpleauth_request(self, name: str, phone: str, birth_yyyymmdd: str) -> Dict[str, Any]:
+    def nhis_simpleauth_request(self, name: str, phone: str, birth_yyyymmdd: str, private_auth_type: str) -> Dict[str, Any]:
         """
         간편인증 시작: /api/v1.0/NhisSimpleAuth/SimpleAuthRequest
         - 문서 명세에 따라 [암호화] 항목만 __encrypt__에 넣을 것
         """
-
         payload = {
             "Name": name,
             "CellphoneNo": phone,
             "Birth": birth_yyyymmdd,
             "PrivateAuthType": private_auth_type,
-            "__encrypt__": ["Name","CellphoneNo","Birth","PrivateAuthType"],
+            "__encrypt__": ["Name", "CellphoneNo", "Birth"],
         }
         return self._post("/api/v1.0/NhisSimpleAuth/SimpleAuthRequest", payload)
 
