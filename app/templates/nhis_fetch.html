@@ -16,7 +16,6 @@
     label{font-size:14px;color:#1f2937;}
     input,select{width:100%;padding:12px;border:1px solid #e5e7eb;border-radius:10px;font-size:16px;box-sizing:border-box}
     input::placeholder{color:#9ca3af}
-    .w-year{width:9ch} .w-mm,.w-dd{width:5.5ch}
     .btn{appearance:none;border:0;border-radius:12px;padding:12px 16px;font-weight:600;font-size:16px;cursor:pointer;user-select:none}
     .btn:disabled{opacity:.45;cursor:not-allowed}
     .btn-primary{background:var(--pri);color:#fff}
@@ -40,16 +39,17 @@
           <select id="loginOption">
             <option value="" selected>-- 선택 --</option>
             <option value="0">카카오톡</option>
-            <option value="PASS">통신사 PASS</option>
+            <option value="3">통신사 PASS</option>
+            <!-- 필요 시: 1=삼성, 2=페이코, 4=KB, 5=네이버, 6=신한, 7=토스 -->
           </select>
         </div>
         <div id="telecomRow" style="display:none">
           <label>통신사(PASS 선택 시)</label>
           <select id="telecom">
             <option value="" selected>-- 선택 --</option>
-            <option value="SKT">SKT</option>
-            <option value="KT">KT</option>
-            <option value="LGU">LGU</option>
+            <option value="1">SKT</option>
+            <option value="2">KT</option>
+            <option value="3">LGU+</option>
           </select>
         </div>
         <div>
@@ -94,7 +94,7 @@
     $('#phone').addEventListener('input', e=> e.target.value = onlyDigits(e.target.value).slice(0,11));
     $('#juminOrBirth').addEventListener('input', e=> e.target.value = onlyDigits(e.target.value).slice(0,13));
 
-    // 로그인 옵션/통신사
+    // UI 요소
     let callbackId = null;
     const loginSel = $('#loginOption');
     const telecomRow = $('#telecomRow');
@@ -104,47 +104,58 @@
     const btnNext = $('#btnNext');
     const preview = $('#preview');
 
+    // 선택에 따라 통신사 노출 + 시작버튼 활성화
+    function validateStartEnabled(){
+      const hasLogin = !!loginSel.value;
+      const needTel = (loginSel.value === '3');
+      const telOk = !needTel || !!telecomSel.value;
+      btnStart.disabled = !(hasLogin && telOk);
+    }
     loginSel.addEventListener('change', ()=>{
-      const v = loginSel.value;
-      telecomRow.style.display = (v==='PASS') ? 'block' : 'none';
-      btnStart.disabled = (v === '');
+      telecomRow.style.display = (loginSel.value==='3') ? 'block' : 'none';
+      validateStartEnabled();
     });
+    telecomSel.addEventListener('change', validateStartEnabled);
 
     // Step1: 간편인증 시작
     btnStart.addEventListener('click', async ()=>{
-      const loginOption = loginSel.value;
-      const telecom = telecomSel.value;
-      const name = $('#name').value.trim();
+      const loginOption = loginSel.value;          // "0"~"7"
+      const telecom     = telecomSel.value;        // "1"/"2"/"3" (옵션)
+      const name  = $('#name').value.trim();
       const phone = $('#phone').value.trim();
-      const jb = $('#juminOrBirth').value.trim();
+      const jb    = $('#juminOrBirth').value.trim();
 
       if(!loginOption){ alert('간편인증 수단을 선택하세요.'); return; }
-      if(loginOption==='PASS' && !telecom){ alert('통신사를 선택하세요.'); return; }
+      if(loginOption==='3' && !telecom){ alert('통신사를 선택하세요.'); return; }
       if(!name || !phone || !jb){ alert('이름/휴대폰/생년월일(또는 주민번호)을 입력하세요.'); return; }
 
       setStatus('간편인증 요청 중...');
       try{
         const rsp = await fetch('/api/dh/simple/start', {
-          method:'POST', headers:{'Content-Type':'application/json'},
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
           body: JSON.stringify({
-            loginOption, telecom,
-            userName: name, hpNumber: phone, juminOrBirth: jb
+            loginOption,
+            telecom,
+            userName: name,
+            hpNumber: phone,
+            juminOrBirth: jb
           })
         });
         const data = await rsp.json();
-        if(!rsp.ok || (data.result && data.result!=='FAIL' && data.errCode && data.errCode!=='0001')){
-          // 공급사 응답 포맷 다양성 대비
-          console.warn('start raw:', data);
+
+        // errCode가 "0000"이면 즉시 성공 케이스일 수도 있고,
+        // "0001"이면 callbackId 받아서 complete 호출 필요
+        if(!rsp.ok){
+          setStatus('간편인증 시작 실패', 'err');
+          console.warn('start failed:', data);
+          alert('간편인증 시작에 실패했습니다.');
+          return;
         }
-        // 문서 예: FAIL + errCode 0001 와 함께 callbackId 제공(사용자 인증 진행)
-        callbackId = (data.data && data.data.callbackId) || null;
-        if(callbackId){
-          setStatus('휴대폰에서 인증을 완료한 뒤, "데이터 불러오기"를 눌러주세요.', 'ok');
-          btnComplete.disabled = false;
-        }else{
-          setStatus('간편인증을 시작했습니다. 잠시 후 "데이터 불러오기"를 눌러주세요.', 'ok');
-          btnComplete.disabled = false;
-        }
+
+        callbackId = (data && data.data && data.data.callbackId) || null;
+        btnComplete.disabled = false;
+        setStatus('휴대폰에서 인증을 완료한 뒤, "데이터 불러오기"를 눌러주세요.', 'ok');
       }catch(e){
         console.error(e);
         setStatus('간편인증 시작 실패', 'err');
@@ -152,35 +163,47 @@
       }
     });
 
-    // Step2: 완료(captcha)
+    // Step2: 완료(captcha) → 최신 일반검진 미리보기
     btnComplete.addEventListener('click', async ()=>{
       if(!callbackId){ alert('callbackId가 없습니다. Step1을 먼저 수행하세요.'); return; }
       setStatus('검진 데이터 불러오는 중...');
       try{
         const rsp = await fetch('/api/dh/simple/complete', {
-          method:'POST', headers:{'Content-Type':'application/json'},
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ callbackId, callbackType: 'SIMPLE' })
         });
         const data = await rsp.json();
         if(!rsp.ok){ throw new Error('complete failed'); }
 
-        // 미리보기(가능하면 최신 일반검진 1건)
-        const list = (data.data && data.data.CHECKUPLIST) || [];
-        const general = list.filter(x=> (x.CHECKUPKIND||'')==='일반')
-                            .sort((a,b)=> String(b.CHECKUPDATE||'').localeCompare(String(a.CHECKUPDATE||'')));
-        const latest = general[0];
-        preview.style.display = 'block';
-        preview.innerHTML = latest ? `
-          <div><b>검진일자</b> ${latest.CHECKUPDATE||'-'}</div>
-          <div><b>검진종류</b> ${latest.CHECKUPKIND||'-'}</div>
-          <div><b>검진기관</b> ${latest.CHECKUPORGAN||'-'}</div>
-          <div class="muted" style="margin-top:6px">상세항목은 제출 후 관리자에서 확인</div>
-        ` : `<div>최근 10년 일반검진 데이터가 없거나 조회되지 않았습니다.</div>`;
+        // 데이터허브 간편인증 응답: data.INCOMELIST[]
+        const list = (data && data.data && data.data.INCOMELIST) || [];
+        // 최신 정렬: GUNYEAR + GUNDATE("MM/DD")
+        const latest = list
+          .map(r=>{
+            const y = String(r.GUNYEAR||'').trim();
+            const md = String(r.GUNDATE||'').trim();
+            const [mm,dd] = (md.includes('/')? md.split('/') : ['01','01']);
+            return { raw:r, key: (y.length===4? (y+mm.padStart(2,'0')+dd.padStart(2,'0')) : '') };
+          })
+          .sort((a,b)=> b.key.localeCompare(a.key))[0];
 
-        setStatus('건강검진 데이터 연결 완료', 'ok');
-        btnNext.style.pointerEvents = 'auto';
-        btnNext.style.opacity = '1';
-        btnNext.setAttribute('aria-disabled','false');
+        preview.style.display = 'block';
+        if(latest && latest.raw){
+          const r = latest.raw;
+          const exam = (r.GUNYEAR||'') + '-' + String(r.GUNDATE||'').replace('/','-');
+          preview.innerHTML = `
+            <div><b>검진연/일자</b> ${exam || '-'}</div>
+            <div class="muted" style="margin-top:6px">상세항목은 제출 후 관리자에서 확인</div>
+          `;
+          setStatus('건강검진 데이터 연결 완료', 'ok');
+          btnNext.style.pointerEvents = 'auto';
+          btnNext.style.opacity = '1';
+          btnNext.setAttribute('aria-disabled','false');
+        }else{
+          preview.innerHTML = `<div>최근 10년 일반검진 데이터가 없거나 조회되지 않았습니다.</div>`;
+          setStatus('데이터가 없습니다.', 'err');
+        }
       }catch(e){
         console.error(e);
         setStatus('불러오기 실패', 'err');

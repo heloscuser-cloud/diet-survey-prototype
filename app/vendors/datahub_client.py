@@ -108,7 +108,7 @@ class DatahubClient:
         self.token = token or os.getenv("DATAHUB_TOKEN", "")
         if not self.token:
             raise DatahubError("DATAHUB_TOKEN is missing")
-
+        
     def _post(self, path: str, body: Dict[str, Any], timeout=25) -> Dict[str, Any]:
         url = f"{self.base}{path}"
         headers = {
@@ -120,24 +120,56 @@ class DatahubClient:
             data = r.json()
         except Exception:
             data = {"errCode": "HTTP", "errMsg": r.text, "result": "FAIL"}
+
+        # 응답 상태 코드 확인
         if r.status_code != 200:
             raise DatahubError(f"HTTP {r.status_code}: {data}")
+
+        # 🔍 디버그 로그 추가 (요청 경로, 필드키, 응답요약)
+        print("[DATAHUB][REQ]", path, list(body.keys()))
+        print("[DATAHUB][RSP]", data.get("errCode"), data.get("result"))
+
         return data
 
-    # --- 1) 간편인증 Step1: 로그인 옵션에 따라 요청
-    def simple_auth_start(self, login_option: str, user_name: str, hp_number: str, jumin_or_birth: str, telecom: str = "") -> Dict[str, Any]:
+    
+
+    def simple_auth_start(
+        self,
+        login_option: str,      # "0"=카카오, "1"=삼성, "2"=페이코, "3"=통신사, "4"=KB, "5"=네이버, "6"=신한, "7"=토스
+        user_name: str,
+        hp_number: str,         # "01012341234" 또는 "010-1234-1234" 모두 허용
+        jumin_or_birth: str,    # yyyyMMdd (가이드 문서에서 JUMIN이 '생년월일'로 정의)
+        telecom: str = ""       # "1"(SKT) / "2"(KT) / "3"(LGU+) - 통신사 인증 선택時 필수
+    ) -> Dict[str, Any]:
         """
-        /scrap/${*Simple} (문서 placeholder) → 실제 경로는 공급사 안내 값 사용
-        필드(문서 예): LOGINOPTION(0=카카오), TELECOMGUBUN(PASS時), HPNUMBER, USERNAME, JUMINNUM(암호화)
+        건강보험_건강검진결과 한눈에보기(간편인증)
+        POST /scrap/common/nhis/MedicalCheckupGlanceSimple
+        필드: LOGINOPTION, JUMIN(암호화), USERNAME, HPNUMBER, TELECOMGUBUN
         """
+        # 하이픈 허용
+        hp = hp_number.strip()
+
+        # 통신사 코드 보정: 영문 입력이 들어왔을 때 숫자코드로 치환
+        tel = (telecom or "").strip().upper()
+        if tel in ("SKT", "S", "SK"): tel = "1"
+        elif tel in ("KT",):           tel = "2"
+        elif tel in ("LGU", "LGU+", "L"): tel = "3"
+
         payload = {
-            "LOGINOPTION": login_option,
-            "TELECOMGUBUN": telecom or "",
-            "HPNUMBER": hp_number,
-            "USERNAME": user_name,
-            "JUMINNUM": encrypt_field(jumin_or_birth),  # 생년월일 8자리 혹은 주민번호 13자리
+            "LOGINOPTION": str(login_option).strip(),
+            "JUMIN":       encrypt_field(jumin_or_birth.strip()),  # ★ 가이드상 암호화 필수
+            "USERNAME":    user_name.strip(),
+            "HPNUMBER":    hp,
+            # TELECOMGUBUN은 통신사(=LOGINOPTION "3")일 때만 포함
         }
-        return self._post("/scrap/simple", payload)  # 실제 경로는 공급사에서 안내한 값으로 변경 필요
+        if payload["LOGINOPTION"] == "3":
+            if tel not in {"1","2","3"}:
+                raise DatahubError("통신사 간편인증은 TELECOMGUBUN(1/2/3)이 필요합니다.")
+            payload["TELECOMGUBUN"] = tel
+
+        # ★ 가이드에 나온 ‘정식’ 경로로 호출
+        return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", payload)
+
 
     # --- 2) 간편인증 Step2: captcha(최종 완료 콜)
     def simple_auth_complete(self, callback_id: str, callback_type: str = "SIMPLE", **kwargs) -> Dict[str, Any]:
@@ -162,25 +194,31 @@ class DatahubClient:
 
 def pick_latest_general(datahub_response: Dict[str, Any]) -> Dict[str, Any]:
     """
-    데이터허브 응답에서 '일반' 검진 중 가장 최근 1건만 추려 { exam_date, items[], raw } 형태로 반환.
-    (문서: data.CHECKUPLIST[].CHECKUPKIND/DATE/YEAR/OPINION/ORGAN ...)
+    간편인증 응답(data.INCOMELIST[])에서 가장 최신 1건만 { exam_date, items, raw }로 정규화
+    - GUNYEAR: "2022"
+    - GUNDATE: "11/02"
+    - 기타 가공은 필요 시 확장
     """
-    data = datahub_response or {}
-    data_part = data.get("data") or {}
-    rows = data_part.get("CHECKUPLIST") or []
-    rows = [r for r in rows if (str(r.get("CHECKUPKIND","")).strip() == "일반")]
-    # 최신 정렬: CHECKUPDATE(YYYYMMDD) or CHECKUPYEAR
-    def row_date(r):
-        d = str(r.get("CHECKUPDATE") or "")
-        if len(d) == 8:
-            return d
-        y = str(r.get("CHECKUPYEAR") or "")
-        return (y + "0101") if len(y) == 4 else ""
-    rows.sort(key=lambda r: row_date(r), reverse=True)
+    data = (datahub_response or {}).get("data") or {}
+    rows = data.get("INCOMELIST") or []
+
+    # 날짜 정렬 키 만들기 (YYYYMMDD)
+    def yyyymmdd(r):
+        y = str(r.get("GUNYEAR") or "").strip()
+        md = str(r.get("GUNDATE") or "").strip()  # "MM/DD"
+        mm, dd = "01", "01"
+        if "/" in md:
+            parts = md.split("/")
+            if len(parts) == 2:
+                mm = parts[0].zfill(2)
+                dd = parts[1].zfill(2)
+        return (y + mm + dd) if len(y) == 4 else ""
+
+    rows.sort(key=yyyymmdd, reverse=True)
     latest = rows[0] if rows else None
     if not latest:
         return {"exam_date": "", "items": [], "raw": datahub_response}
-    # DataHub 기본 응답엔 세부 항목 리스트가 없으니 원문 그대로 raw 로 보관
-    exam_date = latest.get("CHECKUPDATE") or ""
-    items = []  # 필요 시 추가 API/확장 항목 붙일 수 있음
-    return {"exam_date": exam_date, "items": items, "raw": latest}
+
+    exam_date = latest.get("GUNYEAR","") + "-" + (latest.get("GUNDATE","").replace("/", "-"))
+    return {"exam_date": exam_date, "items": [], "raw": latest}
+
