@@ -141,7 +141,7 @@ def encrypt_field(plain: str) -> str:
 def _crypto_selftest():
     """
     공급사 포털에서 제공한 Plain/EncData 쌍으로 즉시 판정.
-    - DATAHUB_SELFTEST_PLAIN : 포털 PlainData (예: !Helo999어드민)
+    - DATAHUB_SELFTEST_PLAIN : 포털 PlainData (예: !Kwic123테스트)
     - DATAHUB_SELFTEST_EXPECT: 포털 EncData   (예: oXCcQ5Z0iINu+9Oi0u5/... )
     """
     import os
@@ -165,10 +165,11 @@ class DatahubClient:
         raw_base = base or os.getenv("DATAHUB_API_BASE", "https://datahub-dev.scraping.co.kr")
         self.base = (raw_base or "").strip().rstrip("/")
         self.token = (token or os.getenv("DATAHUB_TOKEN", "")).strip()
+                # __init__ 끝나기 직전(마지막 return/raise 전에) 추가
+        if os.getenv("APP_ENV", "dev") != "prod" and os.getenv("DATAHUB_SELFTEST", "1") == "1":
+            _crypto_selftest()
+        
         if not self.token:
-            # __init__ 끝나기 직전(마지막 return/raise 전에) 추가
-            if os.getenv("APP_ENV", "dev") != "prod" and os.getenv("DATAHUB_SELFTEST", "1") == "1":
-                _crypto_selftest()
             raise DatahubError("DATAHUB_TOKEN is missing")
             
     def _post(self, path: str, body: Dict[str, Any], timeout=25) -> Dict[str, Any]:
