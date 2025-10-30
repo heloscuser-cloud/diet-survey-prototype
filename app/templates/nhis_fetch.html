@@ -89,31 +89,91 @@
     </div>
   </div>
 
-  <script>
+ <script>
 (function(){
+  // ---------- 공용 유틸 ----------
   const $ = (s)=>document.querySelector(s);
-  const setStatus=(m,k)=>{ const el=$('#status'); el.textContent=m||''; el.className='status'+(k?(' '+k):''); };
-  const loginSel = $('#loginOption');
+  const onlyDigits = v => (v||"").replace(/[^0-9]/g,'');
+
+  const setStatus=(m,k)=>{
+    const el=$('#status');
+    el.textContent=m||'';
+    el.className='status'+(k?(' '+k):'');
+  };
+
+  // ---------- DOM 참조 ----------
+  const loginSel   = $('#loginOption');
+  const telecomRow = $('#telecomRow');
   const telecomSel = $('#telecom');
-  const btnStart = $('#btnStart');
-  const btnComplete = $('#btnComplete');
-  let callbackId = null;
+  const jField     = $('#juminOrBirth');
+  const nameField  = $('#name');
+  const phoneField = $('#phone');
+  const btnStart   = $('#btnStart');
+  const btnComplete= $('#btnComplete');
+  const btnNext    = $('#btnNext');
+  const preview    = $('#preview');
 
-    // 입력 보정
-    $('#phone').addEventListener('input', e=> e.target.value = onlyDigits(e.target.value).slice(0,11));
-    $('#juminOrBirth').addEventListener('input', e=> e.target.value = onlyDigits(e.target.value).slice(0,13));
-
-  // 템플릿에서 내려주는 AUTH 베이스(아래 2번 참고)
+  // 서버에서 내려주는 AUTH 베이스 (개발/운영 자동 분기)
   const AUTH_BASE = "{{ datahub_auth_base }}/auth/simple";
 
-  // Step1: 간편인증 시작
+  // ---------- 상태 ----------
+  let callbackId = null;
+
+  // ---------- 입력 보정 ----------
+  phoneField.addEventListener('input', e=>{
+    e.target.value = onlyDigits(e.target.value).slice(0,11);
+    validateStartEnabled();
+  });
+  jField.addEventListener('input', e=>{
+    const isPASS = (loginSel.value === '3');
+    const limit = isPASS ? 8 : 13;
+    e.target.value = onlyDigits(e.target.value).slice(0, limit);
+    validateStartEnabled();
+  });
+  nameField.addEventListener('input', validateStartEnabled);
+
+  // ---------- 채널별 규칙/노출 ----------
+  function applyInputRuleByChannel(){
+    const isPASS = (loginSel.value === '3');
+    telecomRow.style.display = isPASS ? 'block' : 'none';
+
+    if (isPASS) {
+      jField.placeholder = '생년월일 8자리 (예: 19900307)';
+      jField.maxLength = 8;
+      // 이미 13자리 입력되어 있으면 8자리로 맞춤
+      jField.value = onlyDigits(jField.value).slice(0,8);
+    } else {
+      jField.placeholder = '주민등록번호 13자리 (하이픈 없이)';
+      jField.maxLength = 13;
+      jField.value = onlyDigits(jField.value).slice(0,13);
+    }
+    validateStartEnabled();
+  }
+
+  loginSel.addEventListener('change', applyInputRuleByChannel);
+  telecomSel.addEventListener('change', validateStartEnabled);
+  // 초기 1회 적용
+  applyInputRuleByChannel();
+
+  // ---------- 버튼 활성화 규칙 ----------
+  function validateStartEnabled(){
+    const opt = loginSel.value;
+    const isPASS = (opt === '3');
+    const nameOk = !!nameField.value.trim();
+    const phoneOk = onlyDigits(phoneField.value).length >= 10; // 10~11자
+    const j = onlyDigits(jField.value);
+    const jOk = isPASS ? (j.length === 8) : (j.length === 13);
+    const telOk = !isPASS || !!telecomSel.value;
+    btnStart.disabled = !(opt && nameOk && phoneOk && jOk && telOk);
+  }
+
+  // ---------- Step 1: 간편인증 시작 ----------
   btnStart.addEventListener('click', async ()=>{
-    console.log('[NHIS] start clicked');
     const loginOption = loginSel.value;          // "0"~"7"
     const telecom     = telecomSel.value;        // "1"/"2"/"3" (옵션)
-    const name  = $('#name').value.trim();
-    const phone = $('#phone').value.trim();
-    const jb    = $('#juminOrBirth').value.trim();
+    const name  = nameField.value.trim();
+    const phone = onlyDigits(phoneField.value);
+    const jb    = onlyDigits(jField.value);
 
     if(!loginOption){ alert('간편인증 수단을 선택하세요.'); return; }
     if(loginOption==='3' && !telecom){ alert('통신사를 선택하세요.'); return; }
@@ -139,14 +199,9 @@
 
       if (callbackId){
         const url = `${AUTH_BASE}?callbackId=${encodeURIComponent(callbackId)}`;
-        // 팝업 먼저 시도
-        const win = window.open(url, '_blank', 'noopener');
-        if (!win) {
-          // 팝업 차단 시 동일 탭으로
-          location.href = url;
-          return;
-        }
-        alert('간편인증 창이 열렸습니다. 인증을 완료한 뒤, 이 창으로 돌아와 "데이터 불러오기"를 눌러주세요.');
+        const win = window.open(url, '_blank', 'noopener'); // 팝업 시도
+        if (!win) { location.href = url; return; }          // 차단 시 같은 탭
+        alert('간편인증 창이 열렸습니다. 인증 완료 후, 이 창으로 돌아와 "데이터 불러오기"를 눌러주세요.');
       }
 
       btnComplete.disabled = false;
@@ -157,20 +212,8 @@
       alert('간편인증 시작에 실패했습니다.');
     }
   });
-})();
 
-
-    // Step2: 완료(captcha) → 최신 일반검진 미리보기
-(function(){
-  const $ = (s)=>document.querySelector(s);
-  const btnComplete = $('#btnComplete');
-  const btnNext = $('#btnNext');
-  const preview = $('#preview');
-  const statusEl = $('#status');
-  let callbackId = null; // 위 스코프와 공유된다고 가정
-
-  function setStatus(m,k){ statusEl.textContent=m||''; statusEl.className='status'+(k?(' '+k):''); }
-
+  // ---------- Step 2: 완료(captcha) → 미리보기 ----------
   btnComplete.addEventListener('click', async ()=>{
     if(!callbackId){ alert('callbackId가 없습니다. Step1을 먼저 수행하세요.'); return; }
     setStatus('검진 데이터 불러오는 중...');
@@ -181,7 +224,7 @@
         body: JSON.stringify({ callbackId, callbackType: 'SIMPLE' })
       });
       const data = await rsp.json();
-      console.log('[NHIS] complete data', data); // ★ 콘솔에서 전체 구조 확인
+      console.log('[NHIS] complete data', data);
 
       if(!rsp.ok){
         setStatus('불러오기 실패', 'err');
@@ -189,14 +232,11 @@
         return;
       }
 
-      // ─── 화면에 "요약" + "원문 RAW" 모두 보여주기 ───
       const list = (data && data.data && (data.data.INCOMELIST || data.data.CHECKUPLIST)) || [];
-      // INCOMELIST가 간편인증 요약, CHECKUPLIST가 다른 포맷일 수 있어 둘 다 대응
       let latest = null;
       if (list.length){
         latest = list
           .map(r=>{
-            // 간편인증: GUNYEAR + GUNDATE("MM/DD")
             const y = String(r.GUNYEAR||'').trim();
             const md = String(r.GUNDATE||'').trim();
             const [mm,dd] = (md.includes('/') ? md.split('/') : ['01','01']);
@@ -227,7 +267,9 @@
       alert('불러오기에 실패했습니다. 인증 완료 여부를 확인한 뒤 다시 시도해 주세요.');
     }
   });
-})();
-  </script>
+
+})(); 
+</script>
+
 </body>
 </html>
