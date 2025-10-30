@@ -8,7 +8,7 @@ import re
 from fastapi.templating import Jinja2Templates
 from fastapi.routing import APIRoute
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse, JSONResponse
 from sqlmodel import SQLModel, Field, Session, create_engine, select, Relationship
 from pydantic import BaseModel
 from typing import Optional, List
@@ -376,7 +376,12 @@ def info_form(request: Request, auth: str | None = Cookie(default=None, alias=AU
 
 @app.get("/nhis")
 def nhis_page(request: Request):
-    return templates.TemplateResponse("nhis_fetch.html", {"request": request, "next_url": "/info"})
+    auth_base = os.getenv("DATAHUB_API_BASE", "https://datahub-dev.scraping.co.kr").rstrip("/")
+    # datahub_auth_base를 템플릿 변수로 내려줌
+    return templates.TemplateResponse(
+        "nhis_fetch.html",
+        {"request": request, "next_url": "/info", "datahub_auth_base": auth_base}
+    )
     
 @app.get("/healthz")
 def healthz():
@@ -1516,7 +1521,10 @@ def dh_nhis_result(payload: dict = Body(...), request: Request = None):
     except Exception as e:
         raise HTTPException(500, f"Internal error: {e}")
 
-
+#임시 디버그 라우트 로그
+@app.get("/debug/nhis/session")
+def debug_nhis_session(request: Request):
+    return JSONResponse(request.session.get("nhis_latest") or {})
 
 @app.get("/_routes")
 def _routes():
