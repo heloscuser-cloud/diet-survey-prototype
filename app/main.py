@@ -377,11 +377,8 @@ def info_form(request: Request, auth: str | None = Cookie(default=None, alias=AU
 @app.get("/nhis")
 def nhis_page(request: Request):
     auth_base = os.getenv("DATAHUB_API_BASE", "https://datahub-dev.scraping.co.kr").rstrip("/")
-    # datahub_auth_base를 템플릿 변수로 내려줌
-    return templates.TemplateResponse(
-        "nhis_fetch.html",
-        {"request": request, "next_url": "/info", "datahub_auth_base": auth_base}
-    )
+    return templates.TemplateResponse("nhis_fetch.html", {"request": request, "next_url": "/info", "datahub_auth_base": auth_base})
+
     
 @app.get("/healthz")
 def healthz():

@@ -65,11 +65,19 @@
           <label for="phone">휴대폰 번호</label>
           <input id="phone" type="tel" inputmode="numeric" placeholder="01012345678" value="{{ user_phone or '' }}">
         </div>
-        <div>
-          <label>생년월일(YYYYMMDD)</label>
-          <div class="row-inline">
-            <input id="juminOrBirth" inputmode="numeric" placeholder="19900307">
-          </div>
+<div>
+  <label id="jLabel">생년월일(8자리)</label>
+
+  <!-- PASS(3)일 때 보이는 생년월일 1칸 -->
+  <input id="birthOne" inputmode="numeric" placeholder="19900307" style="display:none">
+
+  <!-- 그 외 수단일 때 보이는 주민등록번호 2칸 -->
+  <div id="rrnWrap" class="row-inline" style="display:none">
+    <input id="rrn1" inputmode="numeric" placeholder="######" maxlength="6" style="flex:1">
+    <span>-</span>
+    <input id="rrn2" inputmode="numeric" placeholder="#######" maxlength="7" style="flex:1">
+  </div>
+</div>
         </div>
       </div>
     </div>
@@ -89,9 +97,9 @@
     </div>
   </div>
 
- <script>
+<script>
 (function(){
-  // ---------- 공용 유틸 ----------
+  // ---------- 유틸 ----------
   const $ = (s)=>document.querySelector(s);
   const onlyDigits = v => (v||"").replace(/[^0-9]/g,'');
 
@@ -101,90 +109,111 @@
     el.className='status'+(k?(' '+k):'');
   };
 
-  // ---------- DOM 참조 ----------
+  // ---------- DOM ----------
   const loginSel   = $('#loginOption');
   const telecomRow = $('#telecomRow');
   const telecomSel = $('#telecom');
-  const jField     = $('#juminOrBirth');
   const nameField  = $('#name');
   const phoneField = $('#phone');
-  const btnStart   = $('#btnStart');
-  const btnComplete= $('#btnComplete');
-  const btnNext    = $('#btnNext');
-  const preview    = $('#preview');
 
-  // 서버에서 내려주는 AUTH 베이스 (개발/운영 자동 분기)
+  const jLabel   = $('#jLabel');
+  const birthOne = $('#birthOne'); // PASS(3) 전용
+  const rrnWrap  = $('#rrnWrap');  // 기타 수단 전용
+  const rrn1     = $('#rrn1');
+  const rrn2     = $('#rrn2');
+
+  const btnStart    = $('#btnStart');
+  const btnComplete = $('#btnComplete');
+  const btnNext     = $('#btnNext');
+  const preview     = $('#preview');
+
+  // 서버에서 내려주는 AUTH 베이스 (main.py에서 datahub_auth_base 전달)
   const AUTH_BASE = "{{ datahub_auth_base }}/auth/simple";
 
-  // ---------- 상태 ----------
   let callbackId = null;
 
-  // ---------- 입력 보정 ----------
+  // ---------- 입력 필터 ----------
   phoneField.addEventListener('input', e=>{
     e.target.value = onlyDigits(e.target.value).slice(0,11);
     validateStartEnabled();
   });
-  jField.addEventListener('input', e=>{
-    const isPASS = (loginSel.value === '3');
-    const limit = isPASS ? 8 : 13;
-    e.target.value = onlyDigits(e.target.value).slice(0, limit);
+  birthOne.addEventListener('input', e=>{
+    e.target.value = onlyDigits(e.target.value).slice(0,8);
+    validateStartEnabled();
+  });
+  rrn1.addEventListener('input', e=>{
+    e.target.value = onlyDigits(e.target.value).slice(0,6);
+    validateStartEnabled();
+  });
+  rrn2.addEventListener('input', e=>{
+    e.target.value = onlyDigits(e.target.value).slice(0,7);
     validateStartEnabled();
   });
   nameField.addEventListener('input', validateStartEnabled);
 
-  // ---------- 채널별 규칙/노출 ----------
+  // ---------- 수단별 UI/규칙 전환 ----------
   function applyInputRuleByChannel(){
     const isPASS = (loginSel.value === '3');
     telecomRow.style.display = isPASS ? 'block' : 'none';
 
     if (isPASS) {
-      jField.placeholder = '생년월일 8자리 (예: 19900307)';
-      jField.maxLength = 8;
-      // 이미 13자리 입력되어 있으면 8자리로 맞춤
-      jField.value = onlyDigits(jField.value).slice(0,8);
+      jLabel.textContent = '생년월일(8자리)';
+      birthOne.style.display = 'block';
+      rrnWrap.style.display  = 'none';
+      // 값 정리
+      birthOne.value = onlyDigits(birthOne.value).slice(0,8);
     } else {
-      jField.placeholder = '주민등록번호 13자리 (하이픈 없이)';
-      jField.maxLength = 13;
-      jField.value = onlyDigits(jField.value).slice(0,13);
+      jLabel.textContent = '주민등록번호 13자리';
+      birthOne.style.display = 'none';
+      rrnWrap.style.display  = 'flex';
+      rrn1.value = onlyDigits(rrn1.value).slice(0,6);
+      rrn2.value = onlyDigits(rrn2.value).slice(0,7);
     }
     validateStartEnabled();
   }
-
   loginSel.addEventListener('change', applyInputRuleByChannel);
   telecomSel.addEventListener('change', validateStartEnabled);
-  // 초기 1회 적용
-  applyInputRuleByChannel();
+  applyInputRuleByChannel(); // 초기 1회
 
-  // ---------- 버튼 활성화 규칙 ----------
+  // ---------- 버튼 활성화 ----------
   function validateStartEnabled(){
     const opt = loginSel.value;
     const isPASS = (opt === '3');
-    const nameOk = !!nameField.value.trim();
-    const phoneOk = onlyDigits(phoneField.value).length >= 10; // 10~11자
-    const j = onlyDigits(jField.value);
-    const jOk = isPASS ? (j.length === 8) : (j.length === 13);
+    const nameOk  = !!nameField.value.trim();
+    const phoneOk = onlyDigits(phoneField.value).length >= 10;
+
+    let jOk = false;
+    if (isPASS) {
+      jOk = (onlyDigits(birthOne.value).length === 8);
+    } else {
+      jOk = (onlyDigits(rrn1.value).length === 6) && (onlyDigits(rrn2.value).length === 7);
+    }
     const telOk = !isPASS || !!telecomSel.value;
     btnStart.disabled = !(opt && nameOk && phoneOk && jOk && telOk);
   }
 
-  // ---------- Step 1: 간편인증 시작 ----------
+  // ---------- Step1: 간편인증 시작 ----------
   btnStart.addEventListener('click', async ()=>{
     const loginOption = loginSel.value;          // "0"~"7"
     const telecom     = telecomSel.value;        // "1"/"2"/"3" (옵션)
     const name  = nameField.value.trim();
     const phone = onlyDigits(phoneField.value);
-    const jb    = onlyDigits(jField.value);
+
+    const isPASS = (loginOption === '3');
+    const juminOrBirth = isPASS
+      ? onlyDigits(birthOne.value) // 8자리
+      : (onlyDigits(rrn1.value)+onlyDigits(rrn2.value)); // 13자리
 
     if(!loginOption){ alert('간편인증 수단을 선택하세요.'); return; }
-    if(loginOption==='3' && !telecom){ alert('통신사를 선택하세요.'); return; }
-    if(!name || !phone || !jb){ alert('이름/휴대폰/생년월일(또는 주민번호)을 입력하세요.'); return; }
+    if(isPASS && !telecom){ alert('통신사를 선택하세요.'); return; }
+    if(!name || !phone || !juminOrBirth){ alert('이름/휴대폰/식별값을 입력하세요.'); return; }
 
     setStatus('간편인증 요청 중...');
     try{
       const rsp = await fetch('/api/dh/simple/start', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ loginOption, telecom, userName: name, hpNumber: phone, juminOrBirth: jb })
+        body: JSON.stringify({ loginOption, telecom, userName: name, hpNumber: phone, juminOrBirth })
       });
       const data = await rsp.json();
       console.log('[NHIS] start rsp', rsp.status, data);
@@ -200,12 +229,15 @@
       if (callbackId){
         const url = `${AUTH_BASE}?callbackId=${encodeURIComponent(callbackId)}`;
         const win = window.open(url, '_blank', 'noopener'); // 팝업 시도
-        if (!win) { location.href = url; return; }          // 차단 시 같은 탭
-        alert('간편인증 창이 열렸습니다. 인증 완료 후, 이 창으로 돌아와 "데이터 불러오기"를 눌러주세요.');
+        if (!win) { location.href = url; return; }          // 차단 시 동일 탭
+        alert('간편인증 창이 열렸습니다. 인증 완료 후 이 창으로 돌아와 "데이터 불러오기"를 눌러주세요.');
+        btnComplete.disabled = false;
+        setStatus('휴대폰에서 인증을 완료한 뒤, "데이터 불러오기"를 눌러주세요.', 'ok');
+      } else {
+        // callbackId가 없으면 UI를 띄울 방법이 없음 → 에러 표시
+        setStatus('간편인증 시작 응답에 callbackId가 없습니다.', 'err');
+        alert('간편인증 시작 응답이 올바르지 않습니다. 잠시 후 다시 시도해 주세요.');
       }
-
-      btnComplete.disabled = false;
-      setStatus('휴대폰에서 인증을 완료한 뒤, "데이터 불러오기"를 눌러주세요.', 'ok');
     }catch(e){
       console.error(e);
       setStatus('간편인증 시작 실패', 'err');
@@ -213,7 +245,7 @@
     }
   });
 
-  // ---------- Step 2: 완료(captcha) → 미리보기 ----------
+  // ---------- Step2: 완료(captcha) → 미리보기 ----------
   btnComplete.addEventListener('click', async ()=>{
     if(!callbackId){ alert('callbackId가 없습니다. Step1을 먼저 수행하세요.'); return; }
     setStatus('검진 데이터 불러오는 중...');
@@ -267,9 +299,7 @@
       alert('불러오기에 실패했습니다. 인증 완료 여부를 확인한 뒤 다시 시도해 주세요.');
     }
   });
-
-})(); 
+})();
 </script>
-
 </body>
 </html>
