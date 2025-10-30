@@ -380,11 +380,10 @@ def info_form(request: Request, auth: str | None = Cookie(default=None, alias=AU
 # NHIS 건강검진 조회 페이지 (info 전 단계)
 # -----------------------------------------------
 @app.get("/nhis")
+@app.get("/nhis")
 def nhis_page(request: Request):
-    return templates.TemplateResponse(
-        "nhis_fetch.html",    # 우리가 만든 새 HTML 파일
-        {"request": request, "next_url": "/info"}  # info 페이지로 이동하도록 next_url 전달
-    )
+    return templates.TemplateResponse("nhis_fetch.html", {"request": request, "next_url": "/info"})
+
     
 
 @app.get("/healthz")
@@ -1431,7 +1430,12 @@ async def admin_export_xlsx(
 from fastapi import Body
 
 @app.post("/api/nhis/auth/start")
+
+
 def nhis_auth_start(payload: dict = Body(...), request: Request = None):
+    auth_type = str(payload.get("authType")).strip()
+    rsp = TILKO.nhis_simpleauth_request(name, phone, birth, private_auth_type=auth_type)
+    
     """
     요청 JSON 예:
     { "name": "홍길동", "phone": "01012345678", "birth": "19900307" }

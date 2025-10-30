@@ -5,27 +5,32 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"/>
   <title>국가건강검진 데이터 조회</title>
   <style>
-    :root { --bg:#f6f7fb; --card:#fff; --text:#111; --muted:#667085; --pri:#2563eb; --pri-weak:#e6efff; }
-    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;}
+    :root { --bg:#f6f7fb; --card:#fff; --text:#0f172a; --muted:#64748b; --pri:#2563eb; --pri-weak:#e6efff; --sel:#1e40af; --ok:#10b981; --err:#ef4444;}
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family: system-ui,-apple-system,Segoe UI,Roboto,Apple SD Gothic Neo,Noto Sans KR,sans-serif;}
     .container{max-width:720px;margin:0 auto;padding:20px;}
-    h1{font-size:20px;margin:4px 0 12px;}
+    h1{font-size:20px;margin:6px 0 12px;}
     p.muted{color:var(--muted);font-size:14px;margin:4px 0 16px;}
-    .card{background:var(--card);border-radius:14px;box-shadow:0 6px 20px rgba(2,6,23,0.05);padding:16px;}
-    .row{display:flex;flex-direction:column;gap:8px;}
-    .row-inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+    .card{background:var(--card);border-radius:14px;box-shadow:0 6px 20px rgba(2,6,23,.05);padding:16px;margin-bottom:14px}
+    .row{display:flex;flex-direction:column;gap:10px;}
+    .row-inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
     label{font-size:14px;color:#1f2937;}
     input{width:100%;padding:12px;border:1px solid #e5e7eb;border-radius:10px;font-size:16px;box-sizing:border-box}
     input::placeholder{color:#9ca3af}
     .w-year{width:9ch} .w-mm,.w-dd{width:5.5ch}
-    .btn{appearance:none;border:0;border-radius:12px;padding:13px 16px;font-weight:600;font-size:16px;cursor:pointer}
+
+    .btn{appearance:none;border:0;border-radius:12px;padding:12px 16px;font-weight:600;font-size:16px;cursor:pointer;user-select:none;transition:transform .02s ease}
+    .btn:active{transform:translateY(1px)}
     .btn:disabled{opacity:.45;cursor:not-allowed}
     .btn-primary{background:var(--pri);color:#fff}
-    .btn-secondary{background:#eef2ff;color:#1e293b}
+    .btn-secondary{background:#eef2ff;color:#1e293b;border:1px solid #e5e7eb}
     .btn-text{background:transparent;color:var(--pri);padding:10px}
+    .btn-chip{background:#f1f5f9;color:#0f172a;border:1px solid #e2e8f0}
+    .btn-chip.is-selected{background:var(--pri-weak);color:var(--sel);border-color:var(--sel);box-shadow:0 0 0 3px rgba(37,99,235,.15)}
     .stack{display:flex;gap:10px;flex-wrap:wrap}
     .stack .btn{flex:1}
     .preview{background:var(--pri-weak);border-radius:12px;padding:10px;margin-top:8px}
-    .hr{height:1px;background:#eee;margin:16px 0}
+    .status{font-size:14px;margin-top:8px}
+    .status.ok{color:var(--ok)} .status.err{color:var(--err)}
     .footer-actions{position:sticky;bottom:0;left:0;right:0;background:linear-gradient(to top, rgba(246,247,251,.95), rgba(246,247,251,0));padding:16px 0 8px}
   </style>
 </head>
@@ -35,7 +40,7 @@
     <p class="muted">휴대폰 본인인증을 먼저 진행한 뒤 “데이터 불러오기”를 누르면, 최근 10년 중 <b>가장 최근 일반검진 1건</b>을 자동으로 연결합니다.</p>
 
     <!-- 기본 정보 -->
-    <div class="card" style="margin-bottom:14px">
+    <div class="card">
       <div class="row">
         <div>
           <label for="name">이름</label>
@@ -56,30 +61,30 @@
       </div>
     </div>
 
-<!-- 인증 수단 선택 -->
-<div class="card" style="margin-bottom:14px">
-  <label style="font-size:14px;color:#1f2937;display:block;margin-bottom:8px">인증 수단 선택</label>
-  <div id="authGrid" class="row-inline" style="gap:10px;flex-wrap:wrap">
-    <!-- data-type 값이 PrivateAuthType 코드 -->
-    <button type="button" class="btn btn-secondary" data-type="4">통신사 PASS</button>
-    <button type="button" class="btn btn-secondary" data-type="0">카카오톡</button>
-    <button type="button" class="btn btn-secondary" data-type="6">네이버</button>
-    <button type="button" class="btn btn-secondary" data-type="1">페이코</button>
-    <button type="button" class="btn btn-secondary" data-type="3">삼성패스</button>
-    <button type="button" class="btn btn-secondary" data-type="2">국민은행</button>
-    <button type="button" class="btn btn-secondary" data-type="5">신한</button>
-  </div>
-  <p class="muted" style="margin-top:8px">원하는 인증 수단을 선택한 뒤, 간편인증을 시작하세요.</p>
-</div>
-
+    <!-- 인증 수단 선택 -->
+    <div class="card">
+      <label style="font-size:14px;color:#1f2937;display:block;margin-bottom:8px">인증 수단 선택</label>
+      <div id="authGrid" class="row-inline" style="gap:10px;flex-wrap:wrap">
+        <!-- data-type 값이 PrivateAuthType 코드 -->
+        <button type="button" class="btn btn-chip is-selected" data-type="4" aria-pressed="true">통신사 PASS</button>
+        <button type="button" class="btn btn-chip" data-type="0" aria-pressed="false">카카오톡</button>
+        <button type="button" class="btn btn-chip" data-type="6" aria-pressed="false">네이버</button>
+        <button type="button" class="btn btn-chip" data-type="1" aria-pressed="false">페이코</button>
+        <button type="button" class="btn btn-chip" data-type="3" aria-pressed="false">삼성패스</button>
+        <button type="button" class="btn btn-chip" data-type="2" aria-pressed="false">국민은행</button>
+        <button type="button" class="btn btn-chip" data-type="5" aria-pressed="false">신한</button>
+      </div>
+      <p class="muted" style="margin-top:8px">원하는 인증 수단을 선택한 뒤, 간편인증을 시작하세요.</p>
+      <div id="authPickStatus" class="status"></div>
+    </div>
 
     <!-- 간편인증/불러오기 -->
     <div class="card">
       <div class="stack">
-        <button id="btnStart" class="btn btn-primary">간편인증 시작</button>
-        <button id="btnFetch" class="btn btn-secondary" disabled>인증 완료 후 데이터 불러오기</button>
+        <button type="button" id="btnStart" class="btn btn-primary">간편인증 시작</button>
+        <button type="button" id="btnFetch" class="btn btn-secondary" disabled>인증 완료 후 데이터 불러오기</button>
       </div>
-      <p id="status" class="muted" style="margin-top:10px">간편인증을 시작한 뒤, 안내에 따라 휴대폰에서 인증을 완료하세요.</p>
+      <div id="status" class="status"></div>
       <div id="preview" class="preview" style="display:none"></div>
     </div>
 
@@ -92,156 +97,126 @@
   </div>
 
   <script>
-    // 숫자만 허용 & 범위 보정(월/일)
-    function onlyDigits(v){ return (v||'').replace(/[^0-9]/g,''); }
-    const z2 = (n)=>String(n).padStart(2,'0');
+  (function(){
+    console.log('[NHIS] nhis_fetch.html loaded');
+
+    // 유틸
+    const $ = (sel)=>document.querySelector(sel);
+    const onlyDigits = v => (v||'').replace(/[^0-9]/g,'');
+    const z2 = n => String(n).padStart(2,'0');
+    const setStatus = (msg, kind=null)=>{
+      const el = $('#status');
+      el.textContent = msg || '';
+      el.classList.remove('ok','err');
+      if(kind==='ok') el.classList.add('ok');
+      if(kind==='err') el.classList.add('err');
+    };
+    const setAuthPickStatus = (msg)=>{
+      $('#authPickStatus').textContent = msg || '';
+    }
+
+    // 입력 제한
+    $('#phone').addEventListener('input', e=> e.target.value = onlyDigits(e.target.value).slice(0,11));
+    $('#bd_y').addEventListener('input', e=> e.target.value = onlyDigits(e.target.value).slice(0,4));
+    $('#bd_m').addEventListener('input', e=> e.target.value = onlyDigits(e.target.value).slice(0,2));
+    $('#bd_d').addEventListener('input', e=> e.target.value = onlyDigits(e.target.value).slice(0,2));
+
+    // 인증수단 선택
+    let SELECTED_AUTH_TYPE = "4";
+    const grid = $('#authGrid');
+    grid.addEventListener('click', (e)=>{
+      const btn = e.target.closest('button[data-type]');
+      if(!btn) return;
+      SELECTED_AUTH_TYPE = btn.getAttribute('data-type');
+      grid.querySelectorAll('button[data-type]').forEach(b=>{
+        b.classList.remove('is-selected');
+        b.setAttribute('aria-pressed','false');
+      });
+      btn.classList.add('is-selected');
+      btn.setAttribute('aria-pressed','true');
+      setAuthPickStatus(`선택된 수단: ${btn.textContent.trim()} (${SELECTED_AUTH_TYPE})`);
+      console.log('[NHIS] Selected auth type =', SELECTED_AUTH_TYPE);
+    });
 
     function getBirth(){
-      const y = document.getElementById('bd_y').value.trim();
-      let m = onlyDigits(document.getElementById('bd_m').value).slice(0,2);
-      let d = onlyDigits(document.getElementById('bd_d').value).slice(0,2);
-      if(m){ let mm = Math.min(Math.max(parseInt(m,10),1),12); m = String(mm); }
-      if(d){ let dd = Math.min(Math.max(parseInt(d,10),1),31); d = String(dd); }
-      document.getElementById('bd_m').value = m;
-      document.getElementById('bd_d').value = d;
+      const y = $('#bd_y')?.value.trim();
+      let m = onlyDigits($('#bd_m')?.value).slice(0,2);
+      let d = onlyDigits($('#bd_d')?.value).slice(0,2);
+      if(m){ m = String(Math.min(Math.max(parseInt(m,10),1),12)); }
+      if(d){ d = String(Math.min(Math.max(parseInt(d,10),1),31)); }
       if(!(y && m && d)) return null;
       return y + z2(m) + z2(d); // YYYYMMDD
     }
 
-    document.getElementById('phone').addEventListener('input', e=>{
-      e.target.value = onlyDigits(e.target.value).slice(0,11);
-    });
-    document.getElementById('bd_y').addEventListener('input', e=>{
-      e.target.value = onlyDigits(e.target.value).slice(0,4);
-    });
-    document.getElementById('bd_m').addEventListener('input', e=>{
-      e.target.value = onlyDigits(e.target.value).slice(0,2);
-    });
-    document.getElementById('bd_d').addEventListener('input', e=>{
-      e.target.value = onlyDigits(e.target.value).slice(0,2);
-    });
-
-    const $ = (sel)=>document.querySelector(sel);
+    // 간편인증 시작
     const btnStart = $('#btnStart');
     const btnFetch = $('#btnFetch');
-    const btnNext  = $('#btnNext');
-    const statusEl = $('#status');
     const preview  = $('#preview');
+    const btnNext  = $('#btnNext');
 
-  let NHIS_TX_ID = null;
-
-  btnStart.addEventListener('click', async ()=>{
-    const name  = $('#name').value.trim();
-    const phone = $('#phone').value.trim();
-    const birth = getBirth();
-    if(!name || !phone || !birth){ alert('이름/휴대폰/생년월일을 모두 입력해 주세요.'); return; }
-    try{
-      statusEl.textContent = '간편인증을 요청하는 중...';
-      const rsp = await fetch('/api/nhis/auth/start', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ name, phone, birth })
-      });
-      if(!rsp.ok) throw new Error('간편인증 요청 실패');
-      const data = await rsp.json();
-      NHIS_TX_ID = data?.txId || null;  // 서버가 표준화해 준 txId 사용
-      btnFetch.disabled = false;
-      statusEl.textContent = '휴대폰에서 본인인증을 완료한 뒤, "데이터 불러오기"를 눌러주세요.';
-    }catch(err){
-      console.error(err);
-      alert('간편인증 시작에 실패했습니다. 잠시 후 다시 시도해 주세요.');
-      statusEl.textContent = '간편인증 시작 실패';
-    }
-  });
-
-  btnFetch.addEventListener('click', async ()=>{
-    try{
-      if(!NHIS_TX_ID){ alert('TxId가 없습니다. 간편인증을 먼저 시작하고 인증 완료 후 시도하세요.'); return; }
-      statusEl.textContent = '건강검진 데이터를 불러오는 중...';
-      const now = new Date();
-      const fy = String(now.getFullYear()-9), ty = String(now.getFullYear());
-      const rsp = await fetch('/api/nhis/health-check/fetch', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ txId: NHIS_TX_ID, fromYear: fy, toYear: ty })
-      });
-      if(!rsp.ok) throw new Error('불러오기 실패');
-      const data = await rsp.json();
-      const exam = data?.exam_date || '';
-      const items = Array.isArray(data?.items) ? data.items : [];
-      preview.style.display = 'block';
-      preview.innerHTML = `
-        <div style="font-weight:600">검진일자: ${exam || '-'}</div>
-        <ul style="margin:6px 0 0 18px">${items.slice(0,6).map(it=>`<li>${(it.name||'-')} : ${(it.value||'-')} ${(it.unit||'')}</li>`).join('')}</ul>
-        ${items.length>6 ? `<div class="muted" style="margin-top:6px">외 ${items.length-6}개 항목</div>` : '' }
-      `;
-      statusEl.textContent = items.length ? '건강검진 데이터가 연결되었습니다.' : '최근 10년 데이터가 없거나 항목이 비어 있습니다.';
-      btnNext.style.pointerEvents = 'auto';
-      btnNext.style.opacity = '1';
-      btnNext.setAttribute('aria-disabled','false');
-    }catch(err){
-      console.error(err);
-      alert('데이터 불러오기에 실패했습니다. 인증 완료 여부를 확인한 뒤 다시 시도해 주세요.');
-      statusEl.textContent = '불러오기 실패';
-    }
-<script>
-  let SELECTED_AUTH_TYPE = "4"; // 기본 PASS
-
-  // 인증수단 버튼 선택 토글
-  const grid = document.getElementById('authGrid');
-  if (grid) {
-    grid.addEventListener('click', (e)=>{
-      const btn = e.target.closest('button[data-type]');
-      if (!btn) return;
-      // 상태 반영
-      SELECTED_AUTH_TYPE = btn.getAttribute('data-type');
-      // 스타일 토글
-      grid.querySelectorAll('button[data-type]').forEach(b=>{
-        b.classList.remove('btn-primary'); b.classList.add('btn-secondary');
-      });
-      btn.classList.remove('btn-secondary'); btn.classList.add('btn-primary');
+    btnStart.addEventListener('click', async (ev)=>{
+      ev.preventDefault(); ev.stopPropagation();
+      console.log('[NHIS] btnStart clicked');
+      const name  = $('#name')?.value.trim();
+      const phone = $('#phone')?.value.trim();
+      const birth = getBirth();
+      if(!name || !phone || !birth){ alert('이름/휴대폰/생년월일을 모두 입력해 주세요.'); return; }
+      try{
+        setStatus('간편인증을 요청하는 중...');
+        const rsp = await fetch('/api/nhis/auth/start', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ name, phone, birth, authType: SELECTED_AUTH_TYPE })
+        });
+        if(!rsp.ok) throw new Error('간편인증 요청 실패: '+rsp.status);
+        const data = await rsp.json();
+        window.NHIS_TX_ID = data?.txId || null;
+        btnFetch.disabled = false;
+        setStatus('휴대폰에서 인증을 완료한 뒤, "데이터 불러오기"를 눌러주세요.', 'ok');
+        console.log('[NHIS] auth/start OK, txId=', window.NHIS_TX_ID);
+      }catch(err){
+        console.error('[NHIS] auth/start error', err);
+        alert('간편인증 시작에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+        setStatus('간편인증 시작 실패', 'err');
+      }
     });
-  }
 
-  // 간편인증 시작 시 authType 함께 전송
-  const btnStart = document.getElementById('btnStart');
-  const btnFetch = document.getElementById('btnFetch');
-  const statusEl = document.getElementById('status');
+    // 불러오기
+    btnFetch.addEventListener('click', async (ev)=>{
+      ev.preventDefault(); ev.stopPropagation();
+      console.log('[NHIS] btnFetch clicked');
+      try{
+        if(!window.NHIS_TX_ID){ alert('TxId가 없습니다. 간편인증을 먼저 시작하고 인증 완료 후 시도하세요.'); return; }
+        setStatus('건강검진 데이터를 불러오는 중...');
+        const now = new Date(); const fy = String(now.getFullYear()-9), ty = String(now.getFullYear());
+        const rsp = await fetch('/api/nhis/health-check/fetch', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ txId: window.NHIS_TX_ID, fromYear: fy, toYear: ty })
+        });
+        if(!rsp.ok) throw new Error('불러오기 실패: '+rsp.status);
+        const data = await rsp.json();
+        const exam = data?.exam_date || '';
+        const items = Array.isArray(data?.items) ? data.items : [];
+        preview.style.display = 'block';
+        preview.innerHTML = `
+          <div style="font-weight:600">검진일자: ${exam || '-'}</div>
+          <ul style="margin:6px 0 0 18px">${items.slice(0,6).map(it=>`<li>${(it.name||'-')} : ${(it.value||'-')} ${(it.unit||'')}</li>`).join('')}</ul>
+          ${items.length>6 ? `<div class="muted" style="margin-top:6px">외 ${items.length-6}개 항목</div>` : '' }
+        `;
+        setStatus(items.length ? '건강검진 데이터가 연결되었습니다.' : '최근 10년 데이터가 없거나 항목이 비어 있습니다.', 'ok');
+        btnNext.style.pointerEvents = 'auto';
+        btnNext.style.opacity = '1';
+        btnNext.setAttribute('aria-disabled','false');
+        console.log('[NHIS] fetch OK. items=', items.length);
+      }catch(err){
+        console.error('[NHIS] fetch error', err);
+        alert('데이터 불러오기에 실패했습니다. 인증 완료 여부를 확인한 뒤 다시 시도해 주세요.');
+        setStatus('불러오기 실패', 'err');
+      }
+    });
 
-  const $ = (sel)=>document.querySelector(sel);
-  const z2 = n => String(n).padStart(2,'0');
-  const onlyDigits = v => (v||'').replace(/[^0-9]/g,'');
-
-  function getBirth(){
-    const y = $('#bd_y')?.value.trim();
-    let m = onlyDigits($('#bd_m')?.value).slice(0,2);
-    let d = onlyDigits($('#bd_d')?.value).slice(0,2);
-    if(m){ m = String(Math.min(Math.max(parseInt(m,10),1),12)); }
-    if(d){ d = String(Math.min(Math.max(parseInt(d,10),1),31)); }
-    if(!(y && m && d)) return null;
-    return y + z2(m) + z2(d); // YYYYMMDD
-  }
-
-  btnStart?.addEventListener('click', async ()=>{
-    const name  = $('#name')?.value.trim();
-    const phone = $('#phone')?.value.trim();
-    const birth = getBirth();
-    if(!name || !phone || !birth){ alert('이름/휴대폰/생년월일을 모두 입력해 주세요.'); return; }
-    try{
-      statusEl.textContent = '간편인증을 요청하는 중...';
-      const rsp = await fetch('/api/nhis/auth/start', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ name, phone, birth, authType: SELECTED_AUTH_TYPE })
-      });
-      if(!rsp.ok) throw new Error('간편인증 요청 실패');
-      const data = await rsp.json();
-      window.NHIS_TX_ID = data?.txId || null;  // 서버가 돌려준 TxId(있다면) 저장
-      btnFetch.disabled = false;
-      statusEl.textContent = '휴대폰에서 인증을 완료한 뒤, "데이터 불러오기"를 눌러주세요.';
-    }catch(err){
-      console.error(err);
-      alert('간편인증 시작에 실패했습니다. 잠시 후 다시 시도해 주세요.');
-      statusEl.textContent = '간편인증 시작 실패';
-    }
-  });
-</script>
+    // 초기 상태 메시지
+    setAuthPickStatus('선택된 수단: 통신사 PASS (4)');
+  })();
+  </script>
 </body>
 </html>
