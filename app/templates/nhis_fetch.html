@@ -56,6 +56,23 @@
       </div>
     </div>
 
+<!-- 인증 수단 선택 -->
+<div class="card" style="margin-bottom:14px">
+  <label style="font-size:14px;color:#1f2937;display:block;margin-bottom:8px">인증 수단 선택</label>
+  <div id="authGrid" class="row-inline" style="gap:10px;flex-wrap:wrap">
+    <!-- data-type 값이 PrivateAuthType 코드 -->
+    <button type="button" class="btn btn-secondary" data-type="4">통신사 PASS</button>
+    <button type="button" class="btn btn-secondary" data-type="0">카카오톡</button>
+    <button type="button" class="btn btn-secondary" data-type="6">네이버</button>
+    <button type="button" class="btn btn-secondary" data-type="1">페이코</button>
+    <button type="button" class="btn btn-secondary" data-type="3">삼성패스</button>
+    <button type="button" class="btn btn-secondary" data-type="2">국민은행</button>
+    <button type="button" class="btn btn-secondary" data-type="5">신한</button>
+  </div>
+  <p class="muted" style="margin-top:8px">원하는 인증 수단을 선택한 뒤, 간편인증을 시작하세요.</p>
+</div>
+
+
     <!-- 간편인증/불러오기 -->
     <div class="card">
       <div class="stack">
@@ -165,6 +182,68 @@
       alert('데이터 불러오기에 실패했습니다. 인증 완료 여부를 확인한 뒤 다시 시도해 주세요.');
       statusEl.textContent = '불러오기 실패';
     }
+<script>
+  let SELECTED_AUTH_TYPE = "4"; // 기본 PASS
+
+  // 인증수단 버튼 선택 토글
+  const grid = document.getElementById('authGrid');
+  if (grid) {
+    grid.addEventListener('click', (e)=>{
+      const btn = e.target.closest('button[data-type]');
+      if (!btn) return;
+      // 상태 반영
+      SELECTED_AUTH_TYPE = btn.getAttribute('data-type');
+      // 스타일 토글
+      grid.querySelectorAll('button[data-type]').forEach(b=>{
+        b.classList.remove('btn-primary'); b.classList.add('btn-secondary');
+      });
+      btn.classList.remove('btn-secondary'); btn.classList.add('btn-primary');
+    });
+  }
+
+  // 간편인증 시작 시 authType 함께 전송
+  const btnStart = document.getElementById('btnStart');
+  const btnFetch = document.getElementById('btnFetch');
+  const statusEl = document.getElementById('status');
+
+  const $ = (sel)=>document.querySelector(sel);
+  const z2 = n => String(n).padStart(2,'0');
+  const onlyDigits = v => (v||'').replace(/[^0-9]/g,'');
+
+  function getBirth(){
+    const y = $('#bd_y')?.value.trim();
+    let m = onlyDigits($('#bd_m')?.value).slice(0,2);
+    let d = onlyDigits($('#bd_d')?.value).slice(0,2);
+    if(m){ m = String(Math.min(Math.max(parseInt(m,10),1),12)); }
+    if(d){ d = String(Math.min(Math.max(parseInt(d,10),1),31)); }
+    if(!(y && m && d)) return null;
+    return y + z2(m) + z2(d); // YYYYMMDD
+  }
+
+  btnStart?.addEventListener('click', async ()=>{
+    const name  = $('#name')?.value.trim();
+    const phone = $('#phone')?.value.trim();
+    const birth = getBirth();
+    if(!name || !phone || !birth){ alert('이름/휴대폰/생년월일을 모두 입력해 주세요.'); return; }
+    try{
+      statusEl.textContent = '간편인증을 요청하는 중...';
+      const rsp = await fetch('/api/nhis/auth/start', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name, phone, birth, authType: SELECTED_AUTH_TYPE })
+      });
+      if(!rsp.ok) throw new Error('간편인증 요청 실패');
+      const data = await rsp.json();
+      window.NHIS_TX_ID = data?.txId || null;  // 서버가 돌려준 TxId(있다면) 저장
+      btnFetch.disabled = false;
+      statusEl.textContent = '휴대폰에서 인증을 완료한 뒤, "데이터 불러오기"를 눌러주세요.';
+    }catch(err){
+      console.error(err);
+      alert('간편인증 시작에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+      statusEl.textContent = '간편인증 시작 실패';
+    }
+  });
+</script>
+
   });
   </script>
 </body>
