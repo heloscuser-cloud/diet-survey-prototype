@@ -87,13 +87,15 @@ def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
     # EncSpec 파싱
     spec = (os.getenv("DATAHUB_ENC_SPEC", "") or "").strip().upper()
     algo = spec.split("/")[0] if "/" in spec else spec
-    if "AES256" in algo:
+    # '.../256' 같이 뒤에 비트수가 오는 형태도 지원
+    if ("256" in spec) or ("AES256" in algo):
         key_bytes = (key_bytes[:32]).ljust(32, b"\x00")
-    elif "AES128" in algo or "AES" in algo:
+    elif ("128" in spec) or ("AES128" in algo) or ("AES" in algo):
         key_bytes = (key_bytes[:16]).ljust(16, b"\x00")
     else:
         # 기본 32바이트로 보정
         key_bytes = (key_bytes[:32]).ljust(32, b"\x00")
+
 
     # --- IV ---
     iv: Optional[bytes] = None
@@ -112,50 +114,28 @@ def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
 
 
 def encrypt_field(plain: str) -> str:
-    spec = os.getenv("DATAHUB_ENC_SPEC", "")
-    algo, mode, padding = _parse_encspec(spec)
-    key, iv = _get_key_iv()
-    try:
-        print("[ENC][SPEC]", spec, "| key_len=", len(key), "| iv_len=", len(iv))
-    except Exception:
-        pass
+    """
+    EncSpec/EncKey/IV에 따라 AES-CBC(+PKCS7/PKCS5)로 암호화 후 Base64 리턴.
+    - EncSpec: DATAHUB_ENC_SPEC (예: 'AES/CBC/PKCS5PADDING/256' 또는 'AES256/CBC/PKCS7')
+    """
+    spec = (os.getenv("DATAHUB_ENC_SPEC", "") or "").upper()
+    # PKCS5PADDING을 PKCS7로 동일 취급
+    spec_normalized = spec.replace("PKCS5PADDING", "PKCS7")
 
-    if "AES256" in algo:
-        key = (key or b"")[:32].ljust(32, b"\x00")
-        block = 16
-    elif "AES128" in algo or "AES" in algo:
-        key = (key or b"")[:16].ljust(16, b"\x00")
-        block = 16
-    else:
-        raise DatahubError(f"Unsupported algo in EncSpec: {algo}")
+    # 키/IV 획득(IV는 _get_key_iv 내부에서 EncSpec의 IV=... 또는 ENV를 우선 처리)
+    key, iv = _get_key_iv()  # ← ★ iv_env 같은 이름 쓰지 않음!
 
-    # IV 결정: EncSpec에 IV=... 가 포함되어 있으면 우선
-    iv = iv_env
-    if "IV=" in spec:
-        try:
-            iv_str = spec.split("IV=")[1]
-            # hex or 0-filled
-            if len(iv_str) in (16, 32):
-                # ASCII 그대로일 수 있으므로 zero-pad to 16
-                iv = iv_str.encode("utf-8").ljust(16, b"\x00")
-            else:
-                # 32/64 hex일 수 있음
-                try:
-                    iv = bytes.fromhex(iv_str)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-    if iv is None:
-        iv = b"\x00"*16
-
+    # 블록/패딩
+    block = 16
     data = plain.encode("utf-8")
-    if "PKCS7" in padding:
+    if "PKCS7" in spec_normalized:
         data = _pkcs7_pad(data, block)
 
+    # 암호화
     cipher = AES.new(key, AES.MODE_CBC, iv)
     enc = cipher.encrypt(data)
     return base64.b64encode(enc).decode("ascii")
+
 
 class DatahubClient:
     def __init__(self, base: Optional[str] = None, token: Optional[str] = None):
