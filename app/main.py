@@ -1424,62 +1424,51 @@ from fastapi import Body, Request, HTTPException
 # ===========================================
 @app.post("/api/dh/simple/start")
 def dh_simple_start(payload: dict = Body(...)):
-    """
-    요청 JSON 예:
-    {
-      "loginOption": "0",         // 0=카카오 (문서 예시). PASS 등은 공급사 규격에 맞춰 코드 사용
-      "telecom": "",              // PASS일 때만 필요 (SKT/KT/LGU 등)
-      "userName": "홍길동",
-      "hpNumber": "01012345678",
-      "juminOrBirth": "19900307"  // 생년월일(8) 또는 주민번호(13)
-    }
-    """
+    login_option = (payload.get("loginOption") or "").strip()   # "0"~"7"
+    user_name    = (payload.get("userName") or "").strip()
+    hp_number    = (payload.get("hpNumber") or "").strip()
+    jumin_birth  = (payload.get("juminOrBirth") or "").strip()  # yyyyMMdd
+    telecom      = (payload.get("telecom") or "").strip()       # "1"/"2"/"3" (통신사選時)
+
+
+    # 🔍 값 스냅샷(민감값은 앞/뒤만) 임시로그 print
     try:
-        login_option = (payload.get("loginOption") or "").strip()
-        user_name    = (payload.get("userName") or "").strip()
-        hp_number    = (payload.get("hpNumber") or "").strip()
-        jumin_birth  = (payload.get("juminOrBirth") or "").strip()
-        telecom      = (payload.get("telecom") or "").strip()
+        print("[DH-START][IN]",
+            "LOGINOPTION=", login_option,
+            "TELECOM=", telecom,
+            "NAME=", user_name,
+            "HP_LAST4=", hp_number[-4:],
+            "J_LEN=", len(jumin_birth))
+    except Exception:
+        pass
+    
 
-        if not (login_option and user_name and hp_number and jumin_birth):
-            raise HTTPException(400, "loginOption/userName/hpNumber/juminOrBirth는 필수입니다.")
+    if not (login_option and user_name and hp_number and jumin_birth):
+        raise HTTPException(400, "loginOption/userName/hpNumber/juminOrBirth는 필수입니다.")
 
+    try:
         rsp = DATAHUB.simple_auth_start(login_option, user_name, hp_number, jumin_birth, telecom)
         return rsp
     except DatahubError as e:
         raise HTTPException(502, f"DATAHUB error: {e}")
-    except Exception as e:
-        raise HTTPException(500, f"Internal error: {e}")
 
 # ===========================================
 # DataHub 간편인증 Step2: 완료(captcha)
 # ===========================================
 @app.post("/api/dh/simple/complete")
 def dh_simple_complete(payload: dict = Body(...), request: Request = None):
-    """
-    요청 JSON 예:
-    {
-      "callbackId": "<Step1 응답의 callbackId>",
-      "callbackType": "SIMPLE",   // 기본 SIMPLE
-      "callbackResponse": "",     // 필요시
-      "callbackResponse1": "",    // 필요시
-      "callbackResponse2": "",    // 필요시
-      "retry": ""                 // 필요시
-    }
-    """
+    cb  = (payload.get("callbackId") or "").strip()
+    cbt = (payload.get("callbackType") or "SIMPLE").strip() or "SIMPLE"
+    if not cb:
+        raise HTTPException(400, "callbackId는 필수입니다.")
     try:
-        cb  = (payload.get("callbackId") or "").strip()
-        cbt = (payload.get("callbackType") or "SIMPLE").strip() or "SIMPLE"
-        if not cb:
-            raise HTTPException(400, "callbackId는 필수입니다.")
         rsp = DATAHUB.simple_auth_complete(cb, cbt,
             callbackResponse  = payload.get("callbackResponse"),
             callbackResponse1 = payload.get("callbackResponse1"),
             callbackResponse2 = payload.get("callbackResponse2"),
             retry             = payload.get("retry"),
         )
-        # 이 응답 안에 이미 결과가 포함될 수도 있음. (공급사 응답 구조에 따름)
-        # 최신 일반검진 1건만 뽑아 세션 저장(가능하면)
+        # 최신 1건 세션 저장(선택)
         try:
             picked = pick_latest_general(rsp)
             if request is not None:
@@ -1489,8 +1478,6 @@ def dh_simple_complete(payload: dict = Body(...), request: Request = None):
         return rsp
     except DatahubError as e:
         raise HTTPException(502, f"DATAHUB error: {e}")
-    except Exception as e:
-        raise HTTPException(500, f"Internal error: {e}")
 
 # ===========================================
 # DataHub 인증서 방식(필요 시): 건강검진 결과 조회

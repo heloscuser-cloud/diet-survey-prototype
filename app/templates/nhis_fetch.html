@@ -40,12 +40,12 @@
             <option value="" selected>-- 선택 --</option>
             <option value="0">카카오톡</option>
 	<option value="1">삼성패스</option>
-	<option value="0">페이코</option>
+	<option value="2">페이코</option>
             <option value="3">통신사</option>
-	<option value="0">KB모바일인증서</option>
-	<option value="0">네이버</option>
-	<option value="0">신한인증서</option>
-	<option value="0">토스</option>
+	<option value="4">KB모바일인증서</option>
+	<option value="5">네이버</option>
+	<option value="6">신한인증서</option>
+	<option value="7">토스</option>
           </select>
         </div>
         <div id="telecomRow" style="display:none">
@@ -66,9 +66,9 @@
           <input id="phone" type="tel" inputmode="numeric" placeholder="01012345678" value="{{ user_phone or '' }}">
         </div>
         <div>
-          <label>생년월일(YYYYMMDD) 또는 주민번호(13자리)</label>
+          <label>생년월일(YYYYMMDD)</label>
           <div class="row-inline">
-            <input id="juminOrBirth" inputmode="numeric" placeholder="19900307 또는 9010101234567">
+            <input id="juminOrBirth" inputmode="numeric" placeholder="19900307">
           </div>
         </div>
       </div>
