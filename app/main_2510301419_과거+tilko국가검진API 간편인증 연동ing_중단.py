@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.routing import APIRoute
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse
+from fastapi.requests import Request
 from sqlmodel import SQLModel, Field, Session, create_engine, select, Relationship
 from pydantic import BaseModel
 from typing import Optional, List
@@ -25,6 +26,7 @@ from itsdangerous import (
 )
 import os, smtplib, ssl, socket, traceback
 from email.message import EmailMessage
+from fastapi import BackgroundTasks
 import zipfile
 import csv
 import itsdangerous
@@ -35,11 +37,16 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from io import StringIO, BytesIO
 from openpyxl import Workbook
+import csv
 import secrets
 import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from app.vendors.datahub_client import DatahubClient, DatahubError, pick_latest_general
+try:
+    from app.tilko.client import TilkoClient, TilkoError
+except ModuleNotFoundError:
+    # 로컬 실행 / 경로차 대응 (app 패키지 인식 안 될 때)
+    from tilko.client import TilkoClient, TilkoError
 
 
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret")
@@ -105,8 +112,7 @@ engine = create_engine(DATABASE_URL, echo=False)
 
 app = FastAPI(title="Diet Survey Prototype")
 
-# --- DataHub Client ---
-DATAHUB = DatahubClient()
+TILKO = TilkoClient(api_key=os.getenv("TILKO_API_KEY", ""), host=os.getenv("TILKO_API_HOST"))
 
 
 app.mount("/static", StaticFiles(directory=os.path.join(ROOT_DIR, "app", "static")), name="static")
@@ -373,11 +379,13 @@ def info_form(request: Request, auth: str | None = Cookie(default=None, alias=AU
 # -----------------------------------------------
 # NHIS 건강검진 조회 페이지 (info 전 단계)
 # -----------------------------------------------
-
+@app.get("/nhis")
 @app.get("/nhis")
 def nhis_page(request: Request):
     return templates.TemplateResponse("nhis_fetch.html", {"request": request, "next_url": "/info"})
+
     
+
 @app.get("/healthz")
 def healthz():
     return PlainTextResponse("ok", status_code=200)
@@ -1216,11 +1224,11 @@ def survey_finish(request: Request,
     normalized_payload = {"answers_indices": answers_indices}
     resp = session.get(Respondent, respondent_id)
 
-   
     nhis = request.session.get("nhis_latest")
-
     if nhis:
-        normalized_payload["nhis"] = nhis 
+        resp.nhis_exam_date = nhis.get("exam_date")          # 열 추가가 어렵다면 answers_json에 합쳐 저장해도 됨
+        resp.nhis_items_json = json.dumps(nhis.get("items"))  # TEXT 컬럼
+        # 필요 시 request.session.pop("nhis_latest", None)  # 한 번 쓰고 비우기
 
 
     sr = SurveyResponse(
@@ -1415,118 +1423,174 @@ async def admin_export_xlsx(
     )
 
 
+# ============================================================
+# NHIS (Tilko) - 간편인증 시작 + 인증 후 건강검진 조회 (최신 1건만)
+# ============================================================
+
+from fastapi import Body
+
+@app.post("/api/nhis/auth/start")
 
 
-from fastapi import Body, Request, HTTPException
-
-# ===========================================
-# DataHub 간편인증 Step1: 시작
-# ===========================================
-@app.post("/api/dh/simple/start")
-def dh_simple_start(payload: dict = Body(...)):
+def nhis_auth_start(payload: dict = Body(...), request: Request = None):
+    auth_type = str(payload.get("authType")).strip()
+    rsp = TILKO.nhis_simpleauth_request(name, phone, birth, private_auth_type=auth_type)
+    
     """
     요청 JSON 예:
-    {
-      "loginOption": "0",         // 0=카카오 (문서 예시). PASS 등은 공급사 규격에 맞춰 코드 사용
-      "telecom": "",              // PASS일 때만 필요 (SKT/KT/LGU 등)
-      "userName": "홍길동",
-      "hpNumber": "01012345678",
-      "juminOrBirth": "19900307"  // 생년월일(8) 또는 주민번호(13)
-    }
+    { "name": "홍길동", "phone": "01012345678", "birth": "19900307" }
     """
     try:
-        login_option = (payload.get("loginOption") or "").strip()
-        user_name    = (payload.get("userName") or "").strip()
-        hp_number    = (payload.get("hpNumber") or "").strip()
-        jumin_birth  = (payload.get("juminOrBirth") or "").strip()
-        telecom      = (payload.get("telecom") or "").strip()
+        name  = (payload.get("name")  or "").strip()
+        phone = (payload.get("phone") or "").strip()
+        birth = (payload.get("birth") or "").strip()
+        if not (name and phone and birth):
+            raise HTTPException(status_code=400, detail="name/phone/birth는 필수입니다.")
+        rsp = TILKO.nhis_simpleauth_request(name, phone, birth)
+        
+        # 디버그: 응답 요약 로그
+        try:
+            print("[NHIS][AUTH][RSP-RAW]", {k: type(v).__name__ for k,v in (rsp or {}).items()})
+            print("[NHIS][AUTH][RSP-JSON]", str(rsp)[:1000])
+        except Exception:
+            pass
 
-        if not (login_option and user_name and hp_number and jumin_birth):
-            raise HTTPException(400, "loginOption/userName/hpNumber/juminOrBirth는 필수입니다.")
 
-        rsp = DATAHUB.simple_auth_start(login_option, user_name, hp_number, jumin_birth, telecom)
-        return rsp
-    except DatahubError as e:
-        raise HTTPException(502, f"DATAHUB error: {e}")
+        # ── TxId 추출(응답 형태 다양성 대비)
+        tx = None
+        if isinstance(rsp, dict):
+            res = rsp.get("Result") if isinstance(rsp.get("Result"), dict) else {}
+            tx = res.get("TxId") or res.get("TxID") or rsp.get("TxId") or rsp.get("TxID")
+        if request is not None and tx:
+            request.session["nhis_tx"] = tx
+
+        # 프런트가 쉽게 쓰도록 표준화 키로 돌려줌
+        out = dict(rsp)
+        if tx is not None:
+            out["txId"] = tx
+        return out
+    except TilkoError as e:
+        raise HTTPException(502, f"TILKO error: {e}")
     except Exception as e:
         raise HTTPException(500, f"Internal error: {e}")
+    
+    
+def _pick_latest_general_checkup(tilko_result: dict) -> dict | None:
+    """
+    Tilko 응답에서 '최근 10년 중 가장 최근의 일반검진 1건'만 골라서
+    { exam_date, items: [{name, value, unit, ref}], raw: {...원본조각...} } 형태로 반환.
+    (응답 스키마 확정 전이므로, 가능한 키 패턴을 넓게 커버하도록 작성)
+    """
+    data = tilko_result or {}
+    res  = data.get("Result") if isinstance(data, dict) else {}
+    # 후보 리스트를 가능한 키들에서 추출
+    candidates = None
+    for key in ("HealthCheckList", "Checks", "List", "Items", "Data"):
+        val = res.get(key) if isinstance(res, dict) else None
+        if isinstance(val, list) and val:
+            candidates = val
+            break
+    if not candidates:
+        return None
 
-# ===========================================
-# DataHub 간편인증 Step2: 완료(captcha)
-# ===========================================
-@app.post("/api/dh/simple/complete")
-def dh_simple_complete(payload: dict = Body(...), request: Request = None):
+    def parse_date_any(x):
+        from datetime import datetime
+        if not x: return None
+        for fmt in ("%Y-%m-%d", "%Y%m%d", "%Y.%m.%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S"):
+            try: return datetime.strptime(str(x)[:len(fmt)], fmt)
+            except: pass
+        return None
+
+    # 일반검진만 필터링(필드명이 확정되면 여길 조정)
+    def is_general(row: dict) -> bool:
+        text = " ".join([str(row.get(k, "")) for k in ("Type","CheckupType","Category","검진구분","구분")]).lower()
+        return ("일반" in text) or ("general" in text) or (text == "")
+
+    rows = [r for r in candidates if isinstance(r, dict) and is_general(r)]
+    if not rows:
+        rows = [r for r in candidates if isinstance(r, dict)]  # 일반 없으면 전체 중에서
+
+    # 최신 1건 선택(검사일자/접수일 등에서 날짜를 추출)
+    def row_date(r: dict):
+        for k in ("ExamDate","CheckupDate","검사일자","검진일자","수검일자","Date","Created","CreateDt"):
+            d = parse_date_any(r.get(k))
+            if d: return d
+        return None
+
+    rows.sort(key=lambda r: row_date(r) or parse_date_any("1900-01-01"), reverse=True)
+    latest = rows[0] if rows else None
+    if not latest: return None
+
+    # 항목/결과 파싱(가능 키 스펙트럼)
+    # 행 내부의 항목 리스트가 따로 있을 수도 있고(예: Details, Items),
+    # 행 자체가 이미 항목 1개일 수도 있어 보편적으로 처리
+    items_src = None
+    for k in ("Details","Items","Results","검사항목"):
+        v = latest.get(k)
+        if isinstance(v, list) and v:
+            items_src = v
+            break
+    items = []
+    if items_src:
+        for it in items_src:
+            if not isinstance(it, dict): continue
+            name  = it.get("ItemName") or it.get("Name") or it.get("항목명") or ""
+            value = it.get("Result")   or it.get("Value") or it.get("결과")   or ""
+            unit  = it.get("Unit")     or it.get("단위")  or ""
+            ref   = it.get("Ref")      or it.get("Reference") or it.get("참고치") or ""
+            items.append({"name": str(name), "value": str(value), "unit": str(unit), "ref": str(ref)})
+    else:
+        # latest가 이미 '한 항목'일 가능성
+        name  = latest.get("ItemName") or latest.get("Name") or latest.get("항목명") or ""
+        value = latest.get("Result")   or latest.get("Value") or latest.get("결과")   or ""
+        unit  = latest.get("Unit")     or latest.get("단위")  or ""
+        ref   = latest.get("Ref")      or latest.get("Reference") or latest.get("참고치") or ""
+        if any([name, value, unit, ref]):
+            items.append({"name": str(name), "value": str(value), "unit": str(unit), "ref": str(ref)})
+
+    # 대표 날짜 뽑기
+    exam_date = row_date(latest)
+    exam_date_str = exam_date.strftime("%Y-%m-%d") if exam_date else ""
+
+    return {"exam_date": exam_date_str, "items": items, "raw": latest}
+
+@app.post("/api/nhis/health-check/fetch")
+def nhis_health_check_fetch(payload: dict = Body(...), request: Request = None):
     """
     요청 JSON 예:
-    {
-      "callbackId": "<Step1 응답의 callbackId>",
-      "callbackType": "SIMPLE",   // 기본 SIMPLE
-      "callbackResponse": "",     // 필요시
-      "callbackResponse1": "",    // 필요시
-      "callbackResponse2": "",    // 필요시
-      "retry": ""                 // 필요시
-    }
+    { "txId": "...", "fromYear": "2016", "toYear": "2025" }
     """
     try:
-        cb  = (payload.get("callbackId") or "").strip()
-        cbt = (payload.get("callbackType") or "SIMPLE").strip() or "SIMPLE"
-        if not cb:
-            raise HTTPException(400, "callbackId는 필수입니다.")
-        rsp = DATAHUB.simple_auth_complete(cb, cbt,
-            callbackResponse  = payload.get("callbackResponse"),
-            callbackResponse1 = payload.get("callbackResponse1"),
-            callbackResponse2 = payload.get("callbackResponse2"),
-            retry             = payload.get("retry"),
-        )
-        # 이 응답 안에 이미 결과가 포함될 수도 있음. (공급사 응답 구조에 따름)
-        # 최신 일반검진 1건만 뽑아 세션 저장(가능하면)
-        try:
-            picked = pick_latest_general(rsp)
-            if request is not None:
-                request.session["nhis_latest"] = picked
-        except Exception:
-            pass
-        return rsp
-    except DatahubError as e:
-        raise HTTPException(502, f"DATAHUB error: {e}")
+        tx  = (payload.get("txId") or "").strip()
+        if not tx and request is not None:
+            tx = (request.session.get("nhis_tx") or "").strip()
+
+        fy  = (payload.get("fromYear") or "2015").strip()
+        ty  = (payload.get("toYear")   or "2025").strip()
+        if not tx:
+            raise HTTPException(status_code=400, detail="txId가 없습니다. 간편인증을 먼저 완료하세요.")
+
+        tilko_rsp = TILKO.nhis_healthcheck_after_auth(tx, fy, ty)
+        picked = _pick_latest_general_checkup(tilko_rsp)
+
+        if request is not None:
+            request.session["nhis_latest"] = picked or {"exam_date": "", "items": [], "raw": tilko_rsp}
+
+        return picked or {"exam_date": "", "items": [], "raw": tilko_rsp}
+    except TilkoError as e:
+        raise HTTPException(502, f"TILKO error: {e}")
     except Exception as e:
         raise HTTPException(500, f"Internal error: {e}")
 
-# ===========================================
-# DataHub 인증서 방식(필요 시): 건강검진 결과 조회
-# ===========================================
-@app.post("/api/dh/nhis/result")
-def dh_nhis_result(payload: dict = Body(...), request: Request = None):
-    """
-    요청 JSON:
-    {
-      "jumin": "주민번호13자리",
-      "certName": "cn=...,ou=...,o=...,c=kr",
-      "certPwd": "인증서비번",
-      "derB64": "<DER base64>",
-      "keyB64": "<KEY base64>"
-    }
-    """
+
+#Tilko 공개키 확인용 헬스 체크 라우트
+@app.get("/debug/tilko/public-key")
+def tilko_public_key_debug():
     try:
-        jumin   = (payload.get("jumin") or "").strip()
-        cname   = (payload.get("certName") or "").strip()
-        cpwd    = (payload.get("certPwd") or "").strip()
-        der_b64 = (payload.get("derB64") or "").strip()
-        key_b64 = (payload.get("keyB64") or "").strip()
-        if not (jumin and cname and cpwd and der_b64 and key_b64):
-            raise HTTPException(400, "jumin/certName/certPwd/derB64/keyB64는 모두 필수입니다.")
-        rsp = DATAHUB.nhis_medical_checkup(jumin, cname, cpwd, der_b64, key_b64)
-        try:
-            picked = pick_latest_general(rsp)
-            if request is not None:
-                request.session["nhis_latest"] = picked
-        except Exception:
-            pass
-        return rsp
-    except DatahubError as e:
-        raise HTTPException(502, f"DATAHUB error: {e}")
+        pk = TILKO._ensure_public_key()
+        return {"ok": True, "publicKeyLen": len(pk)}
     except Exception as e:
-        raise HTTPException(500, f"Internal error: {e}")
+        return {"ok": False, "error": repr(e)}
 
 
 
