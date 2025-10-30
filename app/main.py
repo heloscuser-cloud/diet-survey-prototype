@@ -1520,11 +1520,6 @@ def dh_nhis_result(payload: dict = Body(...), request: Request = None):
         raise HTTPException(500, f"Internal error: {e}")
 
 
-@app.get("/_routes")
-def _routes():
-    return [{"path": r.path, "methods": list(r.methods)} for r in app.routes if isinstance(r, APIRoute)]
-
-
 #임시 디버그 라우트, 로그. 운영 시 삭제
 @app.get("/debug/datahub-selftest")
 def debug_datahub_selftest():
@@ -1537,3 +1532,7 @@ def debug_datahub_selftest():
         "expect": expect,
         "match": (got == expect)
     })
+
+@app.get("/_routes")
+def _routes():
+    return [{"path": r.path, "methods": list(r.methods)} for r in app.routes if isinstance(r, APIRoute)]

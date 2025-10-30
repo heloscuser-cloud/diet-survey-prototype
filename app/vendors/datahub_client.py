@@ -30,27 +30,107 @@ def _parse_encspec(spec: str) -> Tuple[str, str, str]:
 
 def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
     """
-    EncKey / EncIV 다양한 포맷을 모두 허용:
-    - 점(.) 섞인 형태 (예: 'Qt.P5OVv/DQDHbvAo.zelQ99tsPKzhJ4')
-    - Base64 / base64url(-,_) / Hex / Plain
+    EncKey / EncIV 다양한 포맷 허용 & 자동탐색:
+    - '.'(dot) 포함 커스텀 b64 → (제거|'.'→'+'|'.'→'/') 모두 시도
+    - base64url(-,_) 보정
+    - Base64 → Hex → Plain 순으로 시도
     - IV는 최종 16바이트로 보정
-    우선순위:
-      1) EncSpec에 IV=... 가 있으면 그 값을 최우선 사용
-      2) 아니면 ENV(DATAHUB_ENC_IV_B64)
-      3) 없으면 0x00 * 16
+    우선순위: EncSpec의 IV=... > ENV(DATAHUB_ENC_IV_B64) > 0x00*16
     """
     enc_key = (os.getenv("DATAHUB_ENC_KEY_B64", "") or "").strip()
     iv_env  = (os.getenv("DATAHUB_ENC_IV_B64", "") or "").strip()
 
-    def _normalize_b64(s: str) -> str:
-        # 공백 제거 + 점(.) 제거 + base64url 호환 변환
-        t = (s or "").strip().replace(" ", "").replace(".", "")
-        t = t.replace("-", "+").replace("_", "/")
-        # 길이 4의 배수 패딩
+    def _pad4(t: str) -> str:
         pad = (-len(t)) % 4
-        if pad:
-            t = t + ("=" * pad)
-        return t
+        return t + ("=" * pad)
+
+    def _try_b64_variants(s: str) -> Optional[bytes]:
+        if not s:
+            return None
+        raw = (s or "").strip().replace(" ", "")
+        # base64url 정규화 1차
+        bases = [raw,
+                 raw.replace("-", "+").replace("_", "/"),
+                 raw.replace(".", ""),                # dot 제거
+                 raw.replace(".", "+"),               # dot→'+'
+                 raw.replace(".", "/"),               # dot→'/'
+                 raw.replace(".", "").replace("-", "+").replace("_", "/"),
+                 raw.replace(".", "+").replace("-", "+").replace("_", "/"),
+                 raw.replace(".", "/").replace("-", "+").replace("_", "/"),
+                ]
+        seen = set()
+        for b in bases:
+            if b in seen: 
+                continue
+            seen.add(b)
+            try:
+                candidate = base64.b64decode(_pad4(b))
+                return candidate
+            except Exception:
+                continue
+        return None
+
+    def _decode_any(s: str) -> Optional[bytes]:
+        # 1) 다양한 b64 변형 시도
+        b = _try_b64_variants(s)
+        if b is not None:
+            return b
+        # 2) hex
+        try:
+            return bytes.fromhex(s)
+        except Exception:
+            pass
+        # 3) plain
+        try:
+            return s.encode("utf-8")
+        except Exception:
+            return None
+
+    # --- KEY ---
+    key_bytes = _decode_any(enc_key) or b""
+
+    # EncSpec 파싱 & 키 길이 보정
+    spec = (os.getenv("DATAHUB_ENC_SPEC", "") or "").strip().upper()
+    algo = spec.split("/")[0] if "/" in spec else spec
+    # 256/128 표기를 모두 인식
+    if ("256" in spec) or ("AES256" in algo):
+        key_bytes = (key_bytes[:32]).ljust(32, b"\x00")
+        key_bits = 256
+    elif ("128" in spec) or ("AES128" in algo) or ("AES" in algo):
+        key_bytes = (key_bytes[:16]).ljust(16, b"\x00")
+        key_bits = 128
+    else:
+        key_bytes = (key_bytes[:32]).ljust(32, b"\x00")
+        key_bits = 256
+
+    # --- IV ---
+    iv: Optional[bytes] = None
+    iv_source = "ZERO"
+    if "IV=" in spec:
+        iv_str = spec.split("IV=")[1].strip()
+        iv = _decode_any(iv_str)
+        iv_source = "SPEC"
+    elif iv_env:
+        iv = _decode_any(iv_env)
+        iv_source = "ENV"
+
+    if not iv:
+        iv = b"\x00" * 16
+    elif len(iv) != 16:
+        iv = (iv[:16]).ljust(16, b"\x00")
+
+    # 🔍 어떤 방식으로 잡혔는지 요약 로그
+    try:
+        print("[ENC][KIV]",
+              "key_bits=", key_bits,
+              "key_len=", len(key_bytes),
+              "iv_len=", len(iv),
+              "iv_src=", iv_source)
+    except Exception:
+        pass
+
+    return key_bytes, iv
+
 
     def _try_many_formats(s: str, want_len: int | None = None) -> Optional[bytes]:
         if not s:
@@ -140,9 +220,8 @@ def encrypt_field(plain: str) -> str:
 
 def _crypto_selftest():
     """
-    공급사 포털에서 제공한 Plain/EncData 쌍으로 즉시 판정.
-    - DATAHUB_SELFTEST_PLAIN : 포털 PlainData (예: !Kwic123테스트)
-    - DATAHUB_SELFTEST_EXPECT: 포털 EncData   (예: oXCcQ5Z0iINu+9Oi0u5/... )
+    포털에서 준 Plain/EncData 쌍으로 '정답'을 맞출 수 있는지 테스트.
+    OK가 되어야 암호화 레이어 일치가 확정.
     """
     import os
     plain  = os.getenv("DATAHUB_SELFTEST_PLAIN", "").strip()
@@ -158,6 +237,7 @@ def _crypto_selftest():
         print("[ENC][SELFTEST]", "OK" if ok else "FAIL", "| got=", got, "| expect=", expect)
     except Exception as e:
         print("[ENC][SELFTEST][ERR]", repr(e))
+
 
 
 class DatahubClient:
