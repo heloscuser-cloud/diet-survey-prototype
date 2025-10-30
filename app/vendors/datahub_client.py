@@ -121,9 +121,10 @@ def encrypt_field(plain: str) -> str:
     spec = (os.getenv("DATAHUB_ENC_SPEC", "") or "").upper()
     # PKCS5PADDING을 PKCS7로 동일 취급
     spec_normalized = spec.replace("PKCS5PADDING", "PKCS7")
-
     # 키/IV 획득(IV는 _get_key_iv 내부에서 EncSpec의 IV=... 또는 ENV를 우선 처리)
     key, iv = _get_key_iv()  # ← ★ iv_env 같은 이름 쓰지 않음!
+
+    print("[ENC][SPEC]", spec, "| key_len=", len(key), "| iv_len=", len(iv))  # 로그
 
     # 블록/패딩
     block = 16
@@ -137,12 +138,27 @@ def encrypt_field(plain: str) -> str:
     return base64.b64encode(enc).decode("ascii")
 
 
+def _crypto_selftest():
+    """
+    공급사 포털 표본(PlainData → EncData)로 암호화가 맞는지 1회 점검.
+    ENV로 끄고 켤 수 있음.
+    """
+    try:
+        ct = encrypt_field("!Kwic123테스트")
+        print("[ENC][SELFTEST]", ct)
+    except Exception as e:
+        print("[ENC][SELFTEST][ERR]", repr(e))
+
+
 class DatahubClient:
     def __init__(self, base: Optional[str] = None, token: Optional[str] = None):
         raw_base = base or os.getenv("DATAHUB_API_BASE", "https://datahub-dev.scraping.co.kr")
         self.base = (raw_base or "").strip().rstrip("/")
         self.token = (token or os.getenv("DATAHUB_TOKEN", "")).strip()
         if not self.token:
+            # __init__ 끝나기 직전(마지막 return/raise 전에) 추가
+            if os.getenv("APP_ENV", "dev") != "prod" and os.getenv("DATAHUB_SELFTEST", "1") == "1":
+                _crypto_selftest()
             raise DatahubError("DATAHUB_TOKEN is missing")
             
     def _post(self, path: str, body: Dict[str, Any], timeout=25) -> Dict[str, Any]:

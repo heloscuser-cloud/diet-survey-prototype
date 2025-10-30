@@ -1423,13 +1423,14 @@ from fastapi import Body, Request, HTTPException
 # DataHub 간편인증 Step1: 시작
 # ===========================================
 @app.post("/api/dh/simple/start")
+
+
 def dh_simple_start(payload: dict = Body(...)):
     login_option = (payload.get("loginOption") or "").strip()   # "0"~"7"
     user_name    = (payload.get("userName") or "").strip()
     hp_number    = (payload.get("hpNumber") or "").strip()
     jumin_birth  = (payload.get("juminOrBirth") or "").strip()  # yyyyMMdd
-    telecom      = (payload.get("telecom") or "").strip()       # "1"/"2"/"3" (통신사選時)
-
+    telecom      = (payload.get("telecom") or "").strip()       # "1"/"2"/"3" (통신사 선택 시)
 
     # 🔍 값 스냅샷(민감값은 앞/뒤만) 임시로그 print
     try:
