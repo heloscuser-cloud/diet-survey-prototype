@@ -30,40 +30,95 @@ def _parse_encspec(spec: str) -> Tuple[str, str, str]:
 
 def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
     """
-    EncKey는 Base64/Hex/Plain 중 하나라고 가정.
-    IV는 EncSpec에 있거나, ENV(DATAHUB_ENC_IV_B64)로 대체.
+    EncKey / EncIV 다양한 포맷을 모두 허용:
+    - 점(.) 섞인 형태 (예: 'Qt.P5OVv/DQDHbvAo.zelQ99tsPKzhJ4')
+    - Base64 / base64url(-,_) / Hex / Plain
+    - IV는 최종 16바이트로 보정
+    우선순위:
+      1) EncSpec에 IV=... 가 있으면 그 값을 최우선 사용
+      2) 아니면 ENV(DATAHUB_ENC_IV_B64)
+      3) 없으면 0x00 * 16
     """
-    enc_key = os.getenv("DATAHUB_ENC_KEY_B64", "")
-    key_bytes = None
-    # Base64 시도
-    try:
-        key_bytes = base64.b64decode(enc_key)
-    except Exception:
-        key_bytes = None
-    # Hex 시도
-    if key_bytes is None:
-        try:
-            key_bytes = bytes.fromhex(enc_key)
-        except Exception:
-            key_bytes = None
-    # Plain
-    if key_bytes is None:
-        key_bytes = enc_key.encode("utf-8")
+    enc_key = (os.getenv("DATAHUB_ENC_KEY_B64", "") or "").strip()
+    iv_env  = (os.getenv("DATAHUB_ENC_IV_B64", "") or "").strip()
 
-    iv_b64 = os.getenv("DATAHUB_ENC_IV_B64")
-    iv = base64.b64decode(iv_b64) if iv_b64 else None
+    def _normalize_b64(s: str) -> str:
+        # 공백 제거 + 점(.) 제거 + base64url 호환 변환
+        t = (s or "").strip().replace(" ", "").replace(".", "")
+        t = t.replace("-", "+").replace("_", "/")
+        # 길이 4의 배수 패딩
+        pad = (-len(t)) % 4
+        if pad:
+            t = t + ("=" * pad)
+        return t
+
+    def _try_many_formats(s: str, want_len: int | None = None) -> Optional[bytes]:
+        if not s:
+            return None
+        # 1) normalized base64
+        try:
+            t = _normalize_b64(s)
+            b = base64.b64decode(t)
+            if (want_len is None) or (len(b) == want_len) or (want_len in (16, 24, 32) and len(b) in (16, 24, 32)):
+                return b
+        except Exception:
+            pass
+        # 2) hex
+        try:
+            b = bytes.fromhex(s)
+            if (want_len is None) or len(b) == want_len:
+                return b
+        except Exception:
+            pass
+        # 3) plain utf-8
+        try:
+            b = s.encode("utf-8")
+            if (want_len is None) or len(b) == want_len:
+                return b
+        except Exception:
+            pass
+        return None
+
+    # --- KEY ---
+    key_bytes = _try_many_formats(enc_key)
+    if key_bytes is None:
+        key_bytes = b""
+
+    # EncSpec 파싱
+    spec = (os.getenv("DATAHUB_ENC_SPEC", "") or "").strip().upper()
+    algo = spec.split("/")[0] if "/" in spec else spec
+    if "AES256" in algo:
+        key_bytes = (key_bytes[:32]).ljust(32, b"\x00")
+    elif "AES128" in algo or "AES" in algo:
+        key_bytes = (key_bytes[:16]).ljust(16, b"\x00")
+    else:
+        # 기본 32바이트로 보정
+        key_bytes = (key_bytes[:32]).ljust(32, b"\x00")
+
+    # --- IV ---
+    iv: Optional[bytes] = None
+    if "IV=" in spec:
+        iv_str = spec.split("IV=")[1].strip()
+        iv = _try_many_formats(iv_str, want_len=16)
+    else:
+        iv = _try_many_formats(iv_env, want_len=16)
+
+    if iv is None:
+        iv = b"\x00" * 16
+    elif len(iv) != 16:
+        iv = (iv[:16]).ljust(16, b"\x00")
+
     return key_bytes, iv
 
+
 def encrypt_field(plain: str) -> str:
-    """
-    EncSpec/EncKey에 따라 AES-CBC(+PKCS7)로 암호화 후 Base64 리턴.
-    - EncSpec: DATAHUB_ENC_SPEC
-    - EncKey : DATAHUB_ENC_KEY_B64
-    - IV     : EncSpec에 명시되어 있지 않으면 DATAHUB_ENC_IV_B64 사용(없으면 0-IV)
-    """
     spec = os.getenv("DATAHUB_ENC_SPEC", "")
     algo, mode, padding = _parse_encspec(spec)
-    key, iv_env = _get_key_iv()
+    key, iv = _get_key_iv()
+    try:
+        print("[ENC][SPEC]", spec, "| key_len=", len(key), "| iv_len=", len(iv))
+    except Exception:
+        pass
 
     if "AES256" in algo:
         key = (key or b"")[:32].ljust(32, b"\x00")
@@ -104,8 +159,9 @@ def encrypt_field(plain: str) -> str:
 
 class DatahubClient:
     def __init__(self, base: Optional[str] = None, token: Optional[str] = None):
-        self.base = (base or os.getenv("DATAHUB_API_BASE", "https://datahub-dev.scraping.co.kr")).rstrip("/")
-        self.token = token or os.getenv("DATAHUB_TOKEN", "")
+        raw_base = base or os.getenv("DATAHUB_API_BASE", "https://datahub-dev.scraping.co.kr")
+        self.base = (raw_base or "").strip().rstrip("/")
+        self.token = (token or os.getenv("DATAHUB_TOKEN", "")).strip()
         if not self.token:
             raise DatahubError("DATAHUB_TOKEN is missing")
             
@@ -118,34 +174,28 @@ class DatahubClient:
         try:
             r = requests.post(url, headers=headers, json=body, timeout=timeout)
         except Exception as e:
-            # 네트워크 예외 자체도 남겨두자
             print("[DATAHUB][ERR-REQ]", path, repr(e))
             raise DatahubError(f"REQUEST_ERROR: {e}")
 
-        # 응답 본문 파싱 시도
         try:
             data = r.json()
         except Exception:
             data = {"errCode": "HTTP", "errMsg": r.text, "result": "FAIL"}
 
-        # 🔍 요청/응답 로그를 '무조건' 먼저 찍는다.
+        # 🔍 요청/응답 요약을 '항상' 먼저 기록
         try:
-            # body는 민감값(암호화 후)이긴 하지만 키만 남기자
-            print("[DATAHUB][REQ]", path, list(body.keys()))
+            print("[DATAHUB][BASE]", repr(self.base))
+            print("[DATAHUB][URL ]", url)
+            print("[DATAHUB][REQ ]", path, list(body.keys()))
             print("[DATAHUB][RSP-STATUS]", r.status_code)
-            # errCode / result / errMsg 요약
             print("[DATAHUB][RSP-SHORT]", data.get("errCode"), data.get("result"), (data.get("errMsg") or "")[:200])
         except Exception:
             pass
 
-        # 여기서 비정상 상태코드면 그 다음 raise
         if r.status_code != 200:
-            # 본문도 같이 남겨 원인 추적
             raise DatahubError(f"HTTP {r.status_code}: {data}")
 
         return data
-
-
     
 
     def simple_auth_start(
