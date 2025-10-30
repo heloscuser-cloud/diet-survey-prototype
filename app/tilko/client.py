@@ -108,10 +108,6 @@ class TilkoClient:
 
     # ---------- 공개 API ----------
     def nhis_simpleauth_request(self, name: str, phone: str, birth_yyyymmdd: str, private_auth_type: str) -> Dict[str, Any]:
-        """
-        간편인증 시작: /api/v1.0/NhisSimpleAuth/SimpleAuthRequest
-        - 문서 명세에 따라 [암호화] 항목만 __encrypt__에 넣을 것
-        """
         payload = {
             "Name": name,
             "CellphoneNo": phone,
@@ -120,6 +116,7 @@ class TilkoClient:
             "__encrypt__": ["Name", "CellphoneNo", "Birth", "PrivateAuthType"],
         }
         return self._post("/api/v1.0/NhisSimpleAuth/SimpleAuthRequest", payload)
+
 
     def nhis_healthcheck_after_auth(self, tx_id: str, from_year: str, to_year: str) -> Dict[str, Any]:
         """
