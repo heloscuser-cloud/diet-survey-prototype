@@ -39,8 +39,13 @@
           <select id="loginOption">
             <option value="" selected>-- 선택 --</option>
             <option value="0">카카오톡</option>
-            <option value="3">통신사 PASS</option>
-            <!-- 필요 시: 1=삼성, 2=페이코, 4=KB, 5=네이버, 6=신한, 7=토스 -->
+	<option value="1">삼성패스</option>
+	<option value="0">페이코</option>
+            <option value="3">통신사</option>
+	<option value="0">KB모바일인증서</option>
+	<option value="0">네이버</option>
+	<option value="0">신한인증서</option>
+	<option value="0">토스</option>
           </select>
         </div>
         <div id="telecomRow" style="display:none">
@@ -119,6 +124,7 @@
 
     // Step1: 간편인증 시작
     btnStart.addEventListener('click', async ()=>{
+	 console.log('[NHIS] start clicked'); // ← 임시로그, 이거 보이면 클릭 이벤트 OK
       const loginOption = loginSel.value;          // "0"~"7"
       const telecom     = telecomSel.value;        // "1"/"2"/"3" (옵션)
       const name  = $('#name').value.trim();
@@ -143,6 +149,7 @@
           })
         });
         const data = await rsp.json();
+console.log('[NHIS] start rsp', rsp.status, data); // ← 응답 요약 로그
 
         // errCode가 "0000"이면 즉시 성공 케이스일 수도 있고,
         // "0001"이면 callbackId 받아서 complete 호출 필요

@@ -108,28 +108,43 @@ class DatahubClient:
         self.token = token or os.getenv("DATAHUB_TOKEN", "")
         if not self.token:
             raise DatahubError("DATAHUB_TOKEN is missing")
-        
+            
     def _post(self, path: str, body: Dict[str, Any], timeout=25) -> Dict[str, Any]:
         url = f"{self.base}{path}"
         headers = {
             "Authorization": f"Token {self.token}",
             "Content-Type": "application/json;charset=UTF-8",
         }
-        r = requests.post(url, headers=headers, json=body, timeout=timeout)
+        try:
+            r = requests.post(url, headers=headers, json=body, timeout=timeout)
+        except Exception as e:
+            # 네트워크 예외 자체도 남겨두자
+            print("[DATAHUB][ERR-REQ]", path, repr(e))
+            raise DatahubError(f"REQUEST_ERROR: {e}")
+
+        # 응답 본문 파싱 시도
         try:
             data = r.json()
         except Exception:
             data = {"errCode": "HTTP", "errMsg": r.text, "result": "FAIL"}
 
-        # 응답 상태 코드 확인
+        # 🔍 요청/응답 로그를 '무조건' 먼저 찍는다.
+        try:
+            # body는 민감값(암호화 후)이긴 하지만 키만 남기자
+            print("[DATAHUB][REQ]", path, list(body.keys()))
+            print("[DATAHUB][RSP-STATUS]", r.status_code)
+            # errCode / result / errMsg 요약
+            print("[DATAHUB][RSP-SHORT]", data.get("errCode"), data.get("result"), (data.get("errMsg") or "")[:200])
+        except Exception:
+            pass
+
+        # 여기서 비정상 상태코드면 그 다음 raise
         if r.status_code != 200:
+            # 본문도 같이 남겨 원인 추적
             raise DatahubError(f"HTTP {r.status_code}: {data}")
 
-        # 🔍 디버그 로그 추가 (요청 경로, 필드키, 응답요약)
-        print("[DATAHUB][REQ]", path, list(body.keys()))
-        print("[DATAHUB][RSP]", data.get("errCode"), data.get("result"))
-
         return data
+
 
     
 
