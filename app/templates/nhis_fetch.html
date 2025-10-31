@@ -98,19 +98,6 @@
   </div>
 <script>
 (function(){
-  // ---------- 유틸 ----------
-  const $ = (s)=>document.querySelector(s);
-  const onlyDigits = v => (v||"").replace(/[^0-9]/g,'');
-
-  const setStatus=(msg, kind)=>{
-    const el = $('#status');                   // ← 이 파일의 status DIV id="status"
-    if (!el) return;
-    el.textContent = msg || '';
-    el.className = 'status' + (kind ? (' '+kind) : '');
-  };
-
-  // ---------- DOM ----------
-  (function(){
   const $ = (s)=>document.querySelector(s);
 
   const loginSel   = $('#loginSel');
@@ -240,8 +227,8 @@
   });
 
 })();
-
 </script>
+
 
 </body>
 </html>
