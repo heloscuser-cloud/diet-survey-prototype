@@ -281,6 +281,43 @@ def init_db():
 def on_startup():
     init_db()
 
+
+#---- 공단검진 결과 데이터 가공/저장 헬퍼 ----#
+
+def pick_latest_general_checkup(nhis_data: dict) -> dict | None:
+    """
+    데이터허브 응답(data.INCOMELIST[])에서 최근 10년 내 가장 최근 1건을 반환.
+    일반검진만 포함(암검진 제외) 규칙이 명시돼 있으면 필드로 구분, 없으면 전체에서 최신.
+    """
+    items = (nhis_data or {}).get("INCOMELIST") or []
+    if not items:
+        return None
+
+    def parse_date(y, md):
+        # GUNYEAR: "2022", GUNDATE: "11/02" 형태 가정
+        try:
+            y = int(str(y).strip()[:4])
+            m, d = md.split("/")
+            return datetime(y, int(m), int(d))
+        except Exception:
+            return None
+
+    ten_years_ago = datetime.now() - timedelta(days=365*10)
+    candidates = []
+    for it in items:
+        dt = parse_date(it.get("GUNYEAR"), it.get("GUNDATE",""))
+        if dt and dt >= ten_years_ago:
+            # 일반/암 구분이 따로 온다면 여기서 필터(it.get("TYPE") == "GENERAL" 같은 식)
+            candidates.append((dt, it))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1]
+
+
+
+
 # ---- Simple helpers ----
 def hash_phone(phone: str) -> str:
     # naive demo hash (do NOT use in prod). Replace with SHA-256 + salt.
@@ -1465,63 +1502,83 @@ from fastapi import Body, Request, HTTPException
 # ===========================================
 # DataHub 간편인증 Step1: 시작
 # ===========================================
+
 @app.post("/api/dh/simple/start")
+async def dh_simple_start(request: Request):
+    payload = await request.json()
+    loginOption    = str(payload.get("loginOption","")).strip()
+    telecom        = str(payload.get("telecom","")).strip()
+    userName       = str(payload.get("userName","")).strip()
+    hpNumber       = str(payload.get("hpNumber","")).strip()
+    juminOrBirth   = str(payload.get("juminOrBirth","")).strip()
+    telecom_gubun  = telecom if loginOption == "3" and telecom else None
+
+    # 데이터허브 즉시형/콜백형 공용 호출
+    rsp = DATAHUB.simple_auth_complete(
+        login_option=loginOption,
+        user_name=userName,
+        hp_number=hpNumber,
+        jumin_or_birth=juminOrBirth,   # 서버에서 암호화 수행 중
+        telecom_gubun=telecom_gubun
+    )
+
+    err = str(rsp.get("errCode",""))
+    data = rsp.get("data") or {}
+
+    # 콜백형 (callbackId 제공)
+    if err in ("0001","1") and data.get("callbackId"):
+        return JSONResponse(
+            {"errCode":"0001","message":"NEED_CALLBACK","data":{"callbackId":data["callbackId"]}},
+            status_code=200
+        )
+
+    # 즉시형 (바로 성공)
+    if err in ("0000","0"):
+        # 필요시 서버 세션/캐시에 입력값 저장해 complete에서 재조회에 활용 가능
+        return JSONResponse({"errCode":"0000","message":"IMMEDIATE_OK","data":{}}, status_code=200)
+
+    # 그 외 실패
+    return JSONResponse({"errCode": err or "9999", "message": rsp.get("message") or "FAIL"}, status_code=400)
 
 
-def dh_simple_start(payload: dict = Body(...)):
-    login_option = (payload.get("loginOption") or "").strip()   # "0"~"7"
-    user_name    = (payload.get("userName") or "").strip()
-    hp_number    = (payload.get("hpNumber") or "").strip()
-    jumin_birth  = (payload.get("juminOrBirth") or "").strip()  # yyyyMMdd
-    telecom      = (payload.get("telecom") or "").strip()       # "1"/"2"/"3" (통신사 선택 시)
-
-    # 🔍 값 스냅샷(민감값은 앞/뒤만) 임시로그 print
-    try:
-        print("[DH-START][IN]",
-            "LOGINOPTION=", login_option,
-            "TELECOM=", telecom,
-            "NAME=", user_name,
-            "HP_LAST4=", hp_number[-4:],
-            "J_LEN=", len(jumin_birth))
-    except Exception:
-        pass
-    
-
-    if not (login_option and user_name and hp_number and jumin_birth):
-        raise HTTPException(400, "loginOption/userName/hpNumber/juminOrBirth는 필수입니다.")
-
-    try:
-        rsp = DATAHUB.simple_auth_start(login_option, user_name, hp_number, jumin_birth, telecom)
-        return rsp
-    except DatahubError as e:
-        raise HTTPException(502, f"DATAHUB error: {e}")
 
 # ===========================================
 # DataHub 간편인증 Step2: 완료(captcha)
 # ===========================================
 @app.post("/api/dh/simple/complete")
-def dh_simple_complete(payload: dict = Body(...), request: Request = None):
-    cb  = (payload.get("callbackId") or "").strip()
-    cbt = (payload.get("callbackType") or "SIMPLE").strip() or "SIMPLE"
-    if not cb:
-        raise HTTPException(400, "callbackId는 필수입니다.")
-    try:
-        rsp = DATAHUB.simple_auth_complete(cb, cbt,
-            callbackResponse  = payload.get("callbackResponse"),
-            callbackResponse1 = payload.get("callbackResponse1"),
-            callbackResponse2 = payload.get("callbackResponse2"),
-            retry             = payload.get("retry"),
+async def dh_simple_complete(request: Request):
+    payload = await request.json()
+    # 즉시형이면 direct=true + 시작 페이로드 그대로 전달되어 옴
+    if bool(payload.get("direct")):
+        loginOption    = str(payload.get("loginOption","")).strip()
+        telecom        = str(payload.get("telecom","")).strip()
+        userName       = str(payload.get("userName","")).strip()
+        hpNumber       = str(payload.get("hpNumber","")).strip()
+        juminOrBirth   = str(payload.get("juminOrBirth","")).strip()
+        telecom_gubun  = telecom if loginOption == "3" and telecom else None
+
+        rsp = DATAHUB.simple_auth_complete(
+            login_option=loginOption,
+            user_name=userName,
+            hp_number=hpNumber,
+            jumin_or_birth=juminOrBirth,
+            telecom_gubun=telecom_gubun
         )
-        # 최신 1건 세션 저장(선택)
-        try:
-            picked = pick_latest_general(rsp)
-            if request is not None:
-                request.session["nhis_latest"] = picked
-        except Exception:
-            pass
-        return rsp
-    except DatahubError as e:
-        raise HTTPException(502, f"DATAHUB error: {e}")
+        err = str(rsp.get("errCode",""))
+        if err in ("0000","0"):
+            return JSONResponse({"errCode":"0000","message":"OK","data": rsp.get("data") or rsp}, status_code=200)
+        return JSONResponse({"errCode": err or "9999","message": rsp.get("message") or "FAIL"}, status_code=400)
+
+    # 콜백형이면 callbackId 필요
+    callbackId = str(payload.get("callbackId","")).strip()
+    if not callbackId:
+        return JSONResponse({"errCode":"9001","message":"callbackId is required"}, status_code=400)
+
+    rsp = DATAHUB.simple_auth_complete(callbackId)
+    err = str(rsp.get("errCode",""))
+    if err in ("0000","0"):
+        return JSONResponse({"errCode":"0000","message":"OK","data": rsp.get("data") or rsp}, status_code=200)
+    return JSONResponse({"errCode": err or "9999","message": rsp.get("message") or "FAIL"}, status_code=400)
 
 # ===========================================
 # DataHub 인증서 방식(필요 시): 건강검진 결과 조회

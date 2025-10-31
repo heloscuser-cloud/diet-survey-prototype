@@ -193,113 +193,120 @@
   }
 
   // ---------- Step1: 간편인증 시작 ----------
-  btnStart.addEventListener('click', async ()=>{
-    const loginOption = loginSel.value;          // "0"~"7"
-    const telecom     = telecomSel.value;        // "1"/"2"/"3" (옵션)
-    const name  = nameField.value.trim();
-    const phone = onlyDigits(phoneField.value);
+   // 상태표시
+  function setStatus(msg, kind) {
+    const el = document.getElementById('nhisStatus');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.className = kind === 'err' ? 'text-red-600' : 'text-green-700';
+  }
 
-    const isPASS = (loginOption === '3');
-    const juminOrBirth = isPASS
-      ? onlyDigits(birthOne.value) // 8자리
-      : (onlyDigits(rrn1.value)+onlyDigits(rrn2.value)); // 13자리
+  let startPayloadCache = null; // 즉시형일 때 complete에 재사용
+  let directReady = false;      // true면 callbackId 없이 바로 complete
 
-    if(!loginOption){ alert('간편인증 수단을 선택하세요.'); return; }
-    if(isPASS && !telecom){ alert('통신사를 선택하세요.'); return; }
-    if(!name || !phone || !juminOrBirth){ alert('이름/휴대폰/식별값을 입력하세요.'); return; }
+  const btnStart    = document.getElementById('btnStart');
+  const btnComplete = document.getElementById('btnComplete');
+
+  btnStart.addEventListener('click', async () => {
+    const loginOption = document.getElementById('loginOption').value;     // "0"~"7"
+    const telecomSel  = document.getElementById('telecom');
+    const telecom     = telecomSel ? telecomSel.value : '';
+    const name        = document.getElementById('name').value.trim();
+    const phone       = document.getElementById('phone').value.trim();
+    const juminOrBirth= document.getElementById('juminOrBirth').value.trim();
+
+    if (!loginOption) { alert('간편인증 수단을 선택하세요.'); return; }
+    if (loginOption === '3' && !telecom) { alert('통신사를 선택하세요.'); return; }
+    if (!name || !phone || !juminOrBirth) { alert('이름/휴대폰/생년월일(또는 주민번호)을 입력하세요.'); return; }
 
     setStatus('간편인증 요청 중...');
-    try{
+    directReady = false;
+    startPayloadCache = {
+      loginOption, telecom, userName: name, hpNumber: phone, juminOrBirth
+    };
+
+    try {
       const rsp = await fetch('/api/dh/simple/start', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ loginOption, telecom, userName: name, hpNumber: phone, juminOrBirth })
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(startPayloadCache)
       });
       const data = await rsp.json();
-      console.log('[NHIS] start rsp', rsp.status, data);
+      console.log('[NHIS][start]', rsp.status, data);
 
-      if(!rsp.ok){
+      if (!rsp.ok) {
         setStatus('간편인증 시작 실패', 'err');
-        alert('간편인증 시작에 실패했습니다.');
+        alert(data?.message || '간편인증 시작 실패');
         return;
       }
 
-      callbackId = (data && data.data && data.data.callbackId) || null;
-
-      if (callbackId){
-        const url = `${AUTH_BASE}?callbackId=${encodeURIComponent(callbackId)}`;
-        const win = window.open(url, '_blank', 'noopener'); // 팝업 시도
-        if (!win) { location.href = url; return; }          // 차단 시 동일 탭
-        alert('간편인증 창이 열렸습니다. 인증 완료 후 이 창으로 돌아와 "데이터 불러오기"를 눌러주세요.');
+      // 🎯 분기 1: 콜백형(0001 + callbackId)
+      if ((data.errCode === '0001' || data.errCode === 1) && data?.data?.callbackId) {
+        const cbid = data.data.callbackId;
+        window.open(`https://datahub-dev.scraping.co.kr/auth/simple?callbackId=${cbid}`, '_blank');
+        setStatus('인증창이 열렸습니다. 인증 완료 후 "데이터 불러오기"를 눌러주세요.', 'ok');
         btnComplete.disabled = false;
-        setStatus('휴대폰에서 인증을 완료한 뒤, "데이터 불러오기"를 눌러주세요.', 'ok');
-      } else {
-        // callbackId가 없으면 UI를 띄울 방법이 없음 → 에러 표시
-        setStatus('간편인증 시작 응답에 callbackId가 없습니다.', 'err');
-        alert('간편인증 시작 응답이 올바르지 않습니다. 잠시 후 다시 시도해 주세요.');
+        // complete 시 body: { callbackId: cbid }로 전송됨 (백엔드에서 그대로 받음)
+        btnComplete.dataset.callbackId = cbid;
+        return;
       }
-    }catch(e){
+
+      // 🎯 분기 2: 즉시형(0000) → 팝업 없이 곧바로 complete 가능
+      if (data.errCode === '0000' || data.errCode === 0) {
+        directReady = true;
+        delete btnComplete.dataset.callbackId; // 혹시 남아있던 값 제거
+        setStatus('인증창 없이 즉시 조회 가능합니다. "데이터 불러오기"를 눌러주세요.', 'ok');
+        btnComplete.disabled = false;
+        return;
+      }
+
+      // 그 외 실패
+      setStatus('간편인증 시작 실패', 'err');
+      alert(data?.message || '간편인증 시작 실패');
+    } catch (e) {
       console.error(e);
       setStatus('간편인증 시작 실패', 'err');
-      alert('간편인증 시작에 실패했습니다.');
+      alert('간편인증 시작 실패');
     }
   });
 
-  // ---------- Step2: 완료(captcha) → 미리보기 ----------
-  btnComplete.addEventListener('click', async ()=>{
-    if(!callbackId){ alert('callbackId가 없습니다. Step1을 먼저 수행하세요.'); return; }
-    setStatus('검진 데이터 불러오는 중...');
-    try{
+  // “데이터 불러오기” 버튼
+  btnComplete.addEventListener('click', async () => {
+    setStatus('검진 데이터 조회 중...');
+    btnComplete.disabled = true;
+    try {
+      const cbid = btnComplete.dataset.callbackId || '';
+      const body = directReady
+        ? { direct: true, ...startPayloadCache } // 즉시형: 시작과 동일 페이로드로 재조회
+        : { callbackId: cbid };                  // 콜백형: callbackId로 완료 조회
+
       const rsp = await fetch('/api/dh/simple/complete', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ callbackId, callbackType: 'SIMPLE' })
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
       });
       const data = await rsp.json();
-      console.log('[NHIS] complete data', data);
+      console.log('[NHIS][complete]', rsp.status, data);
 
-      if(!rsp.ok){
-        setStatus('불러오기 실패', 'err');
-        alert('불러오기에 실패했습니다. 다시 시도해 주세요.');
+      if (!rsp.ok || (data.errCode !== '0000' && data.errCode !== 0)) {
+        setStatus('검진 데이터 조회 실패', 'err');
+        alert(data?.message || '검진 데이터 조회 실패');
+        btnComplete.disabled = false;
         return;
       }
 
-      const list = (data && data.data && (data.data.INCOMELIST || data.data.CHECKUPLIST)) || [];
-      let latest = null;
-      if (list.length){
-        latest = list
-          .map(r=>{
-            const y = String(r.GUNYEAR||'').trim();
-            const md = String(r.GUNDATE||'').trim();
-            const [mm,dd] = (md.includes('/') ? md.split('/') : ['01','01']);
-            return { raw:r, key:(y.length===4? (y+mm.padStart(2,'0')+dd.padStart(2,'0')) : '') };
-          })
-          .sort((a,b)=> b.key.localeCompare(a.key))[0];
-      }
+      // 여기서 data.data(혹은 data.result)에 결과가 들어옴.
+      setStatus('검진 데이터 조회 완료', 'ok');
 
-      preview.style.display='block';
-      const exam = latest ? ((latest.raw.GUNYEAR||'') + '-' + String(latest.raw.GUNDATE||'').replace('/','-')) : '-';
-      const raw = JSON.stringify(data, null, 2);
-
-      preview.innerHTML = `
-        <div><b>검진 연/일자</b> ${exam}</div>
-        <details style="margin-top:8px">
-          <summary>원본 응답(JSON) 보기</summary>
-          <pre style="white-space:pre-wrap;font-size:12px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:10px;max-height:280px;overflow:auto;">${raw}</pre>
-        </details>
-      `;
-
-      setStatus('건강검진 데이터 연결 완료', 'ok');
-      btnNext.style.pointerEvents = 'auto';
-      btnNext.style.opacity = '1';
-      btnNext.setAttribute('aria-disabled','false');
-    }catch(e){
+      // 👉 필요하면 미리보기 DOM에 data 표시 or 다음 페이지로 이동
+      // location.href = document.getElementById('nextUrl').value || '/info';
+    } catch (e) {
       console.error(e);
-      setStatus('불러오기 실패', 'err');
-      alert('불러오기에 실패했습니다. 인증 완료 여부를 확인한 뒤 다시 시도해 주세요.');
+      setStatus('검진 데이터 조회 실패', 'err');
+      alert('검진 데이터 조회 실패');
+      btnComplete.disabled = false;
     }
   });
-})();
 </script>
 </body>
 </html>
