@@ -41,16 +41,19 @@ def _get_text_encoding() -> str:
     if enc in ("cp949", "euc-kr", "euckr", "ksc5601"): return "cp949"  # cp949로 통일
     return "utf-8"
 
-
-
 def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
     """
-    EncKey/IV 디코드 + 강제 옵션 반영:
-      - DATAHUB_FORCE_KEY_BITS: 128|256 (기본 EncSpec 추정)
-      - DATAHUB_FORCE_IV_MODE : ENV|ZERO (기본 ENV)
-      - DATAHUB_FORCE_KEY_SHAPE: right|left|sha256|md5 (기본 right)
+    EncKey/IV 디코드 + 강제 옵션 반영 + (개발모드) SELFTEST로
+    올바른 key/iv 후보를 '직접' 선택.
+    - DATAHUB_FORCE_KEY_BITS: 128|256 (기본 EncSpec 추정)
+    - DATAHUB_FORCE_IV_MODE : ENV|ZERO (기본 ENV)
+    - DATAHUB_FORCE_KEY_SHAPE: right|left|sha256|md5 (기본 right)
+    - DATAHUB_SELFTEST_PLAIN / DATAHUB_SELFTEST_EXPECT 가 있으면
+      모든 key/iv 후보(점/urlsafe/hex/raw) 중에서 'expect'를 만들어내는
+      후보를 선택하여 반환한다.
     """
     import base64, os, hashlib
+    from Crypto.Cipher import AES
 
     enc_key = (os.getenv("DATAHUB_ENC_KEY_B64", "") or "").strip()
     iv_env  = (os.getenv("DATAHUB_ENC_IV_B64", "")  or "").strip()
@@ -58,31 +61,40 @@ def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
     def pad4(s: str) -> str:
         return s + ("=" * ((4 - len(s) % 4) % 4))
 
-    def b64_try(s: str):
-        outs = []
-        for v in [s,
-                  s.replace("-", "+").replace("_", "/"),
-                  s.replace(".", ""),
-                  s.replace(".", "+"),
-                  s.replace(".", "/")]:
+    def b64_variants(s: str) -> list[bytes]:
+        outs, seen = [], set()
+        for v in [
+            s,
+            s.replace("-", "+").replace("_", "/"),
+            s.replace(".", ""),
+            s.replace(".", "+"),
+            s.replace(".", "/"),
+        ]:
+            vv = pad4(v)
+            if vv in seen:
+                continue
+            seen.add(vv)
             try:
-                outs.append(base64.b64decode(pad4(v)))
+                outs.append(base64.b64decode(vv))
             except Exception:
                 pass
-        return outs or [b""]
+        return outs
 
-    def hex_try(s: str):
-        try: return [bytes.fromhex(s)]
-        except Exception: return []
+    def hex_try(s: str) -> list[bytes]:
+        try:
+            return [bytes.fromhex(s)]
+        except Exception:
+            return []
 
-    def raw_try(s: str):
-        return [s.encode("utf-8")]
+    def raw_try(s: str) -> list[bytes]:
+        return [s.encode("utf-8")] if s else []
 
-    key_cands = b64_try(enc_key) + hex_try(enc_key) + raw_try(enc_key)
-    iv_cands  = b64_try(iv_env)  + hex_try(iv_env)  + raw_try(iv_env)
+    key_cands = b64_variants(enc_key) + hex_try(enc_key) + raw_try(enc_key)
+    iv_cands  = b64_variants(iv_env)  + hex_try(iv_env)  + raw_try(iv_env)
     if not iv_cands:
         iv_cands = [b"\x00"*16]
 
+    # EncSpec 기반 기본 비트수
     spec = (os.getenv("DATAHUB_ENC_SPEC", "") or "").strip().upper()
     default_bits = 256 if ("256" in spec or "AES256" in spec) else 128
 
@@ -90,6 +102,7 @@ def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
     ivmode = (os.getenv("DATAHUB_FORCE_IV_MODE", "ENV") or "ENV").upper()
     kshape = (os.getenv("DATAHUB_FORCE_KEY_SHAPE", "right") or "right").lower()
 
+    # 키 shaping
     def shape_key(k: bytes, bits: int, mode: str) -> bytes:
         need = 32 if bits == 256 else 16
         if mode == "right":
@@ -104,23 +117,46 @@ def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
             return (d if need == 16 else (d + hashlib.md5(d).digest()))[:need]
         return (k[:need]).ljust(need, b"\x00")
 
-    key = shape_key(key_cands[0], kb, kshape)
-    if ivmode == "ZERO":
-        iv = b"\x00"*16
-    else:
-        base_iv = iv_cands[0] if iv_cands else b""
-        iv = (base_iv[:16]).ljust(16, b"\x00")
+    # IV shaping
+    def shape_iv(v: bytes, mode: str) -> bytes:
+        if mode == "ZERO":
+            return b"\x00"*16
+        vv = (v[:16]).ljust(16, b"\x00")
+        return vv
 
-    print("[ENC][KIV]",
-          "key_bits=", kb,
-          "key_len=", len(key),
-          "iv_len=", len(iv),
-          "iv_src=", ivmode,
-          "key_shape=", kshape)
+    # (개발) SELFTEST로 올바른 key/iv 후보를 직접 선택
+    plain  = (os.getenv("DATAHUB_SELFTEST_PLAIN", "") or "").strip()
+    expect = (os.getenv("DATAHUB_SELFTEST_EXPECT", "") or "").strip()
+    app_env = (os.getenv("APP_ENV", "dev") or "").strip().lower()
+    text_enc = (os.getenv("DATAHUB_TEXT_ENCODING", "utf-8") or "").lower()
+    text_enc = "cp949" if text_enc in ("cp949","euc-kr","euckr","ksc5601") else "utf-8"
 
+    if app_env != "prod" and plain and expect:
+        p = plain.encode(text_enc, errors="strict")
+        data = _pkcs7_pad(p, 16)
+        for i, kc in enumerate(key_cands):
+            key = shape_key(kc, kb, kshape)
+            for j, ic in enumerate(iv_cands):
+                iv  = shape_iv(ic, ivmode)
+                try:
+                    ct = AES.new(key, AES.MODE_CBC, iv).encrypt(data)
+                    b64 = base64.b64encode(ct).decode("ascii")
+                    if b64 == expect:
+                        print("[ENC][KIV][PICKED]", f"key_idx={i}", f"iv_idx={j}",
+                              "key_bits=", kb, "key_len=", len(key),
+                              "iv_len=", len(iv), "iv_src=", ivmode, "key_shape=", kshape)
+                        return key, iv
+                except Exception:
+                    continue
+        # 못 찾으면 아래 일반 경로로 진행
+
+    # 일반 경로: 첫 후보 사용
+    key = shape_key(key_cands[0] if key_cands else b"", kb, kshape)
+    iv  = shape_iv(iv_cands[0] if iv_cands else b"\x00"*16, ivmode)
+
+    print("[ENC][KIV]", "key_bits=", kb, "key_len=", len(key),
+          "iv_len=", len(iv), "iv_src=", ivmode, "key_shape=", kshape)
     return key, iv
-
-
 
 
 def encrypt_field(plain: str) -> str:
