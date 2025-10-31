@@ -167,11 +167,11 @@ async def completed_redirect_handler(request: Request, exc: HTTPException):
 
 @app.middleware("http")
 async def no_store_for_survey(request: Request, call_next):
-    #디버그용 경로허용
-    if request.url.path.startswith("/debug/"):
-       return await call_next(request)
    
     response = await call_next(request)
+    #디버그용 경로허용
+    if request.url.path.startswith("/debug/"):
+        return await call_next(request)
     p = request.url.path
     if p.startswith("/survey"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -1562,22 +1562,33 @@ def dh_nhis_result(payload: dict = Body(...), request: Request = None):
 #임시 디버그 라우트, 로그. 운영 시 삭제
 from fastapi.responses import JSONResponse
 
+@app.get("/debug/datahub-selftest")
 def debug_datahub_selftest():
     import os
-    plain  = os.getenv("DATAHUB_SELFTEST_PLAIN", "").strip()
-    expect = os.getenv("DATAHUB_SELFTEST_EXPECT", "").strip()
+    plain  = (os.getenv("DATAHUB_SELFTEST_PLAIN", "") or "").strip()
+    expect = (os.getenv("DATAHUB_SELFTEST_EXPECT", "") or "").strip()
     if not plain or not expect:
-        return JSONResponse({"error": "set DATAHUB_SELFTEST_PLAIN & DATAHUB_SELFTEST_EXPECT"}, status_code=400)
+        return JSONResponse(
+            {"error":"set DATAHUB_SELFTEST_PLAIN & DATAHUB_SELFTEST_EXPECT"},
+            status_code=400
+        )
 
-    # 환경설정 인코딩 1개 + 보조 비교(utf-8 / cp949 모두 확인)
+    # 한 번에 두 인코딩 결과 비교(무료 호출 아님)
+    encs = []
+    main_enc = (os.getenv("DATAHUB_TEXT_ENCODING", "utf-8") or "").lower()
+    encs.append(main_enc)
+    for e in ("utf-8", "cp949"):
+        if e not in encs:
+            encs.append(e)
+
     results = []
-    for enc in [os.getenv("DATAHUB_TEXT_ENCODING", "utf-8").lower(), "utf-8", "cp949"]:
-        enc = "cp949" if enc in ("cp949","euc-kr","euckr","ksc5601") else "utf-8"
-        os.environ["DATAHUB_TEXT_ENCODING"] = enc
+    for enc in encs:
+        os.environ["DATAHUB_TEXT_ENCODING"] = "cp949" if enc in ("cp949","euc-kr","euckr","ksc5601") else "utf-8"
         got = encrypt_field(plain)
-        results.append({"encoding": enc, "got": got, "match": (got == expect)})
+        results.append({"encoding": os.environ["DATAHUB_TEXT_ENCODING"], "got": got, "match": (got == expect)})
 
     return JSONResponse({"plain": plain, "expect": expect, "results": results})
+
 
 #임시 디버그 라우트, 로그. 운영 시 삭제
 @app.get("/debug/whoami")
