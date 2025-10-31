@@ -167,6 +167,10 @@ async def completed_redirect_handler(request: Request, exc: HTTPException):
 
 @app.middleware("http")
 async def no_store_for_survey(request: Request, call_next):
+    #디버그용 경로허용
+    if request.url.path.startswith("/debug/"):
+       return await call_next(request)
+   
     response = await call_next(request)
     p = request.url.path
     if p.startswith("/survey"):
@@ -1559,23 +1563,19 @@ def dh_nhis_result(payload: dict = Body(...), request: Request = None):
 from fastapi.responses import JSONResponse
 
 def debug_datahub_selftest():
+    import os
     plain  = os.getenv("DATAHUB_SELFTEST_PLAIN", "").strip()
     expect = os.getenv("DATAHUB_SELFTEST_EXPECT", "").strip()
     if not plain or not expect:
-        return JSONResponse({"error":"set DATAHUB_SELFTEST_PLAIN & EXPECT"}, status_code=400)
+        return JSONResponse({"error": "set DATAHUB_SELFTEST_PLAIN & DATAHUB_SELFTEST_EXPECT"}, status_code=400)
 
-    # 환경설정 인코딩 1개 + 보조 비교(cp949/utf-8 모두)
-    encs = []
-    main_enc = (os.getenv("DATAHUB_TEXT_ENCODING", "utf-8") or "").lower()
-    encs.append(main_enc)
-    for e in ["utf-8","cp949"]:
-        if e not in encs: encs.append(e)
-
+    # 환경설정 인코딩 1개 + 보조 비교(utf-8 / cp949 모두 확인)
     results = []
-    for e in encs:
-        os.environ["DATAHUB_TEXT_ENCODING"] = e
+    for enc in [os.getenv("DATAHUB_TEXT_ENCODING", "utf-8").lower(), "utf-8", "cp949"]:
+        enc = "cp949" if enc in ("cp949","euc-kr","euckr","ksc5601") else "utf-8"
+        os.environ["DATAHUB_TEXT_ENCODING"] = enc
         got = encrypt_field(plain)
-        results.append({"encoding": e, "got": got, "match": (got == expect)})
+        results.append({"encoding": enc, "got": got, "match": (got == expect)})
 
     return JSONResponse({"plain": plain, "expect": expect, "results": results})
 
