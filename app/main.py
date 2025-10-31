@@ -1569,13 +1569,18 @@ async def dh_simple_complete(request: Request):
         juminOrBirth   = str(payload.get("juminOrBirth","")).strip()
         telecom_gubun  = telecom if loginOption == "3" and telecom else None
 
-        rsp = DATAHUB.simple_auth_start(
+        args = dict(
             login_option=loginOption,
             user_name=userName,
             hp_number=hpNumber,
             jumin_or_birth=juminOrBirth,
-            telecom_gubun=telecom_gubun,
         )
+        if loginOption == "3" and telecom:
+            # PASS(3)일 때만 통신사 전달
+            args["telecom_gubun"] = telecom
+
+        rsp = DATAHUB.medical_checkup_simple(**args)
+        
         err = str(rsp.get("errCode",""))
         if err in ("0000","0"):
             return JSONResponse({"errCode":"0000","message":"OK","data": rsp.get("data") or rsp}, status_code=200)

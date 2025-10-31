@@ -323,7 +323,7 @@ class DatahubClient:
         user_name: str,
         hp_number: str,         # "01012341234" 또는 "010-1234-1234" 모두 허용
         jumin_or_birth: str,    # yyyyMMdd (가이드 문서에서 JUMIN이 '생년월일'로 정의)
-        telecom: str = ""       # "1"(SKT) / "2"(KT) / "3"(LGU+) - 통신사 인증 선택時 필수
+        telecom: str | None = None,     # "1"(SKT) / "2"(KT) / "3"(LGU+) - 통신사 인증 선택時 필수
     ) -> Dict[str, Any]:
         """
         건강보험_건강검진결과 한눈에보기(간편인증)
@@ -339,15 +339,6 @@ class DatahubClient:
         elif tel in ("KT",):           tel = "2"
         elif tel in ("LGU", "LGU+", "L"): tel = "3"
 
-
-        # 디버그: JUMIN 암호문 일부만 노출(앞 6글자만) 로그 꼭 지우기 ################
-        try:
-            _tmp_ct = encrypt_field(jumin_or_birth)
-            print("[ENC][JUMIN][LEN]", len(_tmp_ct), "| head=", _tmp_ct[:6], "***")
-        except Exception as _e:
-            print("[ENC][JUMIN][ERR]", repr(_e))
-
-
         payload = {
             "LOGINOPTION": str(login_option).strip(),
             "JUMIN":       encrypt_field(jumin_or_birth.strip()),  # ★ 가이드상 암호화 필수
@@ -359,7 +350,7 @@ class DatahubClient:
             if tel not in {"1","2","3"}:
                 raise DatahubError("통신사 간편인증은 TELECOMGUBUN(1/2/3)이 필요합니다.")
             payload["TELECOMGUBUN"] = tel
-
+        
         # ★ 가이드에 나온 ‘정식’ 경로로 호출
         return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", payload)
 
