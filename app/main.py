@@ -24,7 +24,8 @@ from itsdangerous import (
     TimestampSigner, BadSignature, SignatureExpired,
     URLSafeSerializer, URLSafeTimedSerializer
 )
-import os, smtplib, ssl, socket, traceback, time, sys
+import os, smtplib, ssl, socket, traceback, time, sys, base64, hashlib
+from Crypto.Cipher import AES
 from email.message import EmailMessage
 import zipfile
 import csv
@@ -1603,6 +1604,145 @@ def debug_whoami():
             "DATAHUB_SELFTEST_EXPECT_set": bool(os.getenv("DATAHUB_SELFTEST_EXPECT")),
         }
     })
+
+#임시 인코딩 테스트 용도 
+@app.get("/debug/datahub-finder")
+def debug_datahub_finder():
+    """
+    API 호출 없이, ENV에 있는 PlainData/EncData 쌍을 기준으로
+    - 평문 인코딩(utf-8/cp949)
+    - 키 비트(128/256)
+    - IV 모드(ENV/ZERO)
+    - EncKey/IV 해석(., urlsafe, pad, hex, raw 등 변형)
+    - 키/IV 길이 보정 방식(left/right pad)
+    - (보너스) 키 유도(SHA-256/MD5) 방식
+    조합을 브루트포스로 시도해 'expect'와 일치하는 암호문을 찾는다.
+    """
+    import os, base64, hashlib
+    from Crypto.Cipher import AES
+
+    def pkcs7_pad(b: bytes, block=16) -> bytes:
+        n = block - (len(b) % block)
+        return b + bytes([n]) * n
+
+    plain  = (os.getenv("DATAHUB_SELFTEST_PLAIN", "") or "").strip()
+    expect = (os.getenv("DATAHUB_SELFTEST_EXPECT", "") or "").strip()
+    enc_spec = (os.getenv("DATAHUB_ENC_SPEC", "") or "").strip().upper()
+    enc_key_raw = (os.getenv("DATAHUB_ENC_KEY_B64", "") or "").strip()
+    enc_iv_raw  = (os.getenv("DATAHUB_ENC_IV_B64", "") or "").strip()
+
+    if not plain or not expect or not enc_key_raw:
+        return JSONResponse({"error":"set DATAHUB_SELFTEST_PLAIN/EXPECT and ENC_KEY/IV"}, status_code=400)
+
+    # 1) key/iv 해석 후보 생성
+    def pad4(s: str) -> str:
+        return s + ("=" * ((4 - len(s) % 4) % 4))
+
+    def b64_try(s: str):
+        cands = [
+            s,
+            s.replace("-", "+").replace("_", "/"),
+            s.replace(".", ""),           # dot 제거
+            s.replace(".", "+"),
+            s.replace(".", "/"),
+        ]
+        seen = set()
+        out = []
+        for c in cands:
+            c = pad4(c)
+            if c in seen: continue
+            seen.add(c)
+            try:
+                out.append(base64.b64decode(c))
+            except Exception:
+                pass
+        return out
+
+    def hex_try(s: str):
+        try:
+            return [bytes.fromhex(s)]
+        except Exception:
+            return []
+
+    def raw_try(s: str):
+        return [s.encode("utf-8")]
+
+    key_bytes_cands = b64_try(enc_key_raw) + hex_try(enc_key_raw) + raw_try(enc_key_raw)
+    iv_bytes_cands  = b64_try(enc_iv_raw)  + hex_try(enc_iv_raw)  + raw_try(enc_iv_raw)
+    if not iv_bytes_cands:
+        iv_bytes_cands = [b"\x00"*16]  # IV 미제공 대비
+
+    # 2) 길이 보정/유도 함수들
+    def shape_key(k: bytes, bits: int, mode: str) -> bytes:
+        need = 32 if bits == 256 else 16
+        if mode == "right":
+            return (k[:need]).ljust(need, b"\x00")
+        elif mode == "left":
+            return (k[-need:]).rjust(need, b"\x00")
+        elif mode == "sha256":
+            d = hashlib.sha256(k).digest()
+            return d[:need]
+        elif mode == "md5":
+            d = hashlib.md5(k).digest()
+            # 128비트만 직접 충족, 256은 md5 두 번 접합
+            return (d if need==16 else (d+hashlib.md5(d).digest()))[:need]
+        else:
+            return (k[:need]).ljust(need, b"\x00")
+
+    def shape_iv(iv: bytes, mode: str) -> bytes:
+        if mode == "ZERO":
+            return b"\x00"*16
+        v = iv[:16]
+        if len(v) < 16: v = v.ljust(16, b"\x00")
+        return v
+
+    # 3) 시도할 조합들
+    encodings   = ["utf-8", "cp949"]
+    key_bits    = [256, 128]
+    key_shapes  = ["right", "left", "sha256", "md5"]  # 키 길이/유도 방식
+    iv_modes    = ["ENV", "ZERO"]
+    iv_shapes   = ["keep"]  # 필요 시 확장
+    tried = 0
+    matches = []
+
+    for enc in encodings:
+        p = plain.encode(enc, errors="strict")
+        for kb in key_bits:
+            for ks in key_shapes:
+                for key0 in key_bytes_cands:
+                    key = shape_key(key0, kb, ks)
+                    for ivm in iv_modes:
+                        for ivs in iv_shapes:
+                            for iv0 in iv_bytes_cands:
+                                iv = shape_iv(iv0, ivm)
+                                data = pkcs7_pad(p, 16)
+                                try:
+                                    ct = AES.new(key, AES.MODE_CBC, iv).encrypt(data)
+                                    b64 = base64.b64encode(ct).decode("ascii")
+                                except Exception:
+                                    continue
+                                tried += 1
+                                if b64 == expect:
+                                    matches.append({
+                                        "encoding": enc,
+                                        "key_bits": kb,
+                                        "key_shape": ks,
+                                        "iv_mode": ivm,
+                                        "iv_note": ("ENV" if ivm=="ENV" else "ZERO"),
+                                        "key_src_len": len(key0),
+                                        "iv_src_len": len(iv0),
+                                        "b64": b64
+                                    })
+                                    # 바로 리턴(첫 일치)
+                                    return JSONResponse({
+                                        "status":"MATCH",
+                                        "tried": tried,
+                                        "enc_spec": enc_spec,
+                                        "match": matches[0]
+                                    })
+
+    return JSONResponse({"status":"NO_MATCH", "tried": tried, "enc_spec": enc_spec})
+
 
 @app.get("/_routes")
 def _routes():
