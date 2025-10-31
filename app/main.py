@@ -1558,12 +1558,27 @@ def dh_nhis_result(payload: dict = Body(...), request: Request = None):
 #임시 디버그 라우트, 로그. 운영 시 삭제
 from fastapi.responses import JSONResponse
 
-@app.get("/debug/datahub-selftest")
 def debug_datahub_selftest():
-    plain  = os.getenv("DATAHUB_SELFTEST_PLAIN", "")
-    expect = os.getenv("DATAHUB_SELFTEST_EXPECT", "")
-    got    = encrypt_field(plain) if plain else ""
-    return JSONResponse({"plain": plain, "got": got, "expect": expect, "match": (got == expect)})
+    plain  = os.getenv("DATAHUB_SELFTEST_PLAIN", "").strip()
+    expect = os.getenv("DATAHUB_SELFTEST_EXPECT", "").strip()
+    if not plain or not expect:
+        return JSONResponse({"error":"set DATAHUB_SELFTEST_PLAIN & EXPECT"}, status_code=400)
+
+    # 환경설정 인코딩 1개 + 보조 비교(cp949/utf-8 모두)
+    encs = []
+    main_enc = (os.getenv("DATAHUB_TEXT_ENCODING", "utf-8") or "").lower()
+    encs.append(main_enc)
+    for e in ["utf-8","cp949"]:
+        if e not in encs: encs.append(e)
+
+    results = []
+    for e in encs:
+        os.environ["DATAHUB_TEXT_ENCODING"] = e
+        got = encrypt_field(plain)
+        results.append({"encoding": e, "got": got, "match": (got == expect)})
+
+    return JSONResponse({"plain": plain, "expect": expect, "results": results})
+
 #임시 디버그 라우트, 로그. 운영 시 삭제
 @app.get("/debug/whoami")
 def debug_whoami():
