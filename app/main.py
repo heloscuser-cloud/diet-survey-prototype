@@ -1565,30 +1565,45 @@ from fastapi.responses import JSONResponse
 
 @app.get("/debug/datahub-selftest")
 def debug_datahub_selftest():
-    import os
+    import os, base64, hashlib
+    from app.vendors.datahub_client import encrypt_field, _get_key_iv, _get_text_encoding
+
     plain  = (os.getenv("DATAHUB_SELFTEST_PLAIN", "") or "").strip()
     expect = (os.getenv("DATAHUB_SELFTEST_EXPECT", "") or "").strip()
     if not plain or not expect:
-        return JSONResponse(
-            {"error":"set DATAHUB_SELFTEST_PLAIN & DATAHUB_SELFTEST_EXPECT"},
-            status_code=400
-        )
+        return JSONResponse({"error":"set DATAHUB_SELFTEST_PLAIN & EXPECT"}, status_code=400)
 
-    # 한 번에 두 인코딩 결과 비교(무료 호출 아님)
-    encs = []
-    main_enc = (os.getenv("DATAHUB_TEXT_ENCODING", "utf-8") or "").lower()
-    encs.append(main_enc)
-    for e in ("utf-8", "cp949"):
-        if e not in encs:
-            encs.append(e)
+    # 현재 FORCE 설정/키/IV 요약
+    kb  = int(os.getenv("DATAHUB_FORCE_KEY_BITS", "256") or "256")
+    ivm = (os.getenv("DATAHUB_FORCE_IV_MODE", "ENV") or "ENV").upper()
+    ksh = (os.getenv("DATAHUB_FORCE_KEY_SHAPE", "right") or "right").lower()
+    enc = _get_text_encoding()
 
-    results = []
-    for enc in encs:
-        os.environ["DATAHUB_TEXT_ENCODING"] = "cp949" if enc in ("cp949","euc-kr","euckr","ksc5601") else "utf-8"
-        got = encrypt_field(plain)
-        results.append({"encoding": os.environ["DATAHUB_TEXT_ENCODING"], "got": got, "match": (got == expect)})
+    key, iv = _get_key_iv()
+    key_sha = hashlib.sha256(key).hexdigest()[:16]
+    iv_hex  = iv.hex()[:16]
 
-    return JSONResponse({"plain": plain, "expect": expect, "results": results})
+    got = encrypt_field(plain)
+    return JSONResponse({
+        "env": {
+            "DATAHUB_TEXT_ENCODING": enc,
+            "DATAHUB_FORCE_KEY_BITS": kb,
+            "DATAHUB_FORCE_IV_MODE": ivm,
+            "DATAHUB_FORCE_KEY_SHAPE": ksh
+        },
+        "kiv": {
+            "key_bits": kb,
+            "key_len": len(key),
+            "key_sha256_head": key_sha,
+            "iv_len": len(iv),
+            "iv_head_hex": iv_hex
+        },
+        "plain": plain,
+        "expect": expect,
+        "got": got,
+        "match": (got == expect)
+    })
+
 
 
 #임시 디버그 라우트, 로그. 운영 시 삭제

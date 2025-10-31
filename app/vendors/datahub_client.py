@@ -41,39 +41,57 @@ def _get_text_encoding() -> str:
     if enc in ("cp949", "euc-kr", "euckr", "ksc5601"): return "cp949"  # cp949로 통일
     return "utf-8"
 
-def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
-    import base64, os, hashlib
-    enc_key = (os.getenv("DATAHUB_ENC_KEY_B64", "") or "").strip()
-    iv_env  = (os.getenv("DATAHUB_ENC_IV_B64", "") or "").strip()
 
-    def pad4(s): return s + ("=" * ((4 - len(s) % 4) % 4))
-    def b64_try(s):
+
+def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
+    """
+    EncKey/IV 디코드 + 강제 옵션 반영:
+      - DATAHUB_FORCE_KEY_BITS: 128|256 (기본 EncSpec 추정)
+      - DATAHUB_FORCE_IV_MODE : ENV|ZERO (기본 ENV)
+      - DATAHUB_FORCE_KEY_SHAPE: right|left|sha256|md5 (기본 right)
+    """
+    import base64, os, hashlib
+
+    enc_key = (os.getenv("DATAHUB_ENC_KEY_B64", "") or "").strip()
+    iv_env  = (os.getenv("DATAHUB_ENC_IV_B64", "")  or "").strip()
+
+    def pad4(s: str) -> str:
+        return s + ("=" * ((4 - len(s) % 4) % 4))
+
+    def b64_try(s: str):
         outs = []
-        for v in [s, s.replace("-", "+").replace("_", "/"),
-                  s.replace(".", ""), s.replace(".", "+"), s.replace(".", "/")]:
+        for v in [s,
+                  s.replace("-", "+").replace("_", "/"),
+                  s.replace(".", ""),
+                  s.replace(".", "+"),
+                  s.replace(".", "/")]:
             try:
                 outs.append(base64.b64decode(pad4(v)))
             except Exception:
                 pass
         return outs or [b""]
-    def hex_try(s):
-        try: return [bytes.fromhex(s)]
-        except: return []
-    def raw_try(s): return [s.encode("utf-8")]
 
-    # --- KEY ---
+    def hex_try(s: str):
+        try: return [bytes.fromhex(s)]
+        except Exception: return []
+
+    def raw_try(s: str):
+        return [s.encode("utf-8")]
+
     key_cands = b64_try(enc_key) + hex_try(enc_key) + raw_try(enc_key)
     iv_cands  = b64_try(iv_env)  + hex_try(iv_env)  + raw_try(iv_env)
-    if not iv_cands: iv_cands = [b"\x00"*16]
+    if not iv_cands:
+        iv_cands = [b"\x00"*16]
 
-    spec = (os.getenv("DATAHUB_ENC_SPEC", "") or "").upper()
+    spec = (os.getenv("DATAHUB_ENC_SPEC", "") or "").strip().upper()
     default_bits = 256 if ("256" in spec or "AES256" in spec) else 128
-    kb = int(os.getenv("DATAHUB_FORCE_KEY_BITS", str(default_bits)) or str(default_bits))
-    ivm= (os.getenv("DATAHUB_FORCE_IV_MODE", "ENV") or "ENV").upper()
+
+    kb     = int(os.getenv("DATAHUB_FORCE_KEY_BITS", str(default_bits)) or str(default_bits))
+    ivmode = (os.getenv("DATAHUB_FORCE_IV_MODE", "ENV") or "ENV").upper()
     kshape = (os.getenv("DATAHUB_FORCE_KEY_SHAPE", "right") or "right").lower()
 
     def shape_key(k: bytes, bits: int, mode: str) -> bytes:
-        need = 32 if bits==256 else 16
+        need = 32 if bits == 256 else 16
         if mode == "right":
             return (k[:need]).ljust(need, b"\x00")
         if mode == "left":
@@ -83,14 +101,25 @@ def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
             return d[:need]
         if mode == "md5":
             d = hashlib.md5(k).digest()
-            return (d if need==16 else (d+hashlib.md5(d).digest()))[:need]
+            return (d if need == 16 else (d + hashlib.md5(d).digest()))[:need]
         return (k[:need]).ljust(need, b"\x00")
 
     key = shape_key(key_cands[0], kb, kshape)
-    iv  = (b"\x00"*16) if ivm=="ZERO" else (iv_cands[0][:16].ljust(16, b"\x00"))
+    if ivmode == "ZERO":
+        iv = b"\x00"*16
+    else:
+        base_iv = iv_cands[0] if iv_cands else b""
+        iv = (base_iv[:16]).ljust(16, b"\x00")
 
-    print("[ENC][KIV]", "key_bits=", kb, "key_len=", len(key), "iv_len=", len(iv), "iv_src=", ivm)
+    print("[ENC][KIV]",
+          "key_bits=", kb,
+          "key_len=", len(key),
+          "iv_len=", len(iv),
+          "iv_src=", ivmode,
+          "key_shape=", kshape)
+
     return key, iv
+
 
 
 
@@ -156,12 +185,18 @@ def encrypt_field(plain: str) -> str:
                         return ct
         # 탐색 실패 시, 아래 일반 경로로 진행
 
-    # 일반 경로: 현재 설정값 또는 강제 설정값 사용
-    chosen_enc = enc_pref
-    kb = int(os.getenv("DATAHUB_FORCE_KEY_BITS", "256") or "256")
-    ivm = os.getenv("DATAHUB_FORCE_IV_MODE", "ENV").upper()
+    # 일반 경로: ENV 강제 설정값 사용
+    chosen_enc = _get_text_encoding()  # utf-8 / cp949
+    kb  = int(os.getenv("DATAHUB_FORCE_KEY_BITS", "256") or "256")
+    ivm = (os.getenv("DATAHUB_FORCE_IV_MODE", "ENV") or "ENV").upper()
     print("[ENC][PLAINTEXT-ENCODING]", chosen_enc, "| key_bits=", kb, "| iv_mode=", ivm)
-    return _enc_once(plain, chosen_enc, kb, ivm)
+    # 실제 키/IV는 _get_key_iv()에서 강제 옵션 반영되어 생성됨
+    key, iv = _get_key_iv()
+    data = plain.encode(chosen_enc, errors="strict")
+    data = _pkcs7_pad(data, 16)
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    return base64.b64encode(cipher.encrypt(data)).decode("ascii")
+
 
 
 
