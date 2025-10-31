@@ -144,54 +144,74 @@ def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
 
     return key_bytes, iv
 
-
 def encrypt_field(plain: str) -> str:
     """
-    EncSpec/EncKey/IV에 따라 AES-CBC(+PKCS7/PKCS5)로 암호화 후 Base64 리턴.
-    - 텍스트 인코딩: DATAHUB_TEXT_ENCODING (기본 utf-8 / cp949 권장)
-    - 개발 모드에서 SELFTEST_EXPECT가 있으면 utf-8 → cp949 → euc-kr 순으로
-      암호문을 만들어 기대치와 일치하는 인코딩을 자동 탐색해 로그로 알려줍니다.
+    AES-CBC + PKCS7 → Base64
+    - DATAHUB_TEXT_ENCODING (utf-8/cp949)
+    - 평소엔 현재 설정값으로 1회 암호화
+    - 다만 개발모드에서 DATAHUB_SELFTEST_EXPECT가 설정되어 있으면
+      아래 조합을 자동탐색 후 '일치하는' 조합을 로그로 출력:
+        * encoding: [현재설정, utf-8, cp949]
+        * key_bits: [256, 128]
+        * iv_mode : [ENV, ZERO]
+    - 찾은 조합을 이후에도 동일하게 재사용할 수 있도록 로그 확인 후 ENV 고정 권장
     """
-    spec = (os.getenv("DATAHUB_ENC_SPEC", "") or "").upper()
-    spec_normalized = spec.replace("PKCS5PADDING", "PKCS7")
-    key, iv = _get_key_iv()
-
-    # PKCS7 padding
-    block = 16
-
-    # 기본 인코딩
-    enc = _get_text_encoding()
-
-    # 개발 모드에서 자동탐색 (expect가 주어졌을 때만)
     expect = (os.getenv("DATAHUB_SELFTEST_EXPECT", "") or "").strip()
-    enc_candidates = [enc]
-    if expect:
-        # 우선순위: 현재 설정 → 'utf-8' → 'cp949' → 'euc-kr(cp949 동일 처리)'
-        extra = [e for e in ["utf-8", "cp949"] if e not in enc_candidates]
-        enc_candidates += extra
+    app_env = (os.getenv("APP_ENV", "dev") or "").strip().lower()
 
-    last_ct = None
-    chosen = enc
+    # 기본 인코딩(설정)
+    def _norm_enc(name: str) -> str:
+        n = (name or "utf-8").lower()
+        return "cp949" if n in ("cp949","euc-kr","euckr","ksc5601") else "utf-8"
 
-    for enc_try in enc_candidates:
-        data = plain.encode(enc_try, errors="strict")
-        data = _pkcs7_pad(data, block)
+    enc_pref = _norm_enc(os.getenv("DATAHUB_TEXT_ENCODING", "utf-8"))
+    enc_candidates = [enc_pref]
+    for e in ("utf-8","cp949"):
+        if e not in enc_candidates:
+            enc_candidates.append(e)
 
+    # key/iv 재구성 헬퍼 (key_bits/iv_mode에 따라)
+    def _build_kiv(key_bits: int, iv_mode: str) -> Tuple[bytes, bytes]:
+        # 원본 키/IV 디코드
+        full_key, full_iv = _get_key_iv()  # full_key는 최대 32, full_iv는 16 보장됨
+        if key_bits == 256:
+            key = (full_key[:32]).ljust(32, b"\x00")
+        else:
+            key = (full_key[:16]).ljust(16, b"\x00")
+        iv = (full_iv if iv_mode == "ENV" else b"\x00"*16)
+        return key, iv
+
+    # 단일 조합으로 실제 암호화
+    def _enc_once(s: str, enc_name: str, key_bits: int, iv_mode: str) -> str:
+        key, iv = _build_kiv(key_bits, iv_mode)
+        data = s.encode(enc_name, errors="strict")
+        data = _pkcs7_pad(data, 16)
         cipher = AES.new(key, AES.MODE_CBC, iv)
-        ct = base64.b64encode(cipher.encrypt(data)).decode("ascii")
-        last_ct = ct
-        if expect and ct == expect:
-            chosen = enc_try
-            break
+        return base64.b64encode(cipher.encrypt(data)).decode("ascii")
 
-    # 로깅: 실제 사용 인코딩
-    try:
-        print("[ENC][PLAINTEXT-ENCODING]", chosen)
-    except Exception:
-        pass
+    # 개발환경 + expect 설정 → 자동탐색
+    if app_env != "prod" and expect:
+        for enc_name in enc_candidates:
+            for key_bits in (256, 128):
+                for iv_mode in ("ENV", "ZERO"):
+                    try:
+                        ct = _enc_once(plain, enc_name, key_bits, iv_mode)
+                    except Exception:
+                        continue
+                    if ct == expect:
+                        # 🔍 정답 조합 로그 (꼭 확인해서 ENV로 고정해줘)
+                        print("[ENC][SELFTEST][FINDER]",
+                              f"encoding={enc_name} key_bits={key_bits} iv_mode={iv_mode}")
+                        # 이후 동일 방식으로 암호화 결과 반환
+                        return ct
+        # 탐색 실패 시, 아래 일반 경로로 진행
 
-    return last_ct
-
+    # 일반 경로: 현재 설정값 또는 강제 설정값 사용
+    chosen_enc = enc_pref
+    kb = int(os.getenv("DATAHUB_FORCE_KEY_BITS", "256") or "256")
+    ivm = os.getenv("DATAHUB_FORCE_IV_MODE", "ENV").upper()
+    print("[ENC][PLAINTEXT-ENCODING]", chosen_enc, "| key_bits=", kb, "| iv_mode=", ivm)
+    return _enc_once(plain, chosen_enc, kb, ivm)
 
 
 def _crypto_selftest():
