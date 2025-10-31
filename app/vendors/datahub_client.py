@@ -316,43 +316,29 @@ class DatahubClient:
 
         return data
     
-
-    def simple_auth_start(
+    def medical_checkup_simple(
         self,
-        login_option: str,      # "0"=카카오, "1"=삼성, "2"=페이코, "3"=통신사, "4"=KB, "5"=네이버, "6"=신한, "7"=토스
+        login_option: str,
         user_name: str,
-        hp_number: str,         # "01012341234" 또는 "010-1234-1234" 모두 허용
-        jumin_or_birth: str,    # yyyyMMdd (가이드 문서에서 JUMIN이 '생년월일'로 정의)
-        telecom: str | None = None,     # "1"(SKT) / "2"(KT) / "3"(LGU+) - 통신사 인증 선택時 필수
-    ) -> Dict[str, Any]:
-        """
-        건강보험_건강검진결과 한눈에보기(간편인증)
-        POST /scrap/common/nhis/MedicalCheckupGlanceSimple
-        필드: LOGINOPTION, JUMIN(암호화), USERNAME, HPNUMBER, TELECOMGUBUN
-        """
-        # 하이픈 허용
-        hp = hp_number.strip()
-
-        # 통신사 코드 보정: 영문 입력이 들어왔을 때 숫자코드로 치환
-        tel = (telecom or "").strip().upper()
-        if tel in ("SKT", "S", "SK"): tel = "1"
-        elif tel in ("KT",):           tel = "2"
-        elif tel in ("LGU", "LGU+", "L"): tel = "3"
-
-        payload = {
-            "LOGINOPTION": str(login_option).strip(),
-            "JUMIN":       encrypt_field(jumin_or_birth.strip()),  # ★ 가이드상 암호화 필수
-            "USERNAME":    user_name.strip(),
-            "HPNUMBER":    hp,
-            # TELECOMGUBUN은 통신사(=LOGINOPTION "3")일 때만 포함
+        hp_number: str,
+        jumin_or_birth: str,
+        telecom_gubun: str | None = None,
+    ) -> dict:
+        body = {
+            "LOGINOPTION": login_option,
+            "USERNAME": user_name,
+            "HPNUMBER": hp_number,
+            "JUMIN": encrypt_field(jumin_or_birth),
         }
-        if payload["LOGINOPTION"] == "3":
-            if tel not in {"1","2","3"}:
-                raise DatahubError("통신사 간편인증은 TELECOMGUBUN(1/2/3)이 필요합니다.")
-            payload["TELECOMGUBUN"] = tel
+        if login_option == "3" and telecom_gubun:
+            body["TELECOMGUBUN"] = telecom_gubun
         
-        # ★ 가이드에 나온 ‘정식’ 경로로 호출
-        return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", payload)
+        if body["LOGINOPTION"] == "3":
+            if telecom_gubun not in {"1","2","3"}:
+                raise DatahubError("통신사 간편인증은 TELECOMGUBUN(1/2/3)이 필요합니다.")
+            body["TELECOMGUBUN"] = telecom_gubun
+
+        return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", body)
 
 
     # --- 2) 간편인증 Step2: captcha(최종 완료 콜)

@@ -1517,7 +1517,7 @@ async def dh_simple_start(request: Request):
     # ✅ 여기서는 "시작/즉시조회" API만 호출해야 함 (완료 API 호출 X)
     #    * Tilko 대체: DataHub의 간편 인증 시작/조회에 맞춰 만든 메서드명 사용
     #    * 네 프로젝트의 실제 메서드명이 다르면 아래 한 줄만 그 이름으로 바꿔줘.
-    rsp = DATAHUB.simple_auth_start(
+    rsp = DATAHUB.medical_checkup_simple(
         login_option=loginOption,
         user_name=userName,
         hp_number=hpNumber,
@@ -1525,7 +1525,7 @@ async def dh_simple_start(request: Request):
         telecom_gubun=telecom_gubun,
     )
     
-    # ▼▼▼ 이 블록을 rsp = DATAHUB.simple_auth_start(...) 다음 줄에 추가하세요 ▼▼▼
+    # ▼▼▼ 이 블록을 rsp = DATAHUB.medical_checkup_simple(...) 다음 줄에 추가하세요 ▼▼▼
     err = str(rsp.get("errCode") or "")
     # Datahub의 즉시 성공 코드: '0000'
     if err == "0000":
@@ -1597,9 +1597,9 @@ async def dh_simple_complete(request: Request):
             hp_number=hpNumber,
             jumin_or_birth=juminOrBirth,
         )
-        if loginOption == "3" and telecom:
+        if loginOption == "3" and telecom_gubun:
             # PASS(3)일 때만 통신사 전달
-            args["telecom_gubun"] = telecom
+            args["telecom_gubun"] = telecom_gubun
 
         rsp = DATAHUB.medical_checkup_simple(**args)
         
