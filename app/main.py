@@ -1502,7 +1502,6 @@ from fastapi import Body, Request, HTTPException
 # ===========================================
 # DataHub 간편인증 Step1: 시작
 # ===========================================
-
 @app.post("/api/dh/simple/start")
 async def dh_simple_start(request: Request):
     payload = await request.json()
@@ -1511,35 +1510,48 @@ async def dh_simple_start(request: Request):
     userName       = str(payload.get("userName","")).strip()
     hpNumber       = str(payload.get("hpNumber","")).strip()
     juminOrBirth   = str(payload.get("juminOrBirth","")).strip()
+
+    # PASS(3)일 때만 통신사 전달
     telecom_gubun  = telecom if loginOption == "3" and telecom else None
 
-    # 데이터허브 즉시형/콜백형 공용 호출
-    rsp = DATAHUB.simple_auth_complete(
+    # ✅ 여기서는 "시작/즉시조회" API만 호출해야 함 (완료 API 호출 X)
+    #    * Tilko 대체: DataHub의 간편 인증 시작/조회에 맞춰 만든 메서드명 사용
+    #    * 네 프로젝트의 실제 메서드명이 다르면 아래 한 줄만 그 이름으로 바꿔줘.
+    rsp = DATAHUB.simple_auth_start(
         login_option=loginOption,
         user_name=userName,
         hp_number=hpNumber,
-        jumin_or_birth=juminOrBirth,   # 서버에서 암호화 수행 중
-        telecom_gubun=telecom_gubun
+        jumin_or_birth=juminOrBirth,
+        telecom_gubun=telecom_gubun,
     )
 
-    err = str(rsp.get("errCode",""))
-    data = rsp.get("data") or {}
+    # 안전 로그(민감값 마스킹)
+    safe_body = {
+        "LOGINOPTION": loginOption,
+        "USERNAME": userName[:1] + ("*" * max(0, len(userName)-1)),
+        "HPNUMBER_LAST4": hpNumber[-4:],
+        "TELECOMGUBUN": telecom_gubun or "",
+        "JUMIN": "***MASKED***",
+    }
+    print("[DH-START][SAFE]", safe_body)
 
-    # 콜백형 (callbackId 제공)
-    if err in ("0001","1") and data.get("callbackId"):
+    err = str(rsp.get("errCode",""))
+    data = rsp.get("data") or rsp.get("Data") or {}
+
+    # 콜백형 (0001 + callbackId)
+    cbid = (data.get("callbackId") or rsp.get("callbackId"))
+    if err in ("0001","1") and cbid:
         return JSONResponse(
-            {"errCode":"0001","message":"NEED_CALLBACK","data":{"callbackId":data["callbackId"]}},
+            {"errCode":"0001","message":"NEED_CALLBACK","data":{"callbackId": cbid}},
             status_code=200
         )
 
-    # 즉시형 (바로 성공)
+    # 즉시형 (0000)
     if err in ("0000","0"):
-        # 필요시 서버 세션/캐시에 입력값 저장해 complete에서 재조회에 활용 가능
         return JSONResponse({"errCode":"0000","message":"IMMEDIATE_OK","data":{}}, status_code=200)
 
-    # 그 외 실패
+    # 실패
     return JSONResponse({"errCode": err or "9999", "message": rsp.get("message") or "FAIL"}, status_code=400)
-
 
 
 # ===========================================
@@ -1548,7 +1560,7 @@ async def dh_simple_start(request: Request):
 @app.post("/api/dh/simple/complete")
 async def dh_simple_complete(request: Request):
     payload = await request.json()
-    # 즉시형이면 direct=true + 시작 페이로드 그대로 전달되어 옴
+    # 즉시형일 경우: 시작 페이로드 그대로 재조회
     if bool(payload.get("direct")):
         loginOption    = str(payload.get("loginOption","")).strip()
         telecom        = str(payload.get("telecom","")).strip()
@@ -1557,23 +1569,24 @@ async def dh_simple_complete(request: Request):
         juminOrBirth   = str(payload.get("juminOrBirth","")).strip()
         telecom_gubun  = telecom if loginOption == "3" and telecom else None
 
-        rsp = DATAHUB.simple_auth_complete(
+        rsp = DATAHUB.simple_auth_start(
             login_option=loginOption,
             user_name=userName,
             hp_number=hpNumber,
             jumin_or_birth=juminOrBirth,
-            telecom_gubun=telecom_gubun
+            telecom_gubun=telecom_gubun,
         )
         err = str(rsp.get("errCode",""))
         if err in ("0000","0"):
             return JSONResponse({"errCode":"0000","message":"OK","data": rsp.get("data") or rsp}, status_code=200)
         return JSONResponse({"errCode": err or "9999","message": rsp.get("message") or "FAIL"}, status_code=400)
 
-    # 콜백형이면 callbackId 필요
+    # 콜백형: callbackId 필요
     callbackId = str(payload.get("callbackId","")).strip()
     if not callbackId:
         return JSONResponse({"errCode":"9001","message":"callbackId is required"}, status_code=400)
 
+    # ✅ 이때만 "완료 API"를 호출한다
     rsp = DATAHUB.simple_auth_complete(callbackId)
     err = str(rsp.get("errCode",""))
     if err in ("0000","0"):
