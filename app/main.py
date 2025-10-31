@@ -1524,6 +1524,28 @@ async def dh_simple_start(request: Request):
         jumin_or_birth=juminOrBirth,
         telecom_gubun=telecom_gubun,
     )
+    
+    # ▼▼▼ 이 블록을 rsp = DATAHUB.simple_auth_start(...) 다음 줄에 추가하세요 ▼▼▼
+    err = str(rsp.get("errCode") or "")
+    # Datahub의 즉시 성공 코드: '0000'
+    if err == "0000":
+        # 이 응답 안에 이미 결과 본문이 들어오는 케이스로 가정
+        # (일부 공급사에서는 성공 시 바로 결과 배열/객체가 동봉됨)
+        try:
+            picked = pick_latest_general(rsp)  # 이미 프로젝트에 있는 "최근 일반검진 1건만 추려내기" 헬퍼 사용
+            # 세션에 저장 → /info 등에서 바로 활용 가능하게
+            request.session["nhis_latest"] = picked
+        except Exception:
+            picked = None
+
+        return JSONResponse({
+            "result": "SUCCESS",
+            "errCode": "0000",
+            "data": {
+                "immediate": True,    # 프론트가 콜백 없이 바로 다음 단계 진행하도록 신호
+                "latest": picked      # 최근 일반검진 1건(없을 수도 있어 None)
+            }
+        })
 
     # 안전 로그(민감값 마스킹)
     safe_body = {
