@@ -1575,12 +1575,20 @@ from fastapi import Body, Request, HTTPException
 # ===========================================
 @app.post("/api/dh/simple/start")
 async def dh_simple_start(request: Request):
+    
+    # 필수 파라미터 검증
+    if not (loginOption and userName and hpNumber and birth):
+        return JSONResponse(
+            {"errCode":"9000","message":"필수 입력 누락(loginOption/userName/hpNumber/birth)"},
+            status_code=400
+    )
+        
     payload = await request.json()
     loginOption    = str(payload.get("loginOption","")).strip()
     telecom        = str(payload.get("telecom","")).strip()
     userName       = str(payload.get("userName","")).strip()
     hpNumber       = str(payload.get("hpNumber","")).strip()
-    Birth   = str(payload.get("Birth","")).strip()
+    birth   = str(payload.get("Birth","")).strip()
 
     # PASS(3)일 때만 통신사 전달
     telecom_gubun  = telecom if loginOption == "3" and telecom else None
@@ -1595,7 +1603,14 @@ async def dh_simple_start(request: Request):
         "birth": payload.get("birth"),
     }
 
-
+    #임시로그
+    print("[DH-START][IN]",
+      "LOGINOPTION=", loginOption,
+      "TELECOM=", telecom or "-",
+      "NAME=", userName[:1],
+      "HP_LAST4=", hpNumber[-4:],
+      "BIRTH_LEN=", len(birth))
+    
     # ✅ 여기서는 "시작/즉시조회" API만 호출해야 함 (완료 API 호출 X)
     #    * Tilko 대체: DataHub의 간편 인증 시작/조회에 맞춰 만든 메서드명 사용
     #    * 네 프로젝트의 실제 메서드명이 다르면 아래 한 줄만 그 이름으로 바꿔줘.
@@ -1603,7 +1618,7 @@ async def dh_simple_start(request: Request):
         login_option=loginOption,
         user_name=userName,
         hp_number=hpNumber,
-        jumin_or_birth=Birth,
+        jumin_or_birth=birth,
         telecom_gubun=telecom_gubun,
     )
     
