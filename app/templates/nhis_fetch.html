@@ -200,65 +200,118 @@
   let callbackId = null;
 
   // Step1: 간편인증 시작
-  btnStart.addEventListener('click', async ()=>{
-    const loginOption = loginSel.value;           // "0"~"7"
+(function(){
+  const $ = (s)=>document.querySelector(s);
+  const loginSel   = $('#loginOption');
+  const telecomSel = $('#telecom');
+  const nameEl     = $('#name');
+  const phoneEl    = $('#phone');
+  const birthOne   = $('#birthOne'); // PASS(3)일 때 8자리
+  const rrn1       = $('#rrn1');     // 그 외 수단 6자리
+  const rrn2       = $('#rrn2');     // 그 외 수단 7자리
+  const statusEl   = $('#status');
+  const nextInput  = $('#nextUrl');  // 히든에 /info 들어있다고 가정
+
+  const AUTH_BASE = "https://datahub-dev.scraping.co.kr";
+  const onlyDigits = v => (v||'').replace(/[^0-9]/g, '');
+  const setStatus = (msg, kind) => {
+    if (!statusEl) return;
+    statusEl.textContent = msg || '';
+    statusEl.className = 'status' + (kind==='err' ? ' err':' ok');
+  };
+
+  // ★ 여기만 교체합니다: 시작 버튼 핸들러
+  const btnStart = $('#btnStart');
+  btnStart.addEventListener('click', async (ev)=>{
+    // 1) 팝업을 '반드시' 동기적으로 미리 띄운다 (팝업 차단 방지)
+    const popup = window.open('', 'nhisProgress', 'width=480,height=640,noopener');
+    if (!popup || popup.closed) {
+      alert('팝업이 차단되었어요. 브라우저 팝업 허용을 설정해 주세요.');
+      return;
+    }
+    // 임시 로딩 화면(선택)
+    popup.document.write('<!doctype html><title>로딩...</title><div style="font:14px/1.4 system-ui;padding:20px">인증 준비 중...</div>');
+
+    // 2) 입력값 수집/검증
+    const loginOption = loginSel.value;               // "0"~"7"
     const telecom     = telecomSel ? telecomSel.value : '';
-    const name        = nameEl.value.trim();
+    const name        = (nameEl.value || '').trim();
     const phone       = onlyDigits(phoneEl.value);
     const isPASS      = (loginOption === '3');
     const juminOrBirth = isPASS
-      ? onlyDigits(birthOne.value)                // 생년월일(8자리)
-      : (onlyDigits(rrn1.value) + onlyDigits(rrn2.value)); // 주민번호(13자리)
+      ? onlyDigits(birthOne.value)                                // 8자리
+      : (onlyDigits(rrn1.value) + onlyDigits(rrn2.value));        // 13자리
 
-    if (!loginOption) { alert('간편인증 수단을 선택하세요.'); return; }
-    if (isPASS && !telecom) { alert('통신사를 선택하세요.'); return; }
-    if (!name || !phone || !juminOrBirth) { alert('이름/휴대폰/생년월일(또는 주민번호)을 입력하세요.'); return; }
+    if (!loginOption) { alert('간편인증 수단을 선택하세요.'); popup.close(); return; }
+    if (isPASS && !telecom) { alert('통신사를 선택하세요.'); popup.close(); return; }
+    if (!name || !phone || !juminOrBirth) { alert('이름/휴대폰/식별값을 입력하세요.'); popup.close(); return; }
 
-    setStatus('간편인증 요청 중...');
-    btnStart.disabled = true;
-    directReady = false;
-    callbackId = null;
-    startPayloadCache = { loginOption, telecom, userName: name, hpNumber: phone, juminOrBirth };
+    setStatus('간편인증 요청 중...', 'ok');
 
-    try{
+    // 3) 서버로 start 요청
+    let mode = 'direct';        // 기본값: 콜백ID가 없어도 폴링으로 완료 대기
+    let cbid = '';              // 콜백ID
+    const nextUrl = nextInput?.value || '/info';
+
+    try {
       const rsp = await fetch('/api/dh/simple/start', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(startPayloadCache)
+        body: JSON.stringify({
+          loginOption,
+          telecom,
+          userName: name,
+          hpNumber: phone,
+          juminOrBirth
+        })
       });
       const data = await rsp.json();
-      console.log('[NHIS][start]', rsp.status, data);
+      // console.log('[NHIS][start]', rsp.status, data);
 
-      if(!rsp.ok){
+      if (!rsp.ok) {
         setStatus('간편인증 시작 실패', 'err');
         alert(data?.message || '간편인증 시작 실패');
+        popup.close();
         return;
       }
 
-// A) 콜백형
-if ((data.errCode === '0001' || data.errCode === 1) && data?.data?.callbackId) {
-  const cbid = data.data.callbackId;
-  window.open(`/nhis/progress?mode=callback&callbackId=${encodeURIComponent(cbid)}&next=${encodeURIComponent(nextUrl.value || '/info')}`, '_blank', 'noopener,width=480,height=600');
-  setStatus('인증창이 열렸습니다. 팝업에서 진행 상태를 확인하세요.', 'ok');
-  return;
-}
+      // 분기
+      // A) 0001 + callbackId → 콜백형
+      if ((String(data.errCode) === '0001' || String(data.errCode) === '1') && data?.data?.callbackId) {
+        mode = 'callback';
+        cbid = data.data.callbackId;
+        // 인증 UI는 데이터허브가 담당 (사용자 폰으로 알림도 이미 감)
+        popup.location.replace(`/nhis/progress?mode=callback&callbackId=${encodeURIComponent(cbid)}&next=${encodeURIComponent(nextUrl)}`);
+        setStatus('인증창이 열렸습니다. 팝업에서 진행 상태를 확인하세요.', 'ok');
+        return;
+      }
 
-// B) 즉시형
-if (data.errCode === '0000' || data.errCode === 0 || (data.data && data.data.immediate)) {
-  window.open(`/nhis/progress?mode=direct&next=${encodeURIComponent(nextUrl.value || '/info')}`, '_blank', 'noopener,width=480,height=600');
-  setStatus('팝업에서 진행 상태를 확인하세요.', 'ok');
-  return;
-}
+      // B) 0000 즉시형 → 콜백ID 없이도 폴링으로 완료 대기
+      if (String(data.errCode) === '0000' || String(data.errCode) === '0' || data?.data?.immediate) {
+        mode = 'direct';
+        popup.location.replace(`/nhis/progress?mode=direct&next=${encodeURIComponent(nextUrl)}`);
+        setStatus('팝업에서 진행 상태를 확인하세요.', 'ok');
+        return;
+      }
+
+      // C) 0001인데 callbackId가 없는 경우도 데이터허브에서 발생 → direct로 폴링 처리
+      if (String(data.errCode) === '0001' || String(data.errCode) === '1') {
+        mode = 'direct';
+        popup.location.replace(`/nhis/progress?mode=direct&next=${encodeURIComponent(nextUrl)}`);
+        setStatus('팝업에서 진행 상태를 확인하세요.', 'ok');
+        return;
+      }
 
       // 그 외
       setStatus('간편인증 시작 실패', 'err');
       alert(data?.message || '간편인증 시작 실패');
-    }catch(e){
+      popup.close();
+
+    } catch (e) {
       console.error(e);
       setStatus('간편인증 시작 실패', 'err');
       alert('간편인증 시작 실패');
-    }finally{
-      btnStart.disabled = false;
+      popup.close();
     }
   });
 
