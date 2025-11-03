@@ -640,6 +640,46 @@ def verify_token(token: str) -> int:
     except (BadSignature, SignatureExpired):
         return -1
 
+# --- NHIS: 인증 완료 후 실제 데이터 1건 조회 + 세션 저장 헬퍼---
+def _fetch_and_save_latest_nhis(request, start_payload):
+    """
+    start_payload 예:
+    {
+      "loginOption": "3",
+      "telecom": "3",
+      "userName": "홍길동",
+      "hpNumber": "01012345678",
+      "birth": "19900101"
+    }
+    """
+    loginOption   = str(start_payload.get("loginOption","")).strip()
+    telecom       = str(start_payload.get("telecom","")).strip()
+    userName      = str(start_payload.get("userName","")).strip()
+    hpNumber      = str(start_payload.get("hpNumber","")).strip()
+    birth         = str(start_payload.get("birth","")).strip()
+    telecom_gubun = telecom if loginOption == "3" and telecom else None
+
+    # 실제 데이터 조회
+    rsp2 = DATAHUB.medical_checkup_simple(
+        login_option=loginOption,
+        user_name=userName,
+        hp_number=hpNumber,
+        jumin_or_birth=birth,     # 라이브러리 시그니처가 jumin_or_birth면 birth를 그대로 넣음
+        telecom_gubun=telecom_gubun,
+    )
+
+    # 가장 최근 일반검진 1건만 추출(함수명이 다르면 네 파일의 함수명으로 교체)
+    try:
+        picked = pick_latest_general(rsp2.get("data") or rsp2)
+    except Exception:
+        picked = None
+
+    request.session["nhis_latest"] = picked
+    request.session["nhis_raw"] = rsp2  # 디버깅용
+
+    return rsp2
+
+
 class SurveyIn(BaseModel):
     meals_per_day: int
     late_snack_per_week: int
@@ -682,6 +722,18 @@ async def survey_submit(request: Request,
     resp = session.get(Respondent, respondent_id)
     resp.status = "submitted"
     session.add(resp)
+    nhis_latest = request.session.get("nhis_latest")
+    nhis_raw    = request.session.get("nhis_raw")
+    if nhis_latest is not None:
+        try:
+            sr.nhis_json = nhis_latest
+        except Exception:
+            pass
+    if nhis_raw is not None:
+        try:
+            sr.nhis_raw = nhis_raw
+        except Exception:
+            pass
     session.commit()
     session.refresh(sr)
 
@@ -1292,6 +1344,11 @@ def survey_finish(request: Request,
             except:
                 answers_indices.append(None)
 
+
+    nhis_latest = request.session.get("nhis_latest")
+    if nhis_latest:
+        response_obj.nhis_json = nhis_latest   # 모델 필드명에 맞게
+
     # DB에는 깔끔하게 번호만 저장
     normalized_payload = {"answers_indices": answers_indices}
     resp = session.get(Respondent, respondent_id)
@@ -1523,7 +1580,7 @@ async def dh_simple_start(request: Request):
     telecom        = str(payload.get("telecom","")).strip()
     userName       = str(payload.get("userName","")).strip()
     hpNumber       = str(payload.get("hpNumber","")).strip()
-    juminOrBirth   = str(payload.get("juminOrBirth","")).strip()
+    Birth   = str(payload.get("Birth","")).strip()
 
     # PASS(3)일 때만 통신사 전달
     telecom_gubun  = telecom if loginOption == "3" and telecom else None
@@ -1531,12 +1588,12 @@ async def dh_simple_start(request: Request):
     # --- 추가: 세션에 시작 페이로드 저장(콜백형/즉시형 모두에서 사용) ---
     # 민감 정보는 서버에서 암호화 전송하므로 세션 저장은 안전 구역에서만 사용
     request.session["nhis_start_payload"] = {
-        "loginOption": loginOption,
-        "telecom": telecom,
-        "userName": userName,
-        "hpNumber": hpNumber,
-        "juminOrBirth": juminOrBirth,
-}
+        "loginOption": payload.get("loginOption"),
+        "telecom": payload.get("telecom"),
+        "userName": payload.get("userName"),
+        "hpNumber": payload.get("hpNumber"),
+        "birth": payload.get("birth"),
+    }
 
 
     # ✅ 여기서는 "시작/즉시조회" API만 호출해야 함 (완료 API 호출 X)
@@ -1546,7 +1603,7 @@ async def dh_simple_start(request: Request):
         login_option=loginOption,
         user_name=userName,
         hp_number=hpNumber,
-        jumin_or_birth=juminOrBirth,
+        jumin_or_birth=Birth,
         telecom_gubun=telecom_gubun,
     )
     
@@ -1617,63 +1674,43 @@ def dh_simple_status(callback_id: str):
 @app.post("/api/dh/simple/complete")
 async def dh_simple_complete(request: Request):
     """
-    - direct=true: 세션에 저장된 시작 페이로드로 즉시 재조회
-    - callbackId: 콜백형 완료 조회
-    - 이 엔드포인트는 '대기 → 완료' 동안 여러 번 호출되어도 안전(멱등)해야 함
+    - direct=true: 세션의 start_payload로 즉시 재조회
+    - callbackId: 콜백형 완료 확인 후 실제 데이터 재조회
+    - 성공(0000) 시 세션에 nhis_latest 저장 (엑셀 병합용)
     """
     payload = await request.json()
     is_direct = bool(payload.get("direct"))
     callbackId = str(payload.get("callbackId") or "").strip()
 
-    # ----- 즉시형(또는 세션 캐시 기반) -----
+    # --- 즉시형 / 콜백ID 미제공일 때도 재조회 ---
     if is_direct:
         start_payload = request.session.get("nhis_start_payload") or {}
         if not start_payload:
             return JSONResponse({"errCode": "9002", "message": "start payload missing"}, status_code=409)
 
-        loginOption   = str(start_payload.get("loginOption","")).strip()
-        telecom       = str(start_payload.get("telecom","")).strip()
-        userName      = str(start_payload.get("userName","")).strip()
-        hpNumber      = str(start_payload.get("hpNumber","")).strip()
-        juminOrBirth  = str(start_payload.get("juminOrBirth","")).strip()
-        telecom_gubun = telecom if loginOption == "3" and telecom else None
+        rsp2 = _fetch_and_save_latest_nhis(request, start_payload)
+        err2 = str(rsp2.get("errCode",""))
+        if err2 in ("0000","0"):
+            return JSONResponse({"errCode":"0000","message":"OK","data": rsp2.get("data") or rsp2}, status_code=200)
+        return JSONResponse({"errCode": err2 or "9999","message": rsp2.get("message") or "WAIT"}, status_code=202)
 
-        rsp = DATAHUB.medical_checkup_simple(
-            login_option=loginOption,
-            user_name=userName,
-            hp_number=hpNumber,
-            jumin_or_birth=juminOrBirth,
-            telecom_gubun=telecom_gubun,
-        )
-        err = str(rsp.get("errCode",""))
-        if err in ("0000","0"):
-            # 결과 저장(엑셀 병합 대비)
-            try:
-                picked = pick_latest_general_checkup(rsp.get("data") or rsp)
-                request.session["nhis_latest"] = picked
-            except Exception:
-                request.session["nhis_latest"] = None
-            return JSONResponse({"errCode":"0000","message":"OK","data": rsp.get("data") or rsp}, status_code=200)
 
-        # 아직 준비 안 됨(공급사마다 코드 다를 수 있음): 프론트는 재시도
-        return JSONResponse({"errCode": err or "9999","message": rsp.get("message") or "WAIT"}, status_code=202)
-
-    # ----- 콜백형 -----
+    # --- 콜백형 ---
     if not callbackId:
         return JSONResponse({"errCode":"9001","message":"callbackId is required"}, status_code=400)
 
-    # 완료 조회 시도(준비 전이면 대기 코드가 올 수 있음 → 202로 돌려 프론트가 재시도)
     rsp = DATAHUB.simple_auth_complete(callbackId)
     err = str(rsp.get("errCode",""))
     if err in ("0000","0"):
-        try:
-            picked = pick_latest_general_checkup(rsp.get("data") or rsp)
-            request.session["nhis_latest"] = picked
-        except Exception:
-            request.session["nhis_latest"] = None
-        return JSONResponse({"errCode":"0000","message":"OK","data": rsp.get("data") or rsp}, status_code=200)
+        start_payload = request.session.get("nhis_start_payload") or {}
+        rsp2 = _fetch_and_save_latest_nhis(request, start_payload)
+        err2 = str(rsp2.get("errCode",""))
+        if err2 in ("0000","0"):
+            return JSONResponse({"errCode":"0000","message":"OK","data": rsp2.get("data") or rsp2}, status_code=200)
+        return JSONResponse({"errCode": err2 or "9999","message": rsp2.get("message") or "WAIT"}, status_code=202)
 
-    # 공급사가 '대기' 상태 코드를 주는 경우 202(Processing)로 응답 → 프론트 폴링 재시도
+
+    # 아직 준비 안 됨 → 202
     return JSONResponse({"errCode": err or "9999","message": rsp.get("message") or "WAIT"}, status_code=202)
 
 
@@ -1912,6 +1949,36 @@ def debug_datahub_finder():
                                     })
 
     return JSONResponse({"status":"NO_MATCH", "tried": tried, "enc_spec": enc_spec})
+
+
+def ensure_nhis_audit_table():
+    try:
+        with Session(engine) as s:
+            s.exec(text("""
+            CREATE TABLE IF NOT EXISTS nhis_audit (
+              id BIGSERIAL PRIMARY KEY,
+              created_at timestamptz DEFAULT now(),
+              stage text,             -- start / complete / fetch
+              callback_id text,
+              err_code text,
+              user_mask text,
+              rsp_json jsonb
+            );
+            """))
+            s.commit()
+    except Exception as e:
+        print("[NHIS][AUDIT][WARN]", repr(e))
+
+def audit_nhis(stage, err_code, callback_id, rsp_json=None, user_mask=None):
+    try:
+        with Session(engine) as s:
+            s.exec(text("""
+            INSERT INTO nhis_audit (stage, err_code, callback_id, user_mask, rsp_json)
+            VALUES (:stage, :err, :cbid, :mask, :rsp)
+            """), {"stage":stage, "err":err_code, "cbid":callback_id, "mask":user_mask or "", "rsp":json.dumps(rsp_json or {})})
+            s.commit()
+    except Exception as e:
+        print("[NHIS][AUDIT][ERR]", repr(e))
 
 
 @app.get("/_routes")
