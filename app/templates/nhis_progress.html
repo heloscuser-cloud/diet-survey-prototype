@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>국가건강검진 인증 진행</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 20px; }
+    .step { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #bbb; }
+    .step.done .dot { background: #16a34a; }
+    .step.wait .dot { background: #f59e0b; }
+    .step.fail .dot { background: #dc2626; }
+    .muted { color: #6b7280; font-size: 13px; }
+    .btn { padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; cursor: pointer; }
+    .btn.primary { background: #111827; color: #fff; border-color: #111827; }
+    .wrap { max-width: 420px; margin: 0 auto; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h2>국가건강검진 인증 진행</h2>
+  <p class="muted">스마트폰에서 인증을 완료하신 후, 아래 상태가 <b>모두 완료</b>가 되면 “문진 시작하기” 버튼을 눌러주세요.</p>
+
+  <div id="s1" class="step wait"><span class="dot"></span><div><b>본인인증</b> <span id="t1" class="muted">대기 중...</span></div></div>
+  <div id="s2" class="step wait"><span class="dot"></span><div><b>국가검진 데이터 조회</b> <span id="t2" class="muted">대기 중...</span></div></div>
+  <div id="s3" class="step wait"><span class="dot"></span><div><b>데이터 저장</b> <span id="t3" class="muted">대기 중...</span></div></div>
+
+  <div style="margin-top:16px; display:flex; gap:8px;">
+    <button id="btnConfirm" class="btn">인증 완료(수동)</button>
+    <button id="btnGo" class="btn primary" disabled>문진 시작하기</button>
+  </div>
+  <p id="msg" class="muted" style="margin-top:10px;"></p>
+</div>
+
+<script>
+(function(){
+  const params = new URLSearchParams(location.search);
+  const mode = params.get('mode') || '';              // 'callback' | 'direct'
+  const callbackId = params.get('callbackId') || '';
+  const nextUrl = "{{ next_url }}";
+
+  const s1 = document.getElementById('s1'), t1 = document.getElementById('t1');
+  const s2 = document.getElementById('s2'), t2 = document.getElementById('t2');
+  const s3 = document.getElementById('s3'), t3 = document.getElementById('t3');
+  const btnGo = document.getElementById('btnGo');
+  const btnConfirm = document.getElementById('btnConfirm');
+  const msg = document.getElementById('msg');
+
+  function setStep(el, textEl, state, text){
+    el.classList.remove('wait','done','fail');
+    el.classList.add(state); // 'wait' | 'done' | 'fail'
+    if (textEl) textEl.textContent = text || '';
+  }
+
+  async function callCompleteOnce(opts){
+    const rsp = await fetch('/api/dh/simple/complete', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(opts || {})
+    });
+    const data = await rsp.json();
+    return {ok: rsp.ok, status: rsp.status, data};
+  }
+
+  async function pollUntilDone(){
+    // 1) 본인인증(콜백형이면 인증 대기, 즉시형이면 이미 완료)
+    if (mode === 'direct'){
+      setStep(s1, t1, 'done', '완료');
+    } else {
+      setStep(s1, t1, 'wait', '스마트폰에서 인증 중...');
+    }
+
+    // 2) 주기적으로 complete 호출 → 준비 전이면 202 / 준비되면 200(0000)
+    let tries = 0;
+    while (true){
+      tries++;
+      try{
+        const body = (mode === 'direct') ? {direct:true} : {callbackId: callbackId};
+        const resp = await callCompleteOnce(body);
+
+        if (resp.ok && (String(resp.data?.errCode) === '0000' || String(resp.data?.errCode) === '0')){
+          setStep(s1, t1, 'done', '완료');
+          setStep(s2, t2, 'done', '완료');
+          setStep(s3, t3, 'done', '완료');
+          btnGo.disabled = false;
+          msg.textContent = '국가검진 데이터 조회가 완료되었습니다.';
+          return;
+        }
+
+        // 202(Processing) → 아직 대기 상태: 계속 폴링
+        if (resp.status === 202){
+          if (mode !== 'direct') setStep(s1, t1, 'done', '인증 완료');
+          setStep(s2, t2, 'wait', '조회 중...');
+          setStep(s3, t3, 'wait', '대기 중...');
+          await new Promise(r=>setTimeout(r, 2000));
+          continue;
+        }
+
+        // 기타 코드 → 실패
+        setStep(s2, t2, 'fail', `실패: ${resp.data?.message || '알 수 없는 오류'}`);
+        setStep(s3, t3, 'fail', '중단됨');
+        msg.textContent = '오류가 발생했습니다. 창을 닫고 다시 시도해 주세요.';
+        return;
+
+      }catch(e){
+        setStep(s2, t2, 'fail', '네트워크 오류');
+        setStep(s3, t3, 'fail', '중단됨');
+        msg.textContent = '오류가 발생했습니다. 창을 닫고 다시 시도해 주세요.';
+        return;
+      }
+    }
+  }
+
+  // 수동 버튼: 즉시 complete 1회 트리거
+  btnConfirm.addEventListener('click', async ()=>{
+    try{
+      const body = (mode === 'direct') ? {direct:true} : {callbackId};
+      const resp = await callCompleteOnce(body);
+      if (resp.ok && (String(resp.data?.errCode) === '0000' || String(resp.data?.errCode) === '0')){
+        setStep(s1, t1, 'done', '완료');
+        setStep(s2, t2, 'done', '완료');
+        setStep(s3, t3, 'done', '완료');
+        btnGo.disabled = false;
+        msg.textContent = '국가검진 데이터 조회가 완료되었습니다.';
+      } else if (resp.status === 202) {
+        msg.textContent = '아직 대기 중입니다. 잠시 후 자동으로 다시 시도합니다.';
+      } else {
+        msg.textContent = resp.data?.message || '조회 실패';
+      }
+    }catch(e){
+      msg.textContent = '오류가 발생했습니다.';
+    }
+  });
+
+  // 완료 후 부모창으로 이동
+  btnGo.addEventListener('click', ()=>{
+    if (window.opener && !window.opener.closed){
+      window.opener.location.href = nextUrl || '/info';
+    }
+    window.close();
+  });
+
+  // 시작
+  pollUntilDone();
+})();
+</script>
+</body>
+</html>

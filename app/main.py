@@ -1577,6 +1577,15 @@ async def dh_simple_start(request: Request):
 
 
 # ===========================================
+# DataHub 간편인증 Step1-2: 진행 중
+# ===========================================
+
+@app.get("/api/dh/simple/status")
+def dh_simple_status(callback_id: str):
+    rsp = DATAHUB.simple_auth_status(callback_id)
+    return rsp
+
+# ===========================================
 # DataHub 간편인증 Step2: 완료(captcha)
 # ===========================================
 @app.post("/api/dh/simple/complete")

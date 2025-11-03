@@ -235,23 +235,20 @@
         return;
       }
 
-      // A) 콜백형 (0001 + callbackId)
-      if ((data.errCode === '0001' || data.errCode === 1) && data?.data?.callbackId) {
-        callbackId = data.data.callbackId;
-        window.open(`${AUTH_BASE}/auth/simple?callbackId=${encodeURIComponent(callbackId)}`, '_blank','noopener');
-        setStatus('인증창이 열렸습니다. 인증 완료 후 "데이터 불러오기"를 눌러주세요.', 'ok');
-        btnComplete.disabled = false;
-        btnComplete.dataset.callbackId = callbackId;
-        return;
-      }
+// A) 콜백형
+if ((data.errCode === '0001' || data.errCode === 1) && data?.data?.callbackId) {
+  const cbid = data.data.callbackId;
+  window.open(`/nhis/progress?mode=callback&callbackId=${encodeURIComponent(cbid)}&next=${encodeURIComponent(nextUrl.value || '/info')}`, '_blank', 'noopener,width=480,height=600');
+  setStatus('인증창이 열렸습니다. 팝업에서 진행 상태를 확인하세요.', 'ok');
+  return;
+}
 
-      // B) 즉시형 (0000): 팝업 없이 바로 완료
-      if (data.errCode === '0000' || data.errCode === 0 || (data.result && data.result === 'SUCCESS')) {
-        // 서버가 세션에 최신건 저장했다면 바로 다음 페이지로 이동
-        setStatus('인증이 완료되었습니다. 다음 단계로 이동합니다.', 'ok');
-        window.location.href = nextHref || '/info';
-        return;
-      }
+// B) 즉시형
+if (data.errCode === '0000' || data.errCode === 0 || (data.data && data.data.immediate)) {
+  window.open(`/nhis/progress?mode=direct&next=${encodeURIComponent(nextUrl.value || '/info')}`, '_blank', 'noopener,width=480,height=600');
+  setStatus('팝업에서 진행 상태를 확인하세요.', 'ok');
+  return;
+}
 
       // 그 외
       setStatus('간편인증 시작 실패', 'err');
