@@ -25,6 +25,9 @@
     .preview{background:#eef2ff;border-radius:12px;padding:10px;margin-top:8px}
     .status{font-size:14px;margin-top:8px}
     .status.ok{color:var(--ok)} .status.err{color:var(--err)}
+  #status strong { font-size: 1.05rem; color:#111; }
+  #status .warn { color:#b91c1c; font-weight:600; }
+  #status .ok { color:#16a34a; font-weight:600; }
   </style>
 </head>
 <body>
@@ -85,105 +88,83 @@
 <input type="hidden" id="nextUrl" value="{{ next_url or '/info' }}">
 
     <div class="card">
-      <div class="stack">
-        <button type="button" id="btnStart" class="btn btn-primary" disabled>간편인증 시작</button>
-        <button type="button" id="btnComplete" class="btn btn-secondary" disabled>인증 완료 후 데이터 불러오기</button>
-      </div>
+<div class="mt-4 flex items-center gap-3">
+  <button id="btnStart" type="button" class="px-4 py-2 rounded bg-black text-white">
+    간편인증 시작
+  </button>
+  <button id="btnComplete" type="button" class="px-4 py-2 rounded border" disabled>
+    인증완료
+  </button>
+</div>
       <div id="status" class="status"></div>
       <div id="preview" class="preview" style="display:none"></div>
     </div>
 
-    <div class="stack">
-      <a id="btnSkip" class="btn btn-secondary" href="{{ next_url or '/info' }}">건너뛰고 계속</a>
-      <a id="btnNext" class="btn btn-primary" href="{{ next_url or '/info' }}" aria-disabled="true" style="pointer-events:none;opacity:.5">다음(정보 입력으로)</a>
-    </div>
-  </div>
+<!-- 안내/상태 메시지 (강조 스타일 포함) -->
+<p id="status" class="mt-3 text-sm text-gray-600"></p>
+
+<!-- 다음 페이지 경로 (필요 시 템플릿에서 주입) -->
+<input type="hidden" id="nextUrl" value="{{ next_url or '/info' }}">
+
 <script>
 (function(){
   const $ = (s)=>document.querySelector(s);
 
-  // ---- DOM refs: HTML의 실제 id에 맞춤 ----
+  // ---- DOM refs (현 파일의 id에 맞춤) ----
   const loginSel    = $('#loginOption');   // 인증수단
   const telecomRow  = $('#telecomRow');    // 통신사 행 전체
   const telecomSel  = $('#telecom');       // 통신사 콤보
   const nameEl      = $('#name');          // 이름
   const phoneEl     = $('#phone');         // 휴대폰번호
 
-  const jLabel      = $('#jLabel');        // 라벨: 생년월일/주민번호 문구 바꿔줌
-  const birthOne    = $('#birthOne');      // PASS(3)일 때 쓰는 8자리 생년월일
-  const rrnWrap     = $('#rrnWrap');       // 그 외 수단일 때 쓰는 주민번호 6-7칸 묶음
-  const rrn1        = $('#rrn1');          // 주민 앞 6
-  const rrn2        = $('#rrn2');          // 주민 뒤 7
+  const jLabel      = $('#jLabel');        // 라벨: 생년월일/주민번호 문구 바꿈
+  const birthOne    = $('#birthOne');      // PASS(3)일 때 8자리 생년월일
+  const rrnWrap     = $('#rrnWrap');       // 그 외 주민번호 6-7칸 묶음
+  const rrn1        = $('#rrn1');          // 주민번호 앞 6
+  const rrn2        = $('#rrn2');          // 주민번호 뒤 7
 
   const btnStart    = $('#btnStart');      // 간편인증 시작
-  const btnComplete = $('#btnComplete');   // (사용 안함; 팝업 방식으로 대체)
-  const statusEl    = $('#status');        // 상태 표시
-  const btnNext     = $('#btnNext');       // 다음(정보 입력으로)
-  const nextInput   = $('#nextUrl');       // 히든에 /info
-  const nextHref    = btnNext ? btnNext.getAttribute('href') : '/info';
+  const btnComplete = $('#btnComplete');   // 인증완료 (수동 트리거)
+  const statusEl    = $('#status');        // 상태 메시지
+  const nextInput   = $('#nextUrl');       // 다음 경로(/info)
 
-  // 데이터허브 인증창 베이스
-  const AUTH_BASE = "https://datahub-dev.scraping.co.kr";
+  const onlyDigits = v => (v||'').replace(/[^0-9]/g, '');
+  const setStatus = (html, kind)=> {
+    statusEl.innerHTML = html || '';
+    statusEl.className = 'mt-3 text-sm ' + (kind==='err' ? 'warn' : 'ok');
+  };
 
-  // 상태표시 헬퍼
-  function setStatus(msg, kind) {
-    if (!statusEl) return;
-    statusEl.textContent = msg || '';
-    statusEl.className = 'status' + (kind === 'err' ? ' err' : ' ok');
-  }
-
-  // 숫자만
-  const onlyDigits = v => (v||'').replace(/[^0-9]/g,'');
-
-  // 입력 제한
-  phoneEl.addEventListener('input', e => {
-    e.target.value = onlyDigits(e.target.value).slice(0,11);
-    validateStartEnabled();
-  });
-  birthOne.addEventListener('input', e => {
-    e.target.value = onlyDigits(e.target.value).slice(0,8);
-    validateStartEnabled();
-  });
-  rrn1.addEventListener('input', e => {
-    e.target.value = onlyDigits(e.target.value).slice(0,6);
-    validateStartEnabled();
-  });
-  rrn2.addEventListener('input', e => {
-    e.target.value = onlyDigits(e.target.value).slice(0,7);
-    validateStartEnabled();
-  });
-  nameEl.addEventListener('input', validateStartEnabled);
-
-  // 수단별 UI 토글
+  // ---- 입력 UI 토글 ----
   function applyInputRuleByChannel(){
     const isPASS = (loginSel.value === '3'); // 3=통신사 PASS
     telecomRow.style.display = isPASS ? 'block' : 'none';
 
-    if (isPASS) {
-      // PASS: 생년월일 8자리 1칸만
+    if (!loginSel.value) {
+      birthOne.style.display = 'none';
+      rrnWrap.style.display  = 'none';
+      jLabel.textContent = '식별값';
+    } else if (isPASS) {
       jLabel.textContent = '생년월일(8자리)';
       birthOne.style.display = 'block';
       rrnWrap.style.display  = 'none';
       birthOne.value = onlyDigits(birthOne.value).slice(0,8);
-    } else if (loginSel.value) {
-      // 기타 수단 선택됨: 주민등록번호 6-7칸
+    } else {
       jLabel.textContent = '주민등록번호 13자리';
       birthOne.style.display = 'none';
       rrnWrap.style.display  = 'flex';
       rrn1.value = onlyDigits(rrn1.value).slice(0,6);
       rrn2.value = onlyDigits(rrn2.value).slice(0,7);
-    } else {
-      // 아직 아무 수단도 선택 안했으면 둘 다 숨김(초기 상태)
-      birthOne.style.display = 'none';
-      rrnWrap.style.display  = 'none';
     }
     validateStartEnabled();
   }
   loginSel.addEventListener('change', applyInputRuleByChannel);
   telecomSel.addEventListener('change', validateStartEnabled);
-  applyInputRuleByChannel(); // 초기 1회
+  nameEl.addEventListener('input', validateStartEnabled);
+  phoneEl.addEventListener('input', (e)=>{ e.target.value = onlyDigits(e.target.value).slice(0,11); validateStartEnabled(); });
+  birthOne.addEventListener('input', (e)=>{ e.target.value = onlyDigits(e.target.value).slice(0,8);  validateStartEnabled(); });
+  rrn1.addEventListener('input', (e)=>{ e.target.value = onlyDigits(e.target.value).slice(0,6);  validateStartEnabled(); });
+  rrn2.addEventListener('input', (e)=>{ e.target.value = onlyDigits(e.target.value).slice(0,7);  validateStartEnabled(); });
 
-  // 시작 버튼 활성화 조건
   function validateStartEnabled(){
     const opt    = loginSel.value;
     const isPASS = (opt === '3');
@@ -191,98 +172,88 @@
     const phoneOk = onlyDigits(phoneEl.value).length >= 10;
 
     let jOk = false;
-    if (!opt) {
-      jOk = false;
-    } else if (isPASS) {
-      jOk = (onlyDigits(birthOne.value).length === 8);
-    } else {
-      jOk = (onlyDigits(rrn1.value).length === 6) && (onlyDigits(rrn2.value).length === 7);
-    }
-    const telOk = !isPASS || !!telecomSel.value;
+    if (isPASS) jOk = (onlyDigits(birthOne.value).length === 8);
+    else if (opt) jOk = (onlyDigits(rrn1.value).length === 6) && (onlyDigits(rrn2.value).length === 7);
 
+    const telOk = !isPASS || !!telecomSel.value;
     btnStart.disabled = !(opt && nameOk && phoneOk && jOk && telOk);
   }
+  applyInputRuleByChannel(); // 초기 1회
 
-  // 간편인증 시작
-  btnStart.addEventListener('click', async ()=>{
-    // 1) 팝업을 클릭 직후 동기적으로 먼저 띄움(팝업 차단 방지)
-    const popup = window.open('', 'nhisProgress', 'width=480,height=640,noopener');
-    if (!popup || popup.closed) {
-      alert('팝업이 차단되었어요. 브라우저 팝업 허용을 설정해 주세요.');
-      return;
-    }
-    popup.document.write('<!doctype html><title>로딩...</title><div style="font:14px/1.4 system-ui;padding:20px">인증 준비 중...</div>');
+  // ---- 상태 저장(콜백ID/즉시형 여부) ----
+  let callbackId = '';       // 콜백형이면 채워짐
+  let canDirect  = false;    // 즉시형(0000)인 경우 true
 
-    // 2) 입력값 수집
-    const loginOption = loginSel.value;               // "0"~"7"
-    const telecom     = telecomSel ? telecomSel.value : '';
-    const name        = (nameEl.value || '').trim();
-    const phone       = onlyDigits(phoneEl.value);
-    const isPASS      = (loginOption === '3');
-    const juminOrBirth = isPASS
-      ? onlyDigits(birthOne.value)                                // 8자리
-      : (onlyDigits(rrn1.value) + onlyDigits(rrn2.value));        // 13자리
+  // ---- 간편인증 시작 ----
+  btnStart.addEventListener('click', async (ev)=>{
+    ev.preventDefault(); ev.stopPropagation();
 
-    if (!loginOption) { alert('간편인증 수단을 선택하세요.'); popup.close(); return; }
-    if (isPASS && !telecom) { alert('통신사를 선택하세요.'); popup.close(); return; }
-    if (!name || !phone || !juminOrBirth) { alert('이름/휴대폰/식별값을 입력하세요.'); popup.close(); return; }
+    const loginOption  = loginSel.value;
+    const telecom      = telecomSel ? telecomSel.value : '';
+    const name         = (nameEl.value||'').trim();
+    const phone        = onlyDigits(phoneEl.value);
+    const isPASS       = (loginOption === '3');
+    const juminOrBirth = isPASS ? onlyDigits(birthOne.value) : (onlyDigits(rrn1.value)+onlyDigits(rrn2.value));
+    const nextUrl      = nextInput?.value || '/info';
 
-    setStatus('간편인증 요청 중...', 'ok');
-    const nextUrl = nextInput?.value || '/info';
-
-    try {
+    // 전송
+    try{
       const rsp = await fetch('/api/dh/simple/start', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          loginOption,
-          telecom,
-          userName: name,
-          hpNumber: phone,
-          juminOrBirth
-        })
+        body: JSON.stringify({ loginOption, telecom, userName:name, hpNumber:phone, juminOrBirth })
       });
       const data = await rsp.json();
 
       if (!rsp.ok) {
-        setStatus('간편인증 시작 실패', 'err');
-        alert(data?.message || '간편인증 시작 실패');
-        popup.close();
+        setStatus('<span class="warn">간편인증 요청 실패:</span> ' + (data?.message || '다시 시도해 주세요.'), 'err');
+        btnComplete.disabled = true;
         return;
       }
 
-      // A) 0001 + callbackId → 콜백형
-      if ((String(data.errCode) === '0001' || String(data.errCode) === '1') && data?.data?.callbackId) {
-        const cbid = data.data.callbackId;
-        popup.location.replace(`/nhis/progress?mode=callback&callbackId=${encodeURIComponent(cbid)}&next=${encodeURIComponent(nextUrl)}`);
-        setStatus('인증창이 열렸습니다. 팝업에서 진행 상태를 확인하세요.', 'ok');
-        return;
-      }
+      // 성공적으로 요청됨 → 사용자에게 "휴대폰에서 인증 완료 후 [인증완료] 버튼" 강조
+      callbackId = (data && data.data && data.data.callbackId) || '';
+      canDirect  = !!(String(data.errCode)==='0000' || String(data.errCode)==='0' || (data.data && data.data.immediate));
 
-      // B) 0000 즉시형 → 콜백ID 없이도 팝업에서 폴링 처리
-      if (String(data.errCode) === '0000' || String(data.errCode) === '0' || data?.data?.immediate) {
-        popup.location.replace(`/nhis/progress?mode=direct&next=${encodeURIComponent(nextUrl)}`);
-        setStatus('팝업에서 진행 상태를 확인하세요.', 'ok');
-        return;
-      }
+      btnComplete.disabled = false;
+      setStatus('<strong>간편인증 요청 전송 성공.</strong><br>스마트폰에서 간편인증을 <b>완료</b>하신 후 <b>오른쪽의 <u>인증완료</u> 버튼</b>을 눌러주세요.', 'ok');
 
-      // C) 0001인데 callbackId가 없는 케이스 → direct 폴링
-      if (String(data.errCode) === '0001' || String(data.errCode) === '1') {
-        popup.location.replace(`/nhis/progress?mode=direct&next=${encodeURIComponent(nextUrl)}`);
-        setStatus('팝업에서 진행 상태를 확인하세요.', 'ok');
-        return;
-      }
-
-      // 그 외
-      setStatus('간편인증 시작 실패', 'err');
-      alert(data?.message || '간편인증 시작 실패');
-      popup.close();
-
-    } catch (e) {
+    }catch(e){
       console.error(e);
-      setStatus('간편인증 시작 실패', 'err');
-      alert('간편인증 시작 실패');
-      popup.close();
+      setStatus('<span class="warn">간편인증 요청 중 오류가 발생했습니다.</span>', 'err');
+      btnComplete.disabled = true;
+    }
+  });
+
+  // ---- 인증완료 (수동 트리거) ----
+  btnComplete.addEventListener('click', async (ev)=>{
+    ev.preventDefault(); ev.stopPropagation();
+    btnComplete.disabled = true;
+
+    try{
+      // 콜백형이면 callbackId, 아니면 즉시형(또는 콜백ID 미제공)으로 direct 조회
+      const body = callbackId ? { callbackId } : { direct:true };
+      const rsp = await fetch('/api/dh/simple/complete', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body)
+      });
+      const data = await rsp.json();
+
+      if (rsp.ok && (String(data.errCode)==='0000' || String(data.errCode)==='0')) {
+        // 서버가 nhis_latest 세션 저장 완료 → 다음 페이지로
+        setStatus('<strong>국가검진 데이터 조회가 완료되었습니다.</strong> 곧 다음 단계로 이동합니다.', 'ok');
+        location.href = nextInput?.value || '/info';
+        return;
+      }
+
+      // 준비 전(202) 또는 실패 → 안내 후 /nhis 새로고침
+      alert('간편인증이 완료되지 않았습니다. 스마트폰에서 인증을 완료하신 후 [인증완료] 버튼을 다시 눌러주세요.');
+      location.href = '/nhis';
+    }catch(e){
+      console.error(e);
+      alert('오류가 발생했습니다. 다시 시도해 주세요.');
+      location.href = '/nhis';
     }
   });
 

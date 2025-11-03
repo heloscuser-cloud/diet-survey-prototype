@@ -1496,6 +1496,20 @@ async def admin_export_xlsx(
 
 
 
+@app.get("/nhis/progress")
+def nhis_progress(request: Request, mode: str = "", callbackId: str = "", next: str = "/info"):
+    # mode = 'callback' | 'direct'
+    return templates.TemplateResponse(
+        "nhis_progress.html",
+        {
+            "request": request,
+            "mode": mode,
+            "callbackId": callbackId,
+            "next_url": next or "/info",
+        },
+    )
+
+
 
 from fastapi import Body, Request, HTTPException
 
@@ -1513,6 +1527,17 @@ async def dh_simple_start(request: Request):
 
     # PASS(3)일 때만 통신사 전달
     telecom_gubun  = telecom if loginOption == "3" and telecom else None
+    
+    # --- 추가: 세션에 시작 페이로드 저장(콜백형/즉시형 모두에서 사용) ---
+    # 민감 정보는 서버에서 암호화 전송하므로 세션 저장은 안전 구역에서만 사용
+    request.session["nhis_start_payload"] = {
+        "loginOption": loginOption,
+        "telecom": telecom,
+        "userName": userName,
+        "hpNumber": hpNumber,
+        "juminOrBirth": juminOrBirth,
+}
+
 
     # ✅ 여기서는 "시작/즉시조회" API만 호출해야 함 (완료 API 호출 X)
     #    * Tilko 대체: DataHub의 간편 인증 시작/조회에 맞춰 만든 메서드명 사용
@@ -1588,46 +1613,70 @@ def dh_simple_status(callback_id: str):
 # ===========================================
 # DataHub 간편인증 Step2: 완료(captcha)
 # ===========================================
+
 @app.post("/api/dh/simple/complete")
 async def dh_simple_complete(request: Request):
+    """
+    - direct=true: 세션에 저장된 시작 페이로드로 즉시 재조회
+    - callbackId: 콜백형 완료 조회
+    - 이 엔드포인트는 '대기 → 완료' 동안 여러 번 호출되어도 안전(멱등)해야 함
+    """
     payload = await request.json()
-    # 즉시형일 경우: 시작 페이로드 그대로 재조회
-    if bool(payload.get("direct")):
-        loginOption    = str(payload.get("loginOption","")).strip()
-        telecom        = str(payload.get("telecom","")).strip()
-        userName       = str(payload.get("userName","")).strip()
-        hpNumber       = str(payload.get("hpNumber","")).strip()
-        juminOrBirth   = str(payload.get("juminOrBirth","")).strip()
-        telecom_gubun  = telecom if loginOption == "3" and telecom else None
+    is_direct = bool(payload.get("direct"))
+    callbackId = str(payload.get("callbackId") or "").strip()
 
-        args = dict(
+    # ----- 즉시형(또는 세션 캐시 기반) -----
+    if is_direct:
+        start_payload = request.session.get("nhis_start_payload") or {}
+        if not start_payload:
+            return JSONResponse({"errCode": "9002", "message": "start payload missing"}, status_code=409)
+
+        loginOption   = str(start_payload.get("loginOption","")).strip()
+        telecom       = str(start_payload.get("telecom","")).strip()
+        userName      = str(start_payload.get("userName","")).strip()
+        hpNumber      = str(start_payload.get("hpNumber","")).strip()
+        juminOrBirth  = str(start_payload.get("juminOrBirth","")).strip()
+        telecom_gubun = telecom if loginOption == "3" and telecom else None
+
+        rsp = DATAHUB.medical_checkup_simple(
             login_option=loginOption,
             user_name=userName,
             hp_number=hpNumber,
             jumin_or_birth=juminOrBirth,
+            telecom_gubun=telecom_gubun,
         )
-        if loginOption == "3" and telecom_gubun:
-            # PASS(3)일 때만 통신사 전달
-            args["telecom_gubun"] = telecom_gubun
-
-        rsp = DATAHUB.medical_checkup_simple(**args)
-        
         err = str(rsp.get("errCode",""))
         if err in ("0000","0"):
+            # 결과 저장(엑셀 병합 대비)
+            try:
+                picked = pick_latest_general_checkup(rsp.get("data") or rsp)
+                request.session["nhis_latest"] = picked
+            except Exception:
+                request.session["nhis_latest"] = None
             return JSONResponse({"errCode":"0000","message":"OK","data": rsp.get("data") or rsp}, status_code=200)
-        return JSONResponse({"errCode": err or "9999","message": rsp.get("message") or "FAIL"}, status_code=400)
 
-    # 콜백형: callbackId 필요
-    callbackId = str(payload.get("callbackId","")).strip()
+        # 아직 준비 안 됨(공급사마다 코드 다를 수 있음): 프론트는 재시도
+        return JSONResponse({"errCode": err or "9999","message": rsp.get("message") or "WAIT"}, status_code=202)
+
+    # ----- 콜백형 -----
     if not callbackId:
         return JSONResponse({"errCode":"9001","message":"callbackId is required"}, status_code=400)
 
-    # ✅ 이때만 "완료 API"를 호출한다
+    # 완료 조회 시도(준비 전이면 대기 코드가 올 수 있음 → 202로 돌려 프론트가 재시도)
     rsp = DATAHUB.simple_auth_complete(callbackId)
     err = str(rsp.get("errCode",""))
     if err in ("0000","0"):
+        try:
+            picked = pick_latest_general_checkup(rsp.get("data") or rsp)
+            request.session["nhis_latest"] = picked
+        except Exception:
+            request.session["nhis_latest"] = None
         return JSONResponse({"errCode":"0000","message":"OK","data": rsp.get("data") or rsp}, status_code=200)
-    return JSONResponse({"errCode": err or "9999","message": rsp.get("message") or "FAIL"}, status_code=400)
+
+    # 공급사가 '대기' 상태 코드를 주는 경우 202(Processing)로 응답 → 프론트 폴링 재시도
+    return JSONResponse({"errCode": err or "9999","message": rsp.get("message") or "WAIT"}, status_code=202)
+
+
 
 # ===========================================
 # DataHub 인증서 방식(필요 시): 건강검진 결과 조회
