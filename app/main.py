@@ -1576,13 +1576,6 @@ from fastapi import Body, Request, HTTPException
 @app.post("/api/dh/simple/start")
 async def dh_simple_start(request: Request):
     
-    # 필수 파라미터 검증
-    if not (loginOption and userName and hpNumber and birth):
-        return JSONResponse(
-            {"errCode":"9000","message":"필수 입력 누락(loginOption/userName/hpNumber/birth)"},
-            status_code=400
-    )
-        
     payload = await request.json()
     loginOption    = str(payload.get("loginOption","")).strip()
     telecom        = str(payload.get("telecom","")).strip()
@@ -1592,6 +1585,14 @@ async def dh_simple_start(request: Request):
 
     # PASS(3)일 때만 통신사 전달
     telecom_gubun  = telecom if loginOption == "3" and telecom else None
+    
+        # 필수 파라미터 검증
+    if not (loginOption and userName and hpNumber and birth):
+        return JSONResponse(
+            {"errCode":"9000","message":"필수 입력 누락(loginOption/userName/hpNumber/birth)"},
+            status_code=400
+    )
+        
     
     # --- 추가: 세션에 시작 페이로드 저장(콜백형/즉시형 모두에서 사용) ---
     # 민감 정보는 서버에서 암호화 전송하므로 세션 저장은 안전 구역에서만 사용
@@ -1603,13 +1604,6 @@ async def dh_simple_start(request: Request):
         "birth": payload.get("birth"),
     }
 
-    #임시로그
-    print("[DH-START][IN]",
-      "LOGINOPTION=", loginOption,
-      "TELECOM=", telecom or "-",
-      "NAME=", userName[:1],
-      "HP_LAST4=", hpNumber[-4:],
-      "BIRTH_LEN=", len(birth))
     
     # ✅ 여기서는 "시작/즉시조회" API만 호출해야 함 (완료 API 호출 X)
     #    * Tilko 대체: DataHub의 간편 인증 시작/조회에 맞춰 만든 메서드명 사용
