@@ -1588,7 +1588,7 @@ async def dh_simple_start(request: Request):
     telecom        = str(payload.get("telecom","")).strip()
     userName       = str(payload.get("userName","")).strip()
     hpNumber       = str(payload.get("hpNumber","")).strip()
-    birth   = str(payload.get("Birth","")).strip()
+    birth   = str(payload.get("birth","")).strip()
 
     # PASS(3)일 때만 통신사 전달
     telecom_gubun  = telecom if loginOption == "3" and telecom else None
