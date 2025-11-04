@@ -323,6 +323,7 @@ class DatahubClient:
         hp_number: str,
         jumin_or_birth: str,
         telecom_gubun: str | None = None,
+        callback_id: Optional[str] = None,
     ) -> dict:
         body = {
             "LOGINOPTION": login_option,
@@ -337,6 +338,8 @@ class DatahubClient:
             if telecom_gubun not in {"1","2","3"}:
                 raise DatahubError("통신사 간편인증은 TELECOMGUBUN(1/2/3)이 필요합니다.")
             body["TELECOMGUBUN"] = telecom_gubun
+        if callback_id:
+            body["CALLBACKID"] = callback_id  # ★ 기존 인증 세션을 이어받아 결과 조회
 
         return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", body)
 

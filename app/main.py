@@ -641,7 +641,7 @@ def verify_token(token: str) -> int:
         return -1
 
 # --- NHIS: 인증 완료 후 실제 데이터 1건 조회 + 세션 저장 헬퍼---
-def _fetch_and_save_latest_nhis(request, start_payload):
+def _fetch_and_save_latest_nhis(request, start_payload, callback_id: Optional[str] = None):
     """
     start_payload 예:
     {
@@ -666,9 +666,10 @@ def _fetch_and_save_latest_nhis(request, start_payload):
         hp_number=hpNumber,
         jumin_or_birth=birth,     # 라이브러리 시그니처가 jumin_or_birth면 birth를 그대로 넣음
         telecom_gubun=telecom_gubun,
+        callback_id=callback_id,
     )
 
-    # 가장 최근 일반검진 1건만 추출(함수명이 다르면 네 파일의 함수명으로 교체)
+    # 가장 최근 일반검진 1건만 추출
     try:
         picked = pick_latest_general(rsp2.get("data") or rsp2)
     except Exception:
@@ -1347,7 +1348,7 @@ def survey_finish(request: Request,
 
     nhis_latest = request.session.get("nhis_latest")
     if nhis_latest:
-        response_obj.nhis_json = nhis_latest   # 모델 필드명에 맞게
+        sr.nhis_json = nhis_latest
 
     # DB에는 깔끔하게 번호만 저장
     normalized_payload = {"answers_indices": answers_indices}
@@ -1690,6 +1691,8 @@ async def dh_simple_complete(request: Request):
     payload = await request.json()
     is_direct = bool(payload.get("direct"))
     callbackId = str(payload.get("callbackId") or "").strip()
+    #임시 callbackid 로그
+    print("[DH-COMPLETE][FETCH] using CALLBACKID=", callbackId or "-")
 
     # --- 즉시형 / 콜백ID 미제공일 때도 재조회 ---
     if is_direct:
@@ -1697,7 +1700,7 @@ async def dh_simple_complete(request: Request):
         if not start_payload:
             return JSONResponse({"errCode": "9002", "message": "start payload missing"}, status_code=409)
 
-        rsp2 = _fetch_and_save_latest_nhis(request, start_payload)
+        rsp2 = _fetch_and_save_latest_nhis(request, start_payload, callback_id=None)
         err2 = str(rsp2.get("errCode",""))
         if err2 in ("0000","0"):
             return JSONResponse({"errCode":"0000","message":"OK","data": rsp2.get("data") or rsp2}, status_code=200)
@@ -1712,7 +1715,7 @@ async def dh_simple_complete(request: Request):
     err = str(rsp.get("errCode",""))
     if err in ("0000","0"):
         start_payload = request.session.get("nhis_start_payload") or {}
-        rsp2 = _fetch_and_save_latest_nhis(request, start_payload)
+        rsp2 = _fetch_and_save_latest_nhis(request, start_payload, callback_id=callbackId)
         err2 = str(rsp2.get("errCode",""))
         if err2 in ("0000","0"):
             return JSONResponse({"errCode":"0000","message":"OK","data": rsp2.get("data") or rsp2}, status_code=200)
@@ -1721,7 +1724,6 @@ async def dh_simple_complete(request: Request):
 
     # 아직 준비 안 됨 → 202
     return JSONResponse({"errCode": err or "9999","message": rsp.get("message") or "WAIT"}, status_code=202)
-
 
 
 # ===========================================
