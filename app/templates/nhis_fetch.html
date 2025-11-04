@@ -125,10 +125,6 @@
   }
 
   const onlyDigits = v => (v||'').replace(/[^0-9]/g, '');
-  const setStatus = (html, kind)=> {
-    statusEl.innerHTML = html || '';
-    statusEl.className = 'mt-3 text-sm ' + (kind==='err' ? 'text-red-600' : 'text-green-600');
-  };
 
   // UI 토글: PASS(3)일 때만 통신사 선택 required
   function applyInputRule(){
@@ -289,6 +285,8 @@ btnStart.addEventListener('click', async () => {
     btnComplete.disabled = false;
   }
 });
+
+validateStartEnabled();
 
 })();
 </script>
