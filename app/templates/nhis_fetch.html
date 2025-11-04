@@ -116,6 +116,14 @@
   const statusEl    = $('#status');
   const nextInput   = $('#nextUrl');
 
+  let gCallbackId = null;     // start에서 받은 callbackId 저장
+  let gStartDone  = false;    // start 성공 여부(버튼 중복 방지)
+
+  function setStatus(msg, kind='') {
+    statusEl.textContent = msg;
+    statusEl.className = kind ? `status ${kind}` : 'status';
+  }
+
   const onlyDigits = v => (v||'').replace(/[^0-9]/g, '');
   const setStatus = (html, kind)=> {
     statusEl.innerHTML = html || '';
@@ -151,65 +159,136 @@
   let callbackId = '';   // 콜백형이면 채워짐
 
   // 간편인증 시작
-  btnStart.addEventListener('click', async (ev)=>{
-    ev.preventDefault(); ev.stopPropagation();
-    const payload = {
-      loginOption: loginSel.value,
-      telecom: telecomSel?.value || '',
-      userName: (nameEl.value||'').trim(),
-      hpNumber: onlyDigits(phoneEl.value),
-      birth: onlyDigits(birthEl.value)           // ★ 키 이름 birth로 통일
-    };
+btnStart.addEventListener('click', async () => {
+  if (gStartDone) return; // 중복 방지
 
-    try{
-      const rsp = await fetch('/api/dh/simple/start', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(payload)
-      });
-      const data = await rsp.json();
-      if (!rsp.ok) {
-        setStatus('<b>간편인증 요청 실패:</b> ' + (data?.message || '다시 시도해 주세요.'), 'err');
-        btnComplete.disabled = true;
-        return;
-      }
+  const loginOption = loginSel.value;      // "0"~"7"
+  const telecom     = telecomSel.value;    // "1"/"2"/"3" (PASS일 때만 사용)
+  const name        = $('#name').value.trim();
+  const phone       = $('#phone').value.trim();
+  const birth       = $('#birth').value.trim();  // 8자리(YYYYMMDD)
 
-      callbackId = (data && data.data && data.data.callbackId) || '';
-      btnComplete.disabled = false;
-      setStatus('<strong>간편인증 요청 전송 성공.</strong><br>스마트폰에서 간편인증을 <b>완료</b>하신 후 <b>오른쪽의 <u>인증완료</u> 버튼</b>을 눌러주세요.', 'ok');
-    }catch(e){
-      console.error(e);
-      setStatus('<b>간편인증 요청 중 오류가 발생했습니다.</b>', 'err');
-      btnComplete.disabled = true;
+  if (!loginOption) { alert('간편인증 수단을 선택하세요.'); return; }
+  if (loginOption === '3' && !telecom) { alert('통신사를 선택하세요.'); return; }
+  if (!name || !phone || !birth) { alert('이름/휴대폰/생년월일(8자리)을 입력하세요.'); return; }
+
+  setStatus('간편인증 요청 전송 중...');
+  btnStart.disabled = true;
+
+  try {
+    const rsp = await fetch('/api/dh/simple/start', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        loginOption,
+        telecom,
+        userName: name,
+        hpNumber: phone,
+        birth
+      })
+    });
+
+    const data = await rsp.json();
+    console.log('[DH][start]', rsp.status, data);
+
+    if (!rsp.ok) {
+      // 4xx/5xx
+      btnStart.disabled = false;
+      gStartDone = false;
+      setStatus('간편인증 시작 실패: ' + (data?.message || '오류'), 'err');
+      return;
     }
-  });
+
+    // ── 성공 케이스 분기 ─────────────────────────────────
+    // 1) 즉시형(0000) → 이미 결과가 들어온 케이스
+    if (data.errCode === '0000' && data.result === 'SUCCESS' && data.data?.immediate) {
+      gStartDone = true;
+      gCallbackId = null;
+      setStatus('간편인증 요청 전송 성공. "인증완료" 버튼을 눌러 데이터 수신을 완료하세요.', 'ok');
+      btnComplete.disabled = false;
+
+      // 이 경우 complete는 direct 모드로 호출해야 함
+      btnComplete.dataset.mode = 'direct';
+      return;
+    }
+
+    // 2) 콜백형(0001) → callbackId 필요
+    if (data.errCode === '0001' && data.data?.callbackId) {
+      gStartDone = true;
+      gCallbackId = data.data.callbackId;
+      setStatus('간편인증 요청 전송 성공. 스마트폰에서 인증 완료 후 "인증완료" 버튼을 눌러주세요.', 'ok');
+      btnComplete.disabled = false;
+
+      // 콜백형은 direct 금지
+      delete btnComplete.dataset.mode;
+      return;
+    }
+
+    // 그 외
+    btnStart.disabled = false;
+    gStartDone = false;
+    setStatus('간편인증 시작 실패: ' + (data?.message || '오류'), 'err');
+
+  } catch (e) {
+    console.error(e);
+    btnStart.disabled = false;
+    gStartDone = false;
+    setStatus('간편인증 시작 실패(네트워크)', 'err');
+  }
+});
 
   // 인증완료 (수동)
-  btnComplete.addEventListener('click', async (ev)=>{
-    ev.preventDefault(); ev.stopPropagation();
-    btnComplete.disabled = true;
+ btnComplete.addEventListener('click', async () => {
+  if (!gStartDone) { 
+    alert('먼저 "간편인증 시작"을 진행해주세요.');
+    return;
+  }
 
-    try{
-      const body = callbackId ? { callbackId } : { direct:true };
-      const rsp = await fetch('/api/dh/simple/complete', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(body)
-      });
-      const data = await rsp.json();
+  // direct 모드 여부(즉시형일 때만 true)
+  const isDirect = !!btnComplete.dataset.mode;
 
-      if (rsp.ok && (String(data.errCode)==='0000' || String(data.errCode)==='0')) {
-        setStatus('<strong>국가검진 데이터 조회가 완료되었습니다.</strong> 곧 다음 단계로 이동합니다.', 'ok');
-        location.href = nextInput?.value || '/info';
-        return;
-      }
-      // 대기/실패 → 새로고침 안내
-      alert('간편인증이 완료되지 않았습니다. 스마트폰에서 인증을 완료하신 후 [인증완료]를 다시 눌러주세요.');
-      location.href = '/nhis';
-    }catch(e){
-      console.error(e);
-      alert('오류가 발생했습니다. 다시 시도해 주세요.');
-      location.href = '/nhis';
+  setStatus('인증 완료 확인 중...');
+  btnComplete.disabled = true;
+
+  try {
+    const body = isDirect
+      ? { direct: true }
+      : { callbackId: gCallbackId };
+
+    const rsp = await fetch('/api/dh/simple/complete', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const data = await rsp.json();
+    console.log('[DH][complete]', rsp.status, data);
+
+    // 200 OK → 완료
+    if (rsp.status === 200 && (data.errCode === '0000' || data.errCode === '0')) {
+      setStatus('국가검진 데이터 수신 완료. 다음 단계로 이동합니다.', 'ok');
+      // 서버가 세션에 nhis_latest를 저장했으므로 바로 다음 페이지로
+      window.location.href = '/info';
+      return;
     }
-  });
+
+    // 202 Accepted → 아직 원천기관 처리 중
+    if (rsp.status === 202) {
+      setStatus('아직 인증이 완료되지 않았습니다. 스마트폰에서 인증을 완료한 뒤 다시 "인증완료"를 눌러주세요.', 'warn');
+      btnComplete.disabled = false;         // 재시도만 가능
+      // ★ 절대 여기서 start를 다시 호출하지 말 것 ★
+      return;
+    }
+
+    // 그 외 에러
+    setStatus('인증 완료 확인 실패: ' + (data?.message || '오류'), 'err');
+    btnComplete.disabled = false;
+
+  } catch (e) {
+    console.error(e);
+    setStatus('인증 완료 확인 실패(네트워크)', 'err');
+    btnComplete.disabled = false;
+  }
+});
 
 })();
 </script>
