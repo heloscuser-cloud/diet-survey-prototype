@@ -1587,6 +1587,7 @@ async def dh_simple_start(request: Request):
     # PASS(3)일 때만 통신사 전달
     telecom_gubun  = telecom if loginOption == "3" and telecom else None
     
+    
         # 필수 파라미터 검증
     if not (loginOption and userName and hpNumber and birth):
         return JSONResponse(
@@ -1607,8 +1608,6 @@ async def dh_simple_start(request: Request):
 
     
     # ✅ 여기서는 "시작/즉시조회" API만 호출해야 함 (완료 API 호출 X)
-    #    * Tilko 대체: DataHub의 간편 인증 시작/조회에 맞춰 만든 메서드명 사용
-    #    * 네 프로젝트의 실제 메서드명이 다르면 아래 한 줄만 그 이름으로 바꿔줘.
     rsp = DATAHUB.medical_checkup_simple(
         login_option=loginOption,
         user_name=userName,
@@ -1651,6 +1650,18 @@ async def dh_simple_start(request: Request):
 
     err = str(rsp.get("errCode",""))
     data = rsp.get("data") or rsp.get("Data") or {}
+    cbid = data.get("callbackId")
+    cbtp = data.get("callbackType")
+    
+    request.session["dh_callback"] = {
+    "id": cbid,
+    "type": cbtp,     # 없으면 클라이언트에서 'ANY'로 보낼거라 None이어도 무방
+    "saved_at": int(time.time()),
+    # 시작 시 입력했던 기본 payload도 보관(재호출 방지 / 디버깅용)
+    "start_payload_raw": payload,   # 네 코드에서 가진 원본 값 dict 넣기
+}
+    
+    
 
     # 콜백형 (0001 + callbackId)
     cbid = (data.get("callbackId") or rsp.get("callbackId"))
@@ -1682,48 +1693,103 @@ def dh_simple_status(callback_id: str):
 # ===========================================
 
 @app.post("/api/dh/simple/complete")
-async def dh_simple_complete(request: Request):
+def dh_simple_complete(request: Request):
+    sess = request.session or {}
+    cbinfo = sess.get("dh_callback") or {}
+    cbid = cbinfo.get("id")
+    cbtype = cbinfo.get("type") or "ANY"   # 타입이 비어오면 ANY로 폴백
+
+    if not cbid:
+        # 시작부터 다시
+        return JSONResponse(
+            {"ok": False, "stage": "complete", "err": "NO_CALLBACK", "msg": "콜백ID가 없습니다. 처음부터 다시 시도해주세요."},
+            status_code=400
+        )
+
+    # 1) 짧게 캡차/콜백 상태를 폴링
+    #    - PUSH(카카오/통신사PASS 등)는 callbackResponse 없이도 어느 순간 본요청이 0000이 됨
+    #    - SMS/OTP 류는 사용자가 숫자 입력을 끝내야 0000이 됨
+    max_wait_sec = 60
+    deadline = time.time() + max_wait_sec
+
+    last_captcha = None
+    while time.time() < deadline:
+        # (a) /scrap/captcha 상태 확인
+        try:
+            last_captcha = DATAHUB.post_captcha(
+                callbackId=cbid,
+                callbackType=cbtype  # 'ANY' 사용 가능. 가이드상 'SMS'/'CAPTCHA'/'OTP'/'TWO'/'SINGLE'/'ANY'
+            )
+        except Exception as e:
+            # 네 logging 포맷에 맞춰 필요하면 바꿔도 됨
+            print("[DH-COMPLETE][ERR][captcha]", repr(e))
+            time.sleep(2)
+            continue
+
+        # (b) 본요청 재시도 (CALLBACKID 포함)
+        try:
+            res = DATAHUB.post_medical_glance_simple_with_callbackid(
+                callbackId=cbid
+            )
+        except Exception as e:
+            print("[DH-COMPLETE][ERR][glance]", repr(e))
+            time.sleep(2)
+            continue
+
+        err = res.get("errCode")
+        if err == "0000":
+            # 성공! 데이터 저장하고 종료
+            data = (res or {}).get("data") or {}
+
+            # 10년 내 최신 1건만 골라서 세션/DB에 저장
+            latest = pick_latest_one(data)  # 아래 유틸 함수 추가 (이미 있으면 사용)
+            request.session["nhis_result"] = {
+                "raw": data,         # 원본 전체를 잠시 보관(디버깅/엑셀 merge 용)
+                "latest": latest,    # 최신1건 요약
+                "stored_at": int(time.time()),
+            }
+
+            # 엑셀 병합용으로 서버 메모리/세션 저장 외, 필요한 경우 DB insert도 여기서 수행
+            # save_nhis_latest_to_db(user_id, latest)  # 네가 쓰는 사용자 식별키 있으면 활용
+
+            return JSONResponse({"ok": True, "stage": "complete", "errCode": "0000", "data": latest}, status_code=200)
+
+        # 아직 대기(0001)면 2초 쉬고 다시
+        time.sleep(2)
+
+    # 끝까지 0000 안 됨 → 아직 사용자 인증이 미완료
+    return JSONResponse(
+        {"ok": False, "stage": "complete", "errCode": "WAIT", "msg": "아직 인증이 완료되지 않았습니다."},
+        status_code=202
+    )
+
+
+# ---- 유틸: 최신 1건 선택 (연/월/일 기준) ----
+def pick_latest_one(data: dict) -> dict:
     """
-    - direct=true: 세션의 start_payload로 즉시 재조회
-    - callbackId: 콜백형 완료 확인 후 실제 데이터 재조회
-    - 성공(0000) 시 세션에 nhis_latest 저장 (엑셀 병합용)
+    data.INCOMELIST[] 중 가장 최근(연/월/일) 1건만 골라 요약해 리턴.
+    형식은 가이드의 필드명을 그대로 사용.
     """
-    payload = await request.json()
-    is_direct = bool(payload.get("direct"))
-    callbackId = str(payload.get("callbackId") or "").strip()
-    #임시 callbackid 로그
-    print("[DH-COMPLETE][FETCH] using CALLBACKID=", callbackId or "-")
+    items = (data or {}).get("INCOMELIST") or []
+    best = None
+    best_key = None
+    for it in items:
+        year = (it.get("GUNYEAR") or "").strip()
+        date = (it.get("GUNDATE") or "").strip()  # 'MM/DD' 형태 예시
+        # 키를 YYYYMMDD 정수로 만들어 비교
+        try:
+            mm, dd = (date.split("/") + ["0", "0"])[:2]
+            key = int(f"{int(year):04d}{int(mm):02d}{int(dd):02d}")
+        except Exception:
+            # 연도만 있는 항목은 월/일 0으로
+            try:
+                key = int(f"{int(year):04d}0000")
+            except Exception:
+                key = -1
+        if best is None or key > best_key:
+            best, best_key = it, key
+    return best or {}
 
-    # --- 즉시형 / 콜백ID 미제공일 때도 재조회 ---
-    if is_direct:
-        start_payload = request.session.get("nhis_start_payload") or {}
-        if not start_payload:
-            return JSONResponse({"errCode": "9002", "message": "start payload missing"}, status_code=409)
-
-        rsp2 = _fetch_and_save_latest_nhis(request, start_payload, callback_id=None)
-        err2 = str(rsp2.get("errCode",""))
-        if err2 in ("0000","0"):
-            return JSONResponse({"errCode":"0000","message":"OK","data": rsp2.get("data") or rsp2}, status_code=200)
-        return JSONResponse({"errCode": err2 or "9999","message": rsp2.get("message") or "WAIT"}, status_code=202)
-
-
-    # --- 콜백형 ---
-    if not callbackId:
-        return JSONResponse({"errCode":"9001","message":"callbackId is required"}, status_code=400)
-
-    rsp = DATAHUB.simple_auth_complete(callbackId)
-    err = str(rsp.get("errCode",""))
-    if err in ("0000","0"):
-        start_payload = request.session.get("nhis_start_payload") or {}
-        rsp2 = _fetch_and_save_latest_nhis(request, start_payload, callback_id=callbackId)
-        err2 = str(rsp2.get("errCode",""))
-        if err2 in ("0000","0"):
-            return JSONResponse({"errCode":"0000","message":"OK","data": rsp2.get("data") or rsp2}, status_code=200)
-        return JSONResponse({"errCode": err2 or "9999","message": rsp2.get("message") or "WAIT"}, status_code=202)
-
-
-    # 아직 준비 안 됨 → 202
-    return JSONResponse({"errCode": err or "9999","message": rsp.get("message") or "WAIT"}, status_code=202)
 
 
 # ===========================================
