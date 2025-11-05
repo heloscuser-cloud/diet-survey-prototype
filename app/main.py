@@ -1910,7 +1910,8 @@ async def dh_simple_complete(
             time.sleep(2)
             continue
 
-        # --- (추적) 원문 저장: nhis_audit ---
+
+        # --- (추적) 원문 저장: nhis_audit 임시로그---
         try:
             sess_cb = (request.session or {}).get("dh_callback") or {}
             resp_id = None
@@ -1934,7 +1935,7 @@ async def dh_simple_complete(
             session.commit()
         except Exception as e:
             print("[NHIS][AUDIT][ERR]", repr(e))
-
+            
 
 
         err2 = str(res.get("errCode","")).strip()
@@ -1963,12 +1964,12 @@ async def dh_simple_complete(
 
             return JSONResponse({"ok": True, "errCode":"0000","message":"OK","data": latest or {}}, status_code=200)
 
+
         # --- (추적) 원문 저장: nhis_audit 임시로그---
         try:
             sess_cb = (request.session or {}).get("dh_callback") or {}
             resp_id = None
             try:
-                # 이미 로그인한 신청자 세션 토큰이 있다면 복구
                 tok = (request.query_params.get("rtoken") or request.cookies.get("rtoken") or "")
                 rid = verify_token(tok) if tok else -1
                 if rid > 0:
@@ -1976,19 +1977,19 @@ async def dh_simple_complete(
             except:
                 pass
 
-            with SessionLocal() as s2:
-                s2.exec(sa_text("""
-                    INSERT INTO nhis_audit (respondent_id, callback_id, request_json, response_json)
-                    VALUES (:rid, :cbid, :req, :res)
-                """), {
-                    "rid": resp_id,
-                    "cbid": cbid,
-                    "req": json.dumps((request.session or {}).get("nhis_start_payload") or {}),
-                    "res": json.dumps(res or {}),
-                })
-                s2.commit()
+            session.exec(sa_text("""
+                INSERT INTO nhis_audit (respondent_id, callback_id, request_json, response_json)
+                VALUES (:rid, :cbid, :req, :res)
+            """), {
+                "rid": resp_id,
+                "cbid": cbid,
+                "req": json.dumps((request.session or {}).get("nhis_start_payload") or {}),
+                "res": json.dumps(res or {}),
+            })
+            session.commit()
         except Exception as e:
             print("[NHIS][AUDIT][ERR]", repr(e))
+
 
 
         time.sleep(2)
