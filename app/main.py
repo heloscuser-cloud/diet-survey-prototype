@@ -78,7 +78,8 @@ def to_kst(dt: datetime) -> datetime:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(KST)
 
-def now_kst() -> datetime:
+KST = timezone(timedelta(hours=9))
+def now_kst():
     return datetime.now(tz=KST)
 
 def kst_date_range_to_utc_datetimes(d_from: date | None, d_to: date | None):
@@ -1325,39 +1326,40 @@ async def survey_step_post(request: Request, step: int,
 
 
 @app.get("/survey/finish")
-def survey_finish(request: Request,
-                  
-                  acc: str,
-                  rtoken: str,
-                  background_tasks: BackgroundTasks,
-                  session: Session = Depends(get_session)):
-    # NHIS(국가검진) 최신 결과 세션에서 꺼내기 (없으면 None)
-    nhis_latest = (request.session or {}).get("nhis_latest")
-    # 나중에 안전하게 접근하려고 사전 초기화
-    sr = None
+def survey_finish(
+    request: Request,
+    acc: str,
+    rtoken: str,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+):
+    """문진 제출 처리 및 NHIS 검진 데이터 저장"""
     respondent_id = verify_token(rtoken)
     if respondent_id < 0:
-        return templates.TemplateResponse("error.html", {"request": request, "message": "세션이 만료되었습니다. 다시 시작해주세요."}, status_code=401)
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": "세션이 만료되었습니다. 다시 시작해주세요."},
+            status_code=401,
+        )
 
-    # --- [NEW] 폼(acc) → "1부터 시작하는 번호"로 정규화 ---
-    # acc: {"q1":"2","q2":"1",...,"q23":["1","4"]} 형태(문자열/문자열리스트)라고 가정
+    # NHIS(국가검진) 최신 결과 세션에서 꺼내기
+    nhis_latest = (request.session or {}).get("nhis_latest")
+    nhis_raw = (request.session or {}).get("nhis_raw")
+
+    # 응답 폼(acc) 파싱
     try:
         acc_obj = json.loads(acc) if acc else {}
     except Exception:
         acc_obj = {}
 
-    # 질문 id 오름차순(1..23) 기준으로 번호만 추출
+    # 정규화된 답안 인덱스 구성
     answers_indices = []
-    # ALL_QUESTIONS는 기동 시 로드된 전체 질문(JSON)
-    # 각 질문 객체는 {"id": 1, "title": "...", "type": "radio"/"checkbox", ...} 형태라고 가정
     for q in sorted(ALL_QUESTIONS, key=lambda x: x["id"]):
         key = f"q{q['id']}"
         if q.get("type") == "checkbox":
             raw_list = acc_obj.get(key, [])
             if isinstance(raw_list, str):
-                # 혹시 "1,3,4" 같이 들어오면 분할
                 raw_list = [s.strip() for s in raw_list.split(",") if s.strip()]
-            # 정수로 정규화(1부터). 비정상 값은 제외
             idx_list = []
             for v in raw_list:
                 try:
@@ -1374,79 +1376,83 @@ def survey_finish(request: Request,
                 answers_indices.append(i if (i is None or i >= 1) else None)
             except:
                 answers_indices.append(None)
- 
-    # DB에는 깔끔하게 번호만 저장
+
     normalized_payload = {"answers_indices": answers_indices}
+    if nhis_latest:
+        normalized_payload["nhis"] = nhis_latest
+
+    # 응답자 조회
     resp = session.get(Respondent, respondent_id)
-   
-    nhis = request.session.get("nhis_latest")
 
-    if nhis:
-        normalized_payload["nhis"] = nhis 
-
-    nhis_latest = request.session.get("nhis_latest")
-    nhis_raw    = request.session.get("nhis_raw")
-
+    # SurveyResponse 생성
     sr = SurveyResponse(
         respondent_id=respondent_id,
         answers_json=json.dumps(normalized_payload, ensure_ascii=False),
         score=None,
-        nhis_json=nhis_latest,  # DB가 jsonb면 dict 그대로
+        submitted_at=now_kst(),       # ✅ 핵심 추가
+        nhis_json=nhis_latest,        # DB jsonb면 dict 그대로 저장됨
         nhis_raw=nhis_raw,
     )
+
     session.add(sr)
-    
     if resp:
         resp.status = "submitted"
         session.add(resp)
     session.commit()
     session.refresh(sr)
-    
-    if resp.serial_no is None:
+
+    # 일련번호 채번
+    if resp and resp.serial_no is None:
         next_val = session.exec(sa_text("SELECT nextval('respondent_serial_no_seq')")).one()[0]
         resp.serial_no = next_val
         session.add(resp)
         session.commit()
         session.refresh(resp)
-    
-    # 건강검진 데이터 가져온 목록 임시로그
-    print("[NHIS][SAVE] latest:", 
-      (nhis_latest or {}).get("exam_date"), 
-      "| raw.items:", 
-      len(((nhis_raw or {}).get("data") or {}).get("INCOMELIST") or []))
 
-    # --- 알림 메일 비동기 발송 트리거 ---
+    # 건강검진 데이터 로그
+    try:
+        print(
+            "[NHIS][SAVE]",
+            "exam_date:", (nhis_latest or {}).get("exam_date"),
+            "| income_len:", len(((nhis_raw or {}).get("data") or {}).get("INCOMELIST") or []),
+        )
+    except Exception as e:
+        print("[NHIS][SAVE][WARN]", repr(e))
+
+    # ── 알림메일 비동기 발송 ───────────────────────────────
     user = session.get(User, resp.user_id) if resp else None
     try:
-        applicant_name = (resp.applicant_name or (user.name_enc if 'user' in locals() and user else "")) if resp else ""
-        created_at_kst_str = to_kst(resp.created_at).strftime("%Y-%m-%d %H:%M") if resp and resp.created_at else now_kst().strftime("%Y-%m-%d %H:%M")
+        applicant_name = (
+            (resp.applicant_name or (user.name_enc if user else ""))
+            if resp else ""
+        )
+        created_at_kst_str = (
+            to_kst(resp.created_at).strftime("%Y-%m-%d %H:%M")
+            if resp and resp.created_at else now_kst().strftime("%Y-%m-%d %H:%M")
+        )
         serial_no_val = resp.serial_no or 0
-
-        # 환경 구성 체크 로그
-        print("[EMAIL] TRY send",
-            "SMTP_HOST=", os.getenv("SMTP_HOST"),
-            "SMTP_USER=", os.getenv("SMTP_USER"),
-            "SMTP_FROM=", os.getenv("SMTP_FROM"),
-            "SMTP_TO=", os.getenv("SMTP_TO"))
-
-        # BackgroundTasks로 비동기 발송
         background_tasks.add_task(
             send_submission_email,
             serial_no_val,
             applicant_name,
-            created_at_kst_str
+            created_at_kst_str,
         )
     except Exception as e:
-        print("[EMAIL] enqueue failed:", repr(e))
+        print("[EMAIL][ERR]", repr(e))
 
+    # 세션 정리
     request.session.pop("nhis_latest", None)
     request.session.pop("nhis_raw", None)
-    
-    response = RedirectResponse(url="/portal", status_code=302)
-    # 설문 완료 플래그(브라우저 뒤로가기로 입력 복귀 차단용)
-    response.set_cookie("survey_completed", "1", max_age=60*60*24*7, httponly=True, samesite="Lax", secure=bool(int(os.getenv("SECURE_COOKIE","1"))))
-    return response
 
+    response = RedirectResponse(url="/portal", status_code=302)
+    response.set_cookie(
+        "survey_completed", "1",
+        max_age=60*60*24*7,
+        httponly=True,
+        samesite="Lax",
+        secure=bool(int(os.getenv("SECURE_COOKIE","1"))),
+    )
+    return response
 
 
 @app.post("/admin/responses/export.xlsx")
