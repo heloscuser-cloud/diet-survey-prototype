@@ -260,6 +260,11 @@ class SurveyResponse(SQLModel, table=True):
     score: Optional[int] = None
     submitted_at: datetime = Field(default_factory=datetime.utcnow)
 
+    # ▼ 추가: NHIS 결과 보관(JSON 문자열)
+    nhis_json: Optional[str] = None    # pick_latest_general 결과(json.dumps로 저장)
+    nhis_raw: Optional[str]  = None    # 전체 원본 응답(json.dumps로 저장)
+
+
 class ReportFile(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     survey_response_id: int = Field(index=True)
@@ -1363,11 +1368,15 @@ def survey_finish(request: Request,
     if nhis:
         normalized_payload["nhis"] = nhis 
 
+    nhis_latest = request.session.get("nhis_latest")
+    nhis_raw    = request.session.get("nhis_raw")
+
     sr = SurveyResponse(
         respondent_id=respondent_id,
-        nhis_json=nhis_latest,
         answers_json=json.dumps(normalized_payload, ensure_ascii=False),
-        score=None
+        score=None,
+        nhis_json=(json.dumps(nhis_latest, ensure_ascii=False) if nhis_latest is not None else None),
+        nhis_raw=(json.dumps(nhis_raw, ensure_ascii=False) if nhis_raw is not None else None),
     )
     session.add(sr)
     
@@ -1498,7 +1507,7 @@ async def admin_export_xlsx(
     questions = [q_title(q) for q in questions_sorted]
 
     # 헤더
-    fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별", "신장", "체중"]
+    fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별", "신장", "체중", "검진일자"]
     ws.append(fixed_headers + questions)
 
     # 유틸
@@ -1535,6 +1544,16 @@ async def admin_export_xlsx(
             payload = {}
         answers = extract_answers(payload, questions_sorted)
 
+        # NHIS exam_date 뽑기
+        exam_date = ""
+        try:
+            if sr.nhis_json:
+                nj = json.loads(sr.nhis_json)
+                # datahub_client.pick_latest_general의 표준화 키 사용
+                exam_date = nj.get("exam_date") or ""
+        except Exception:
+            pass
+
         row = [
             idx,
             serial_no,
@@ -1544,6 +1563,7 @@ async def admin_export_xlsx(
             gender,
             ("" if height is None else height),
             ("" if weight is None else weight),
+            exam_date,   # ← 추가
         ] + [fmt(v) for v in answers]
         ws.append(row)
 
@@ -1587,11 +1607,11 @@ async def dh_simple_start(request: Request):
     telecom      = str(payload.get("telecom","")).strip()
     userName     = str(payload.get("userName","")).strip()
     hpNumber     = str(payload.get("hpNumber","")).strip()
-    juminOrBirth = str(payload.get("juminOrBirth","")).strip()
+    juminOrBirth = str(payload.get("juminOrBirth") or payload.get("birth") or "").strip()
 
     telecom_gubun = telecom if loginOption == "3" and telecom else None
 
-    # 1) 시작 호출 (푸시 발송 or 사용자 앱 열기)
+    # 1) 시작 호출
     rsp = DATAHUB.simple_auth_start(
         login_option=loginOption,
         user_name=userName,
@@ -1600,28 +1620,32 @@ async def dh_simple_start(request: Request):
         telecom_gubun=telecom_gubun,
     )
 
-    err  = str(rsp.get("errCode",""))
+    err  = str(rsp.get("errCode","")).strip()
     data = rsp.get("data") or rsp.get("Data") or {}
 
-    # 2) 콜백형(일반)만 사용: 0001 + callbackId 수신이 정상 흐름
+    # --- 콜백형: 0001 + callbackId → 세션에 저장 후 프론트에 전달
     cbid = (data.get("callbackId") or rsp.get("callbackId") or "").strip()
-    if cbid:
+    if err == "0001" and cbid:
         request.session["dh_callback"] = {"id": cbid, "type": "SIMPLE"}
         return JSONResponse({"errCode":"0001","message":"NEED_CALLBACK","data":{"callbackId": cbid}}, status_code=200)
 
-    # 혹시 0000이 와도 '즉시형'을 인정하지 않고 콜백대기 화면으로 보냄
-    # (공급사 데모/환경에 따라 0000이 나오는 케이스가 있었음 — 이번 프로젝트 정책상 콜백만 허용)
-    return JSONResponse({"errCode":"0001","message":"NEED_CALLBACK_NOID","data":{}}, status_code=200)
+    # --- 즉시형: 0000 → 이 응답에 이미 결과가 포함된 케이스
+    if err == "0000":
+        # 결과가 data에 있는 경우/형식이 달라도 pick_latest_general가 안전하게 뽑도록 시도
+        try:
+            latest = pick_latest_general(rsp)
+        except Exception:
+            latest = None
 
+        # 세션 보관(엑셀 병합/후속 단계 용)
+        request.session["nhis_latest"] = latest
+        request.session["nhis_raw"]    = rsp
 
-# ===========================================
-# DataHub 간편인증 Step1-2: 진행 중
-# ===========================================
-# 현재 post_captcha가 대체 중으로 사용하지 않음
-# @app.get("/api/dh/simple/status")
-# def dh_simple_status(callback_id: str):
-#     rsp = DATAHUB.post_captcha(callbackId=callback_id, callbackType="ANY")
-#     return rsp
+        return JSONResponse({"errCode":"0000","message":"OK","data": latest or {}}, status_code=200)
+
+    # --- 그 외: 에러 그대로 통지
+    msg = (rsp.get("errMsg") or "간편인증 시작 실패").strip()
+    return JSONResponse({"errCode": err or "9999", "message": msg, "data": data}, status_code=200)
 
 
 # ===========================================
@@ -1642,14 +1666,15 @@ async def dh_simple_complete(request: Request):
     max_wait_sec = 60
     deadline = time.time() + max_wait_sec
     while time.time() < deadline:
+        # 1) captcha 콜 (네트워크/서버 예외만 재시도)
         try:
-            cap = DATAHUB.simple_auth_complete(callback_id=cbid, callback_type="SIMPLE")
+            _ = DATAHUB.simple_auth_complete(callback_id=cbid, callback_type="SIMPLE")
         except Exception as e:
             print("[DH-COMPLETE][ERR][captcha]", repr(e))
             time.sleep(2)
             continue
 
-        # 콜백 세션으로 최종 결과 조회 (새 인증 X)
+        # 2) 같은 cbid로 결과 재조회
         try:
             res = DATAHUB.post_medical_glance_simple_with_callbackid(callbackId=cbid)
         except Exception as e:
@@ -1657,21 +1682,21 @@ async def dh_simple_complete(request: Request):
             time.sleep(2)
             continue
 
-        err = str(res.get("errCode",""))
-        if err == "0000":
-            # 최신 1건만 추출해 세션에 저장 (엑셀 병합용)
+        err2 = str(res.get("errCode","")).strip()
+        if err2 == "0000":
             try:
-                latest = pick_latest_general(res)  # 네 프로젝트에서 쓰는 헬퍼 함수명 그대로
+                latest = pick_latest_general(res)
             except Exception:
                 latest = None
             request.session["nhis_latest"] = latest
             request.session["nhis_raw"]    = res
             return JSONResponse({"ok": True, "errCode":"0000","message":"OK","data": latest or {}}, status_code=200)
 
+        # 아직 대기 상태면 잠깐 쉬고 재시도
         time.sleep(2)
 
-    # 아직 미완료
     return JSONResponse({"ok": False, "errCode":"2020","message":"아직 인증이 완료되지 않았습니다."}, status_code=202)
+
 
 
 

@@ -190,25 +190,30 @@ btnStart.addEventListener('click', async () => {
     }
 
     // ── 성공 케이스 분기 ─────────────────────────────────
-    // 1) 즉시형(0000) → 이미 결과가 들어온 케이스
-if (data.errCode === '0000' && data.data && data.data.immediate) {
-setStatus('간편인증 요청 전송 성공. 스마트폰에서 인증을 완료한 뒤 "인증완료" 버튼을 눌러주세요.', 'ok');
-btnComplete.disabled = false;
+    // 1) 즉시형(0000) → 이미 결과가 도착함 → 바로 다음 단계로
+if (data.errCode === "0000") {
+gStartDone = true;
+  setStatus('건강검진 데이터 수신 완료. 다음 단계로 이동합니다.', 'ok');
+  // 서버 세션에 저장되어 있으니 바로 next로 이동
+window.location.href = nextUrlEl.value || '/info';
+  return;
 }
 
-
     // 2) 콜백형(0001) → callbackId 필요
-if (data.errCode === '0001' && data.data && data.data.callbackId) {
-  gCallbackId = data.data.callbackId;
-  setStatus('간편인증 요청 전송 성공. 스마트폰에서 인증을 완료한 뒤 "인증완료" 버튼을 눌러주세요.', 'ok');
+  // 콜백형: 인증 대기 → 완료 버튼 활성화
+if (data.errCode === "0001" && data.data && data.data.callbackId) {
+  callbackId = data.data.callbackId;
+gStartDone = true;
+  setStatus('간편인증 요청 전송 성공. 스마트폰에서 인증 완료 후 "인증완료" 버튼을 누르세요.', 'ok');
   btnComplete.disabled = false;
   return;
 }
 
-    // 그 외
+    // 그 외 에러
     btnStart.disabled = false;
     gStartDone = false;
-    setStatus('간편인증 시작 실패: ' + (data?.message || '오류'), 'err');
+alert('간편인증 시작 실패: ' + (data.message || data.errCode));
+setStatus('간편인증 시작 실패', 'err');
 
   } catch (e) {
     console.error(e);
@@ -229,7 +234,11 @@ btnComplete.addEventListener('click', async () => {
   btnComplete.disabled = true;
 
   async function tryCompleteOnce() {
-    const rsp = await fetch('/api/dh/simple/complete', { method:'POST' });
+ const rsp = await fetch('/api/dh/simple/complete', {
+   method:'POST',
+   headers: {'Content-Type':'application/json'},
+   body: JSON.stringify(callbackId ? { callbackId } : {})
+ });
     const data = await rsp.json().catch(()=> ({}));
     console.log('[COMPLETE][rsp]', rsp.status, data);
 
