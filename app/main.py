@@ -20,6 +20,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from random import randint
 from sqlalchemy import func, Column, LargeBinary, Integer, text
 from sqlalchemy import text as sa_text
+from sqlalchemy.dialects.postgresql import JSONB
 from itsdangerous import (
     TimestampSigner, BadSignature, SignatureExpired,
     URLSafeSerializer, URLSafeTimedSerializer
@@ -223,6 +224,10 @@ class User(SQLModel, table=True):
     height_cm: Optional[float] = None
     weight_kg: Optional[float] = None
 
+class SurveyResponse(SQLModel, table=True):
+    # 
+    nhis_json: dict | None = Field(default=None, sa_column=Column(JSONB))
+    nhis_raw: dict | None  = Field(default=None, sa_column=Column(JSONB))
 
 class Respondent(SQLModel, table=True):
     __tablename__ = "respondent"
@@ -1401,6 +1406,12 @@ def survey_finish(request: Request,
         session.add(resp)
         session.commit()
         session.refresh(resp)
+    
+    # 건강검진 데이터 가져온 목록 임시로그
+    print("[NHIS][SAVE] latest:", 
+      (nhis_latest or {}).get("exam_date"), 
+      "| raw.items:", 
+      len(((nhis_raw or {}).get("data") or {}).get("INCOMELIST") or []))
 
     # --- 알림 메일 비동기 발송 트리거 ---
     user = session.get(User, resp.user_id) if resp else None
