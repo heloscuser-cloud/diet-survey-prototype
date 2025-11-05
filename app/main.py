@@ -1344,7 +1344,6 @@ def survey_finish(
 
     # NHIS(국가검진) 최신 결과 세션에서 꺼내기
     nhis_latest = (request.session or {}).get("nhis_latest")
-    nhis_raw = (request.session or {}).get("nhis_raw")
 
     # 응답 폼(acc) 파싱
     try:
@@ -1391,7 +1390,6 @@ def survey_finish(
         score=None,
         submitted_at=now_kst(),       # ✅ 핵심 추가
         nhis_json=nhis_latest,        # DB jsonb면 dict 그대로 저장됨
-        nhis_raw=nhis_raw,
     )
 
     session.add(sr)
@@ -1409,13 +1407,11 @@ def survey_finish(
         session.commit()
         session.refresh(resp)
 
-    # 건강검진 데이터 로그
+    # 건강검진 데이터 임시로그
     try:
-        print(
-            "[NHIS][SAVE]",
-            "exam_date:", (nhis_latest or {}).get("exam_date"),
-            "| income_len:", len(((nhis_raw or {}).get("data") or {}).get("INCOMELIST") or []),
-        )
+        print("[NHIS][SAVE] latest:",
+            (nhis_latest or {}).get("exam_date"),
+            "| has_latest:", bool(nhis_latest))
     except Exception as e:
         print("[NHIS][SAVE][WARN]", repr(e))
 
@@ -1647,7 +1643,14 @@ async def admin_export_xlsx(
     ws.title = "문진결과"
 
     today = now_kst().date()
-
+    
+    exam_date = ""
+    try:
+        nj = sr.nhis_json if isinstance(sr.nhis_json, dict) else json.loads(sr.nhis_json or "{}")
+        exam_date = (nj or {}).get("exam_date") or ""
+    except Exception as _e:
+        print("export.xlsx: exam_date parse err:", repr(_e))
+    
     fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별", "신장", "체중"]
     nhis_headers  = [
         "검진일자","검진기관","신장(NHIS)","체중(NHIS)","BMI",
@@ -1859,13 +1862,28 @@ async def dh_simple_complete(request: Request):
 
         err2 = str(res.get("errCode","")).strip()
         if err2 == "0000":
+            # 🔹 표준화: 최근 1건만 (작은 dict)
             try:
                 latest = pick_latest_general(res)
-            except Exception:
+            except Exception as e:
+                print("[DH-COMPLETE][WARN][pick]", repr(e))
                 latest = None
-            request.session["nhis_latest"] = latest
-            request.session["nhis_raw"]    = res
-            return JSONResponse({"ok": True, "errCode":"0000","message":"OK","data": latest or {}}, status_code=200)
+
+            # 🔹 세션에는 '작은' 결과만 저장 (쿠키 4KB 보호)
+            request.session["nhis_latest"] = latest or {}
+
+            # 🔹 디버그: 크기 로깅 (문자열화 길이만 확인)
+            try:
+                latest_len = len(json.dumps(latest or {}, ensure_ascii=False))
+                res_len    = len(json.dumps(res or {}, ensure_ascii=False))
+                print(f"[DH-COMPLETE][SIZE] latest={latest_len}B raw={res_len}B (raw는 세션에 저장하지 않음)")
+            except Exception:
+                pass
+
+            return JSONResponse(
+                {"ok": True, "errCode": "0000", "message": "OK", "data": latest or {}},
+                status_code=200,
+            )
 
         time.sleep(2)
 
