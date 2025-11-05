@@ -12,7 +12,7 @@ from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse, JSONResponse
 from sqlmodel import SQLModel, Field, Session, create_engine, select, Relationship
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Any
 from fastapi import Query
 from datetime import datetime, timedelta, date, timezone
 from starlette.responses import RedirectResponse
@@ -1682,11 +1682,12 @@ async def dh_simple_start(request: Request):
 # ===========================================
 # DataHub 간편인증 Step1-2: 진행 중
 # ===========================================
+# 현재 post_captcha가 대체 중으로 사용하지 않음
+# @app.get("/api/dh/simple/status")
+# def dh_simple_status(callback_id: str):
+#     rsp = DATAHUB.post_captcha(callbackId=callback_id, callbackType="ANY")
+#     return rsp
 
-@app.get("/api/dh/simple/status")
-def dh_simple_status(callback_id: str):
-    rsp = DATAHUB.simple_auth_status(callback_id)
-    return rsp
 
 # ===========================================
 # DataHub 간편인증 Step2: 완료(captcha)
@@ -1718,7 +1719,7 @@ def dh_simple_complete(request: Request):
         try:
             last_captcha = DATAHUB.post_captcha(
                 callbackId=cbid,
-                callbackType=cbtype  # 'ANY' 사용 가능. 가이드상 'SMS'/'CAPTCHA'/'OTP'/'TWO'/'SINGLE'/'ANY'
+                callbackType=cbtype or any # 'ANY' 사용 가능. 가이드상 'SMS'/'CAPTCHA'/'OTP'/'TWO'/'SINGLE'/'ANY'
             )
         except Exception as e:
             # 네 logging 포맷에 맞춰 필요하면 바꿔도 됨
@@ -1728,9 +1729,7 @@ def dh_simple_complete(request: Request):
 
         # (b) 본요청 재시도 (CALLBACKID 포함)
         try:
-            res = DATAHUB.post_medical_glance_simple_with_callbackid(
-                callbackId=cbid
-            )
+            res = DATAHUB.medical_checkup_simple(callback_id=cbid)
         except Exception as e:
             print("[DH-COMPLETE][ERR][glance]", repr(e))
             time.sleep(2)
@@ -1742,16 +1741,9 @@ def dh_simple_complete(request: Request):
             data = (res or {}).get("data") or {}
 
             # 10년 내 최신 1건만 골라서 세션/DB에 저장
-            latest = pick_latest_one(data)  # 아래 유틸 함수 추가 (이미 있으면 사용)
-            request.session["nhis_result"] = {
-                "raw": data,         # 원본 전체를 잠시 보관(디버깅/엑셀 merge 용)
-                "latest": latest,    # 최신1건 요약
-                "stored_at": int(time.time()),
-            }
-
-            # 엑셀 병합용으로 서버 메모리/세션 저장 외, 필요한 경우 DB insert도 여기서 수행
-            # save_nhis_latest_to_db(user_id, latest)  # 네가 쓰는 사용자 식별키 있으면 활용
-
+            latest = pick_latest_one(res.get("data") or res)
+            request.session["nhis_latest"] = latest
+            request.session["nhis_raw"]    = res
             return JSONResponse({"ok": True, "stage": "complete", "errCode": "0000", "data": latest}, status_code=200)
 
         # 아직 대기(0001)면 2초 쉬고 다시
