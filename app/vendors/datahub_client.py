@@ -364,20 +364,21 @@ class DatahubClient:
         return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", body)
 
 
+
     # === 1-2) 콜백ID로만 결과 재조회 (새 인증 X) ===
     def post_medical_glance_simple_with_callbackid(self, callbackId: str) -> Dict[str, Any]:
         return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", {"CALLBACKID": callbackId})
 
 
+
     # --- 2) 간편인증 Step2: captcha(최종 완료 콜)
-    def simple_auth_complete(self, callback_id: str, callback_type: str = "SIMPLE", **kwargs) -> Dict[str, Any]:
+    def simple_auth_complete(self, callback_id: str, callback_type: str = "SIMPLE") -> Dict[str, Any]:
         body = {
             "callbackId": callback_id,
-            "callbackType": callback_type,
-            # callbackResponse / 1 / 2 / retry 등은 필요시에만
+            "callbackType": callback_type or "SIMPLE",
         }
-        body.update({k:v for k,v in kwargs.items() if v is not None})
         return self._post("/scrap/captcha", body)
+
 
     # --- 3) 인증서 방식: 건강검진 결과 조회
     def nhis_medical_checkup(self, jumin: str, cert_name: str, cert_pwd: str, der_b64: str, key_b64: str) -> Dict[str, Any]:

@@ -192,42 +192,18 @@ btnStart.addEventListener('click', async () => {
     // ── 성공 케이스 분기 ─────────────────────────────────
     // 1) 즉시형(0000) → 이미 결과가 들어온 케이스
 if (data.errCode === '0000' && data.data && data.data.immediate) {
-  setStatus('즉시 인증 완료되었습니다. 다음 단계로 이동합니다.', 'ok');
-  // 자동으로 complete(direct) 호출 → /info 이동
-  try {
-    const rsp2 = await fetch('/api/dh/simple/complete', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ direct: true })
-    });
-    const data2 = await rsp2.json().catch(()=>({}));
-    if (rsp2.status === 200 && data2 && data2.errCode === '0000') {
-      window.location.href = (document.getElementById('nextUrl').value || '/info');
-      return;
-    }
-    // 실패 시 사용자에게 안내
-    alert(data2 && data2.message ? data2.message : '즉시형 완료 처리에 실패했습니다.');
-    setStatus('오류가 발생했습니다. 다시 시도해 주세요.', 'err');
-  } catch (e) {
-    console.error(e);
-    alert('즉시형 완료 처리 중 오류가 발생했습니다.');
-    setStatus('오류가 발생했습니다. 다시 시도해 주세요.', 'err');
-  }
-  return;
+setStatus('간편인증 요청 전송 성공. 스마트폰에서 인증을 완료한 뒤 "인증완료" 버튼을 눌러주세요.', 'ok');
+btnComplete.disabled = false;
 }
 
 
     // 2) 콜백형(0001) → callbackId 필요
-    if (data.errCode === '0001' && data.data?.callbackId) {
-      gStartDone = true;
-      gCallbackId = data.data.callbackId;
-      setStatus('간편인증 요청 전송 성공. 스마트폰에서 인증 완료 후 "인증완료" 버튼을 눌러주세요.', 'ok');
-      btnComplete.disabled = false;
-
-      // 콜백형은 direct 금지
-      delete btnComplete.dataset.mode;
-      return;
-    }
+if (data.errCode === '0001' && data.data && data.data.callbackId) {
+  gCallbackId = data.data.callbackId;
+  setStatus('간편인증 요청 전송 성공. 스마트폰에서 인증을 완료한 뒤 "인증완료" 버튼을 눌러주세요.', 'ok');
+  btnComplete.disabled = false;
+  return;
+}
 
     // 그 외
     btnStart.disabled = false;

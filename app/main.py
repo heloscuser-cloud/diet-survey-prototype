@@ -1591,7 +1591,7 @@ async def dh_simple_start(request: Request):
 
     telecom_gubun = telecom if loginOption == "3" and telecom else None
 
-    # 시작 전용 호출
+    # 1) 시작 호출 (푸시 발송 or 사용자 앱 열기)
     rsp = DATAHUB.simple_auth_start(
         login_option=loginOption,
         user_name=userName,
@@ -1600,45 +1600,18 @@ async def dh_simple_start(request: Request):
         telecom_gubun=telecom_gubun,
     )
 
-    # 안전 로그(마스킹)
-    print("[DH-START][SAFE]", {
-        "LOGINOPTION": loginOption, "USERNAME": userName[:1]+"*"*(max(0,len(userName)-1)),
-        "HPNUMBER_LAST4": hpNumber[-4:], "TELECOMGUBUN": telecom_gubun or "", "JUMIN":"***MASKED***"
-    })
-
     err  = str(rsp.get("errCode",""))
     data = rsp.get("data") or rsp.get("Data") or {}
 
-    # 콜백형: callbackId 반환
-    cbid = (data.get("callbackId") or rsp.get("callbackId"))
-    if err in ("0001","1") and cbid:
-        # 세션에도 저장(선택)
-        request.session["dh_callback"] = {"id": cbid, "type": "ANY"}
+    # 2) 콜백형(일반)만 사용: 0001 + callbackId 수신이 정상 흐름
+    cbid = (data.get("callbackId") or rsp.get("callbackId") or "").strip()
+    if cbid:
+        request.session["dh_callback"] = {"id": cbid, "type": "SIMPLE"}
         return JSONResponse({"errCode":"0001","message":"NEED_CALLBACK","data":{"callbackId": cbid}}, status_code=200)
 
-    # 즉시형: 0000
-    # 0000 즉시형: 이 응답 안에 결과가 동봉되는 케이스가 있으므로
-    # 최신 1건을 골라 세션에 저장해둔다.
-    if err in ("0000", "0"):
-        try:
-            # rsp 전체에서 최신 1건 추출 (네 프로젝트에서 쓰는 헬퍼명 유지)
-            picked = pick_latest_general(rsp)
-        except Exception:
-            picked = None
-
-        request.session["nhis_latest"] = picked
-        request.session["nhis_raw"] = rsp
-
-        # 프론트가 자동 완료 호출(direct) 하도록 플래그 내려줌
-        return JSONResponse({
-            "errCode": "0000",
-            "message": "IMMEDIATE_OK",
-            "data": {"immediate": True}
-        }, status_code=200)
-
-    # 실패
-    return JSONResponse({"errCode": err or "9999", "message": rsp.get("message") or "FAIL"}, status_code=400)
-
+    # 혹시 0000이 와도 '즉시형'을 인정하지 않고 콜백대기 화면으로 보냄
+    # (공급사 데모/환경에 따라 0000이 나오는 케이스가 있었음 — 이번 프로젝트 정책상 콜백만 허용)
+    return JSONResponse({"errCode":"0001","message":"NEED_CALLBACK_NOID","data":{}}, status_code=200)
 
 
 # ===========================================
@@ -1658,39 +1631,25 @@ async def dh_simple_start(request: Request):
 @app.post("/api/dh/simple/complete")
 async def dh_simple_complete(request: Request):
     payload = await request.json()
-
-    # 1) 즉시형(direct) 처리
-    if bool(payload.get("direct")):
-        latest = (request.session or {}).get("nhis_latest")
-        if latest:
-            return JSONResponse({"errCode":"0000","message":"IMMEDIATE_OK","data": latest}, status_code=200)
-        # 혹시 세션 저장이 누락됐을 경우를 대비한 안전장치(선택)
-        # 필요 없다면 아래 2줄은 지워도 됨
-        # fallback = (request.session or {}).get("nhis_raw")
-        # if fallback: return JSONResponse({"errCode":"0000","message":"IMMEDIATE_OK","data": pick_latest_general(fallback)}, status_code=200)
-        return JSONResponse({"errCode":"9002","message":"즉시형 결과가 세션에 없습니다. 다시 시도해 주세요."}, status_code=400)
-
-    # 2) 콜백형 처리
     cbid = str(payload.get("callbackId","")).strip()
     if not cbid:
-        # 세션 폴백(선택)
         sess_cb = (request.session or {}).get("dh_callback") or {}
-        cbid = sess_cb.get("id","")
+        cbid = (sess_cb.get("id") or "").strip()
     if not cbid:
-        return JSONResponse({"errCode":"9001","message":"callbackId가 없습니다."}, status_code=400)
+        return JSONResponse({"ok": False, "errCode":"9001", "message":"callbackId가 없습니다. 처음부터 다시 진행해주세요."}, status_code=400)
 
-    # (a) 캡차/콜백 상태 폴링
+    # 콜백 완료까지 짧게 폴링
     max_wait_sec = 60
     deadline = time.time() + max_wait_sec
     while time.time() < deadline:
         try:
-            cap = DATAHUB.simple_auth_complete(callback_id=cbid, callback_type="ANY")
+            cap = DATAHUB.simple_auth_complete(callback_id=cbid, callback_type="SIMPLE")
         except Exception as e:
             print("[DH-COMPLETE][ERR][captcha]", repr(e))
             time.sleep(2)
             continue
 
-        # (b) 콜백ID로 결과 재조회(새 인증 시작 X)
+        # 콜백 세션으로 최종 결과 조회 (새 인증 X)
         try:
             res = DATAHUB.post_medical_glance_simple_with_callbackid(callbackId=cbid)
         except Exception as e:
@@ -1700,19 +1659,19 @@ async def dh_simple_complete(request: Request):
 
         err = str(res.get("errCode",""))
         if err == "0000":
-            # 최신 1건 추려서 세션 저장(엑셀 병합용)
+            # 최신 1건만 추출해 세션에 저장 (엑셀 병합용)
             try:
-                picked = pick_latest_general(res)
-                request.session["nhis_latest"] = picked
-            except Exception as e:
-                print("[DH-COMPLETE][WARN][pick]", repr(e))
-            return JSONResponse({"errCode":"0000","message":"OK","data":{}}, status_code=200)
+                latest = pick_latest_general(res)  # 네 프로젝트에서 쓰는 헬퍼 함수명 그대로
+            except Exception:
+                latest = None
+            request.session["nhis_latest"] = latest
+            request.session["nhis_raw"]    = res
+            return JSONResponse({"ok": True, "errCode":"0000","message":"OK","data": latest or {}}, status_code=200)
 
-        # 아직 원천기관 처리 중 → 잠깐 대기 후 재시도
         time.sleep(2)
 
-    # 타임아웃 → 프론트엔 재시도 유도(=202)
-    return JSONResponse({"errCode":"2020","message":"PENDING"}, status_code=202)
+    # 아직 미완료
+    return JSONResponse({"ok": False, "errCode":"2020","message":"아직 인증이 완료되지 않았습니다."}, status_code=202)
 
 
 
