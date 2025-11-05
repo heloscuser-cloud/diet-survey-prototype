@@ -1612,8 +1612,24 @@ async def dh_simple_start(request: Request):
         return JSONResponse({"errCode":"0001","message":"NEED_CALLBACK","data":{"callbackId": cbid}}, status_code=200)
 
     # 즉시형: 0000
-    if err in ("0000","0"):
-        return JSONResponse({"errCode":"0000","message":"IMMEDIATE_OK","data":{}}, status_code=200)
+    # 0000 즉시형: 이 응답 안에 결과가 동봉되는 케이스가 있으므로
+    # 최신 1건을 골라 세션에 저장해둔다.
+    if err in ("0000", "0"):
+        try:
+            # rsp 전체에서 최신 1건 추출 (네 프로젝트에서 쓰는 헬퍼명 유지)
+            picked = pick_latest_general(rsp)
+        except Exception:
+            picked = None
+
+        request.session["nhis_latest"] = picked
+        request.session["nhis_raw"] = rsp
+
+        # 프론트가 자동 완료 호출(direct) 하도록 플래그 내려줌
+        return JSONResponse({
+            "errCode": "0000",
+            "message": "IMMEDIATE_OK",
+            "data": {"immediate": True}
+        }, status_code=200)
 
     # 실패
     return JSONResponse({"errCode": err or "9999", "message": rsp.get("message") or "FAIL"}, status_code=400)
@@ -1640,9 +1656,14 @@ async def dh_simple_complete(request: Request):
 
     # 1) 즉시형(direct) 처리
     if bool(payload.get("direct")):
-        # 이미 Step1에서 성공(0000)한 케이스를 가정 → 최신 1건만 세션에 저장했다면 여기선 바로 OK 응답
-        # 혹시 Step1에서 세션 저장을 안했다면, 필요 시 pick_latest_general(rsp)로 저장 로직 추가
-        return JSONResponse({"errCode":"0000","message":"IMMEDIATE_OK","data":{}}, status_code=200)
+        latest = (request.session or {}).get("nhis_latest")
+        if latest:
+            return JSONResponse({"errCode":"0000","message":"IMMEDIATE_OK","data": latest}, status_code=200)
+        # 혹시 세션 저장이 누락됐을 경우를 대비한 안전장치(선택)
+        # 필요 없다면 아래 2줄은 지워도 됨
+        # fallback = (request.session or {}).get("nhis_raw")
+        # if fallback: return JSONResponse({"errCode":"0000","message":"IMMEDIATE_OK","data": pick_latest_general(fallback)}, status_code=200)
+        return JSONResponse({"errCode":"9002","message":"즉시형 결과가 세션에 없습니다. 다시 시도해 주세요."}, status_code=400)
 
     # 2) 콜백형 처리
     cbid = str(payload.get("callbackId","")).strip()
