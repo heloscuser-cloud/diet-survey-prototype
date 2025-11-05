@@ -450,6 +450,9 @@ def pick_latest_general(resp: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     items: List[Dict[str, Any]] = (
         data.get("INCOMELIST")
         or data.get("incomeList")
+        or data.get("REFERECELIST")  # ✅ DataHub가 여기로 내보내는 케이스 존재
+        or data.get("REFLIST")
+        or data.get("INCOME_LIST")
         or []
     )
     if not isinstance(items, list) or not items:

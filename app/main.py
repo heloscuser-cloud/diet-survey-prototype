@@ -1480,66 +1480,83 @@ async def admin_export_xlsx(
         except Exception:
             return {}
 
-    def nhis_extract_all(nj: dict) -> dict:
+    def nhis_extract_all(nj_std: dict, nj_raw: dict) -> dict:
         """
         표준 키(exam_date 등)를 최우선 사용.
-        없으면 원본(data/INCOMELIST[0] or ResultList[0])에서 백업 추출.
+        없으면 원본(data/INCOMELIST[0] 등)에서 백업 추출.
+        - nj_std: pick_latest_general가 만든 표준화 dict (sr.nhis_json)
+        - nj_raw: DataHub 응답 원문 dict (sr.nhis_raw)
         """
-        if not isinstance(nj, dict):
-            nj = {}
+        if not isinstance(nj_std, dict):
+            nj_std = {}
+        if not isinstance(nj_raw, dict):
+            nj_raw = {}
 
         # 1) 표준화된 형태 우선 (pick_latest_general 결과)
         std = {
-            "exam_date": nj.get("exam_date") or "",
-            "exam_place": nj.get("exam_place") or "",
-            "height": nj.get("height") or "",
-            "weight": nj.get("weight") or "",
-            "bmi": nj.get("bmi") or "",
-            "bp": nj.get("bp") or "",
-            "vision": nj.get("vision") or "",
-            "hearing": nj.get("hearing") or "",
-            "hemoglobin": nj.get("hemoglobin") or "",
-            "fbs": nj.get("fbs") or "",
-            "tc": nj.get("tc") or "",
-            "hdl": nj.get("hdl") or "",
-            "ldl": nj.get("ldl") or "",
-            "tg": nj.get("tg") or "",
-            "gfr": nj.get("gfr") or "",
-            "creatinine": nj.get("creatinine") or "",
-            "ast": nj.get("ast") or "",
-            "alt": nj.get("alt") or "",
-            "ggt": nj.get("ggt") or "",
-            "urine_protein": nj.get("urine_protein") or "",
-            "chest": nj.get("chest") or "",
-            "judgment": nj.get("judgment") or "",
+            "exam_date": nj_std.get("exam_date") or "",
+            "exam_place": nj_std.get("exam_place") or "",
+            "height": nj_std.get("height") or "",
+            "weight": nj_std.get("weight") or "",
+            "bmi": nj_std.get("bmi") or "",
+            "bp": nj_std.get("bp") or "",
+            "vision": nj_std.get("vision") or "",
+            "hearing": nj_std.get("hearing") or "",
+            "hemoglobin": nj_std.get("hemoglobin") or "",
+            "fbs": nj_std.get("fbs") or "",
+            "tc": nj_std.get("tc") or "",
+            "hdl": nj_std.get("hdl") or "",
+            "ldl": nj_std.get("ldl") or "",
+            "tg": nj_std.get("tg") or "",
+            "gfr": nj_std.get("gfr") or "",
+            "creatinine": nj_std.get("creatinine") or "",
+            "ast": nj_std.get("ast") or "",
+            "alt": nj_std.get("alt") or "",
+            "ggt": nj_std.get("ggt") or "",
+            "urine_protein": nj_std.get("urine_protein") or "",
+            "chest": nj_std.get("chest") or "",
+            "judgment": nj_std.get("judgment") or "",
         }
 
-        # 2) 표준 값이 비어 있으면 원본에서 백업 추출
-        #    - DataHub '한눈에 보기' 응답: data.INCOMELIST[0].GUNYEAR/GUNDATE...
-        #    - (이전 틸코/기타) ResultList[0].CheckUpDate ...
+        # 2) 표준 값이 비어 있으면 '원본'에서 백업 추출
+        #    DataHub 응답: data.INCOMELIST[] / REFERECELIST[] 등
         def first_or_none(lst):
             return lst[0] if isinstance(lst, list) and lst else None
 
-        # (a) INCOMELIST 소스
-        d_data = nj.get("data") or nj.get("Data") or {}
-        top = first_or_none(d_data.get("INCOMELIST") or d_data.get("incomeList") or [])
-        if top:
-            def _patch_if_empty(key, val):
-                if not std[key] and val is not None:
-                    std[key] = str(val).strip()
+        d_data = nj_raw.get("data") or nj_raw.get("Data") or {}
+        src_list = (
+            d_data.get("INCOMELIST")
+            or d_data.get("incomeList")
+            or d_data.get("REFERECELIST")
+            or d_data.get("REFLIST")
+            or d_data.get("INCOME_LIST")
+            or []
+        )
+        top = first_or_none(src_list)
 
-            # 날짜 조합: GUNYEAR + GUNDATE(MM/DD)
+        def _patch_if_empty(key, val):
+            if not std[key] and val not in (None, ""):
+                std[key] = str(val).strip()
+
+        if top:
+            # 날짜 조합: GUNYEAR ("YYYY" 또는 "YYYY년"), GUNDATE ("MM/DD" 또는 "YYYYMMDD")
             if not std["exam_date"]:
                 guny = str(top.get("GUNYEAR") or "").strip()
-                gund = str(top.get("GUNDATE") or "").strip()
-                try:
-                    # "MM/DD" → YYYY-MM-DD
-                    mm, dd = [int(x) for x in gund.split("/")[:2]] if "/" in gund else (0, 0)
-                    yy = int("".join(ch for ch in guny if ch.isdigit())) if guny else 0
-                    if yy and mm and dd:
-                        std["exam_date"] = f"{yy:04d}-{mm:02d}-{dd:02d}"
-                except Exception:
-                    pass
+                if guny.endswith("년"):
+                    guny = guny[:-1]
+                gund = str(top.get("GUNDATE") or "").strip().replace(".", "/").replace("-", "/")
+                y, m, d = "", "", ""
+                if len(gund) == 8 and gund.isdigit():
+                    y, m, d = gund[:4], gund[4:6], gund[6:8]
+                elif "/" in gund:
+                    parts = [p.zfill(2) for p in gund.split("/") if p]
+                    if len(parts) == 2:
+                        m, d = parts
+                        y = guny
+                    elif len(parts) == 3:
+                        y, m, d = parts
+                if y and m and d:
+                    std["exam_date"] = f"{y}-{m}-{d}"
 
             _patch_if_empty("exam_place",     top.get("GUNPLACE"))
             _patch_if_empty("height",         top.get("HEIGHT"))
@@ -1563,13 +1580,16 @@ async def admin_export_xlsx(
             _patch_if_empty("chest",          top.get("CHESTTROUBLE"))
             _patch_if_empty("judgment",       top.get("JUDGMENT"))
 
-        # (b) ResultList 소스(과거 구조 백업)
+        # (과거 구조 백업) ResultList 케이스
         if not std["exam_date"]:
-            rl = nj.get("ResultList") or nj.get("resultList")
+            rl = nj_raw.get("ResultList") or nj_raw.get("resultList")
             if isinstance(rl, list) and rl:
-                std["exam_date"] = str(rl[0].get("CheckUpDate") or rl[0].get("checkUpDate") or "").strip()
+                std["exam_date"] = str(
+                    rl[0].get("CheckUpDate") or rl[0].get("checkUpDate") or ""
+                ).strip()
 
         return std
+
 
     def fmt(v):
         if isinstance(v, list): 
@@ -1650,54 +1670,7 @@ async def admin_export_xlsx(
     ws.title = "문진결과"
 
     today = now_kst().date()
-    
-    # --- NHIS exam_date 뽑기 (안전하게) ---
-    exam_date = ""
-    try:
-        # nhis_json은 JSONB 컬럼일 수도, 문자열일 수도 있음
-        nj_raw = sr.nhis_json
-        if isinstance(nj_raw, (dict, list)):
-            nj = nj_raw
-        elif isinstance(nj_raw, str):
-            nj = json.loads(nj_raw) if nj_raw.strip() else {}
-        else:
-            nj = {}
-        # 1순위: 표준 키
-        exam_date = (nj or {}).get("exam_date") or ""
-
-        # 2순위: 원본에서 백업 추출 (연/월/일 조합)
-        if not exam_date:
-            raw = sr.nhis_raw
-            if isinstance(raw, str):
-                raw = json.loads(raw) if raw.strip() else {}
-            if isinstance(raw, dict):
-                data = raw.get("data") or {}
-                income = data.get("INCOMELIST") or []
-                if isinstance(income, list) and income:
-                    it = income[0]
-                    # GUNYEAR: "YYYY" 혹은 "YYYY년" 모두 수용
-                    gy = str(it.get("GUNYEAR") or "").strip()
-                    if gy.endswith("년"):
-                        gy = gy[:-1]
-                    # GUNDATE: 여러 포맷 대응
-                    gd = str(it.get("GUNDATE") or "").strip().replace(".", "/").replace("-", "/")
-                    y, m, d = "", "", ""
-                    if len(gd) == 8 and gd.isdigit():
-                        # YYYYMMDD
-                        y, m, d = gd[:4], gd[4:6], gd[6:8]
-                    elif "/" in gd:
-                        parts = [p.zfill(2) for p in gd.split("/") if p]
-                        if len(parts) == 2:
-                            m, d = parts
-                            y = gy
-                        elif len(parts) == 3:
-                            y, m, d = parts
-                    if y and m and d:
-                        exam_date = f"{y}-{m}-{d}"
-    except Exception as _e:
-        print("export.xlsx: exam_date parse err (safe):", repr(_e))
-        exam_date = ""
-    
+  
     fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별", "신장", "체중"]
     nhis_headers  = [
         "검진일자","검진기관","신장(NHIS)","체중(NHIS)","BMI",
@@ -1736,9 +1709,11 @@ async def admin_export_xlsx(
             payload = {}
         answers = extract_answers(payload, questions_sorted)
 
-        # NHIS 표준+백업 추출
-        nhis_std = nhis_extract_all(get_nhis_dict(sr.nhis_json))
-
+        # NHIS 표준+백업 추출 (표준: nhis_json, 원본: nhis_raw)
+        nhis_std = nhis_extract_all(
+        get_nhis_dict(sr.nhis_json),
+        get_nhis_dict(sr.nhis_raw),
+)
         row = [
             idx,
             serial_no,
