@@ -225,12 +225,20 @@ class User(SQLModel, table=True):
     weight_kg: Optional[float] = None
 
 class SurveyResponse(SQLModel, table=True):
+    # ▶ 테이블명 고정 + 중복 정의 방지 보호막
+    __tablename__ = "surveyresponse"
+    __table_args__ = {"extend_existing": True}
+
+    # ▶ PK 반드시 필요
     id: Optional[int] = Field(default=None, primary_key=True)
+
+    # ▶ 기존 필드들 (당신 코드 기준으로 이름 유지)
     respondent_id: Optional[int] = None
     answers_json: Optional[str] = None
     score: Optional[int] = None
     submitted_at: Optional[datetime] = None
 
+    # ▶ NHIS 컬럼: JSONB로 정확히 선언 (dict를 그대로 넣어도 저장됨)
     nhis_json: Optional[dict] = Field(default=None, sa_column=Column(JSONB))
     nhis_raw: Optional[dict]  = Field(default=None, sa_column=Column(JSONB))
 
@@ -262,17 +270,6 @@ class Respondent(SQLModel, table=True):
             index=True,
         ),
     )
-
-class SurveyResponse(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    respondent_id: int = Field(index=True)
-    answers_json: str
-    score: Optional[int] = None
-    submitted_at: datetime = Field(default_factory=datetime.utcnow)
-
-    # ▼ 추가: NHIS 결과 보관(JSON 문자열)
-    nhis_json: Optional[str] = None    # pick_latest_general 결과(json.dumps로 저장)
-    nhis_raw: Optional[str]  = None    # 전체 원본 응답(json.dumps로 저장)
 
 
 class ReportFile(SQLModel, table=True):
