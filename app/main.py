@@ -12,7 +12,7 @@ from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse, JSONResponse
 from sqlmodel import SQLModel, Field, Session, create_engine, select, Relationship
 from pydantic import BaseModel
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict
 from fastapi import Query
 from datetime import datetime, timedelta, date, timezone
 from starlette.responses import RedirectResponse
@@ -240,8 +240,8 @@ class SurveyResponse(SQLModel, table=True):
     submitted_at: Optional[datetime] = None
 
     # ▶ NHIS 컬럼: JSONB로 정확히 선언 (dict를 그대로 넣어도 저장됨)
-    nhis_json: Optional[dict] = Field(default=None, sa_column=Column(JSONB))
-    nhis_raw: Optional[dict]  = Field(default=None, sa_column=Column(JSONB))
+    nhis_json: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
+    nhis_raw:  Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSONB))
 
 class Respondent(SQLModel, table=True):
     __tablename__ = "respondent"
@@ -1406,6 +1406,13 @@ def survey_finish(
         session.add(resp)
         session.commit()
         session.refresh(resp)
+    
+    # 건강검진 데이터 임시로그
+    print(
+        "[NHIS][SAVE]",
+        "latest_keys=", list((nhis_latest or {}).keys()) if isinstance(nhis_latest, dict) else type(nhis_latest),
+    )
+
 
     # 건강검진 데이터 임시로그
     try:
@@ -1644,19 +1651,19 @@ async def admin_export_xlsx(
 
     today = now_kst().date()
     
+    # --- NHIS exam_date 뽑기 (안전하게) ---
     exam_date = ""
     try:
-        # SQLModel JSONB 컬럼이 dict로 올 수도, 문자열일 수도 있으니 모두 대응
+        # nhis_json은 JSONB 컬럼일 수도, 문자열일 수도 있음
         nj_raw = sr.nhis_json
-        if isinstance(nj_raw, str):
-            nj = json.loads(nj_raw) if nj_raw.strip() else {}
-        elif isinstance(nj_raw, dict):
+        if isinstance(nj_raw, (dict, list)):
             nj = nj_raw
+        elif isinstance(nj_raw, str):
+            nj = json.loads(nj_raw) if nj_raw.strip() else {}
         else:
             nj = {}
-
         # 1순위: 표준 키
-        exam_date = (nj.get("exam_date") or "").strip()
+        exam_date = (nj or {}).get("exam_date") or ""
 
         # 2순위: 원본에서 백업 추출 (연/월/일 조합)
         if not exam_date:
@@ -1672,7 +1679,7 @@ async def admin_export_xlsx(
                     gy = str(it.get("GUNYEAR") or "").strip()
                     if gy.endswith("년"):
                         gy = gy[:-1]
-                    # GUNDATE: "MM/DD" 또는 "YYYYMMDD" 변형도 방어
+                    # GUNDATE: 여러 포맷 대응
                     gd = str(it.get("GUNDATE") or "").strip().replace(".", "/").replace("-", "/")
                     y, m, d = "", "", ""
                     if len(gd) == 8 and gd.isdigit():
@@ -1689,6 +1696,7 @@ async def admin_export_xlsx(
                         exam_date = f"{y}-{m}-{d}"
     except Exception as _e:
         print("export.xlsx: exam_date parse err (safe):", repr(_e))
+        exam_date = ""
     
     fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별", "신장", "체중"]
     nhis_headers  = [
@@ -1863,7 +1871,10 @@ async def dh_simple_start(request: Request):
 # ===========================================
 
 @app.post("/api/dh/simple/complete")
-async def dh_simple_complete(request: Request):
+async def dh_simple_complete(
+    request: Request,
+    session: Session = Depends(get_session),   # ✅ 기존 DI 세션 재사용
+):
     """
     콜백형 완료:
       1) /scrap/captcha 로 콜
@@ -1899,6 +1910,33 @@ async def dh_simple_complete(request: Request):
             time.sleep(2)
             continue
 
+        # --- (추적) 원문 저장: nhis_audit ---
+        try:
+            sess_cb = (request.session or {}).get("dh_callback") or {}
+            resp_id = None
+            try:
+                tok = (request.query_params.get("rtoken") or request.cookies.get("rtoken") or "")
+                rid = verify_token(tok) if tok else -1
+                if rid > 0:
+                    resp_id = rid
+            except:
+                pass
+
+            session.exec(sa_text("""
+                INSERT INTO nhis_audit (respondent_id, callback_id, request_json, response_json)
+                VALUES (:rid, :cbid, :req, :res)
+            """), {
+                "rid": resp_id,
+                "cbid": cbid,
+                "req": json.dumps((request.session or {}).get("nhis_start_payload") or {}),
+                "res": json.dumps(res or {}),
+            })
+            session.commit()
+        except Exception as e:
+            print("[NHIS][AUDIT][ERR]", repr(e))
+
+
+
         err2 = str(res.get("errCode","")).strip()
         if err2 == "0000":
             # 🔹 표준화: 최근 1건만 (작은 dict)
@@ -1924,6 +1962,34 @@ async def dh_simple_complete(request: Request):
                 pass
 
             return JSONResponse({"ok": True, "errCode":"0000","message":"OK","data": latest or {}}, status_code=200)
+
+        # --- (추적) 원문 저장: nhis_audit 임시로그---
+        try:
+            sess_cb = (request.session or {}).get("dh_callback") or {}
+            resp_id = None
+            try:
+                # 이미 로그인한 신청자 세션 토큰이 있다면 복구
+                tok = (request.query_params.get("rtoken") or request.cookies.get("rtoken") or "")
+                rid = verify_token(tok) if tok else -1
+                if rid > 0:
+                    resp_id = rid
+            except:
+                pass
+
+            with SessionLocal() as s2:
+                s2.exec(sa_text("""
+                    INSERT INTO nhis_audit (respondent_id, callback_id, request_json, response_json)
+                    VALUES (:rid, :cbid, :req, :res)
+                """), {
+                    "rid": resp_id,
+                    "cbid": cbid,
+                    "req": json.dumps((request.session or {}).get("nhis_start_payload") or {}),
+                    "res": json.dumps(res or {}),
+                })
+                s2.commit()
+        except Exception as e:
+            print("[NHIS][AUDIT][ERR]", repr(e))
+
 
         time.sleep(2)
 
