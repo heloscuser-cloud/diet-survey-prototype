@@ -1574,109 +1574,50 @@ from fastapi import Body, Request, HTTPException
 # ===========================================
 # DataHub 간편인증 Step1: 시작
 # ===========================================
+
 @app.post("/api/dh/simple/start")
 async def dh_simple_start(request: Request):
-    
     payload = await request.json()
-    loginOption    = str(payload.get("loginOption","")).strip()
-    telecom        = str(payload.get("telecom","")).strip()
-    userName       = str(payload.get("userName","")).strip()
-    hpNumber       = str(payload.get("hpNumber","")).strip()
-    birth   = str(payload.get("birth","")).strip()
+    loginOption  = str(payload.get("loginOption","")).strip()
+    telecom      = str(payload.get("telecom","")).strip()
+    userName     = str(payload.get("userName","")).strip()
+    hpNumber     = str(payload.get("hpNumber","")).strip()
+    juminOrBirth = str(payload.get("juminOrBirth","")).strip()
 
-    # PASS(3)일 때만 통신사 전달
-    telecom_gubun  = telecom if loginOption == "3" and telecom else None
-    
-    
-        # 필수 파라미터 검증
-    if not (loginOption and userName and hpNumber and birth):
-        return JSONResponse(
-            {"errCode":"9000","message":"필수 입력 누락(loginOption/userName/hpNumber/birth)"},
-            status_code=400
-    )
-        
-    
-    # --- 추가: 세션에 시작 페이로드 저장(콜백형/즉시형 모두에서 사용) ---
-    # 민감 정보는 서버에서 암호화 전송하므로 세션 저장은 안전 구역에서만 사용
-    request.session["nhis_start_payload"] = {
-        "loginOption": payload.get("loginOption"),
-        "telecom": payload.get("telecom"),
-        "userName": payload.get("userName"),
-        "hpNumber": payload.get("hpNumber"),
-        "birth": payload.get("birth"),
-    }
+    telecom_gubun = telecom if loginOption == "3" and telecom else None
 
-    
-    # ✅ 여기서는 "시작/즉시조회" API만 호출해야 함 (완료 API 호출 X)
-    rsp = DATAHUB.medical_checkup_simple(
+    # 시작 전용 호출
+    rsp = DATAHUB.simple_auth_start(
         login_option=loginOption,
         user_name=userName,
         hp_number=hpNumber,
-        jumin_or_birth=birth,
+        jumin_or_birth=juminOrBirth,
         telecom_gubun=telecom_gubun,
     )
-    
-    # ▼▼▼ 이 블록을 rsp = DATAHUB.medical_checkup_simple(...) 다음 줄에 추가하세요 ▼▼▼
-    err = str(rsp.get("errCode") or "")
-    # Datahub의 즉시 성공 코드: '0000'
-    if err == "0000":
-        # 이 응답 안에 이미 결과 본문이 들어오는 케이스로 가정
-        # (일부 공급사에서는 성공 시 바로 결과 배열/객체가 동봉됨)
-        try:
-            picked = pick_latest_general(rsp)  # 이미 프로젝트에 있는 "최근 일반검진 1건만 추려내기" 헬퍼 사용
-            # 세션에 저장 → /info 등에서 바로 활용 가능하게
-            request.session["nhis_latest"] = picked
-        except Exception:
-            picked = None
 
-        return JSONResponse({
-            "result": "SUCCESS",
-            "errCode": "0000",
-            "data": {
-                "immediate": True,    # 프론트가 콜백 없이 바로 다음 단계 진행하도록 신호
-                "latest": picked      # 최근 일반검진 1건(없을 수도 있어 None)
-            }
-        })
+    # 안전 로그(마스킹)
+    print("[DH-START][SAFE]", {
+        "LOGINOPTION": loginOption, "USERNAME": userName[:1]+"*"*(max(0,len(userName)-1)),
+        "HPNUMBER_LAST4": hpNumber[-4:], "TELECOMGUBUN": telecom_gubun or "", "JUMIN":"***MASKED***"
+    })
 
-    # 안전 로그(민감값 마스킹)
-    safe_body = {
-        "LOGINOPTION": loginOption,
-        "USERNAME": userName[:1] + ("*" * max(0, len(userName)-1)),
-        "HPNUMBER_LAST4": hpNumber[-4:],
-        "TELECOMGUBUN": telecom_gubun or "",
-        "JUMIN": "***MASKED***",
-    }
-    print("[DH-START][SAFE]", safe_body)
-
-    err = str(rsp.get("errCode",""))
+    err  = str(rsp.get("errCode",""))
     data = rsp.get("data") or rsp.get("Data") or {}
-    cbid = data.get("callbackId")
-    cbtp = data.get("callbackType")
-    
-    request.session["dh_callback"] = {
-    "id": cbid,
-    "type": cbtp,     # 없으면 클라이언트에서 'ANY'로 보낼거라 None이어도 무방
-    "saved_at": int(time.time()),
-    # 시작 시 입력했던 기본 payload도 보관(재호출 방지 / 디버깅용)
-    "start_payload_raw": payload,   # 네 코드에서 가진 원본 값 dict 넣기
-}
-    
-    
 
-    # 콜백형 (0001 + callbackId)
+    # 콜백형: callbackId 반환
     cbid = (data.get("callbackId") or rsp.get("callbackId"))
     if err in ("0001","1") and cbid:
-        return JSONResponse(
-            {"errCode":"0001","message":"NEED_CALLBACK","data":{"callbackId": cbid}},
-            status_code=200
-        )
+        # 세션에도 저장(선택)
+        request.session["dh_callback"] = {"id": cbid, "type": "ANY"}
+        return JSONResponse({"errCode":"0001","message":"NEED_CALLBACK","data":{"callbackId": cbid}}, status_code=200)
 
-    # 즉시형 (0000)
+    # 즉시형: 0000
     if err in ("0000","0"):
         return JSONResponse({"errCode":"0000","message":"IMMEDIATE_OK","data":{}}, status_code=200)
 
     # 실패
     return JSONResponse({"errCode": err or "9999", "message": rsp.get("message") or "FAIL"}, status_code=400)
+
 
 
 # ===========================================
@@ -1694,66 +1635,59 @@ async def dh_simple_start(request: Request):
 # ===========================================
 
 @app.post("/api/dh/simple/complete")
-def dh_simple_complete(request: Request):
-    sess = request.session or {}
-    cbinfo = sess.get("dh_callback") or {}
-    cbid = cbinfo.get("id")
-    cbtype = cbinfo.get("type") or "ANY"   # 타입이 비어오면 ANY로 폴백
+async def dh_simple_complete(request: Request):
+    payload = await request.json()
 
+    # 1) 즉시형(direct) 처리
+    if bool(payload.get("direct")):
+        # 이미 Step1에서 성공(0000)한 케이스를 가정 → 최신 1건만 세션에 저장했다면 여기선 바로 OK 응답
+        # 혹시 Step1에서 세션 저장을 안했다면, 필요 시 pick_latest_general(rsp)로 저장 로직 추가
+        return JSONResponse({"errCode":"0000","message":"IMMEDIATE_OK","data":{}}, status_code=200)
+
+    # 2) 콜백형 처리
+    cbid = str(payload.get("callbackId","")).strip()
     if not cbid:
-        # 시작부터 다시
-        return JSONResponse(
-            {"ok": False, "stage": "complete", "err": "NO_CALLBACK", "msg": "콜백ID가 없습니다. 처음부터 다시 시도해주세요."},
-            status_code=400
-        )
+        # 세션 폴백(선택)
+        sess_cb = (request.session or {}).get("dh_callback") or {}
+        cbid = sess_cb.get("id","")
+    if not cbid:
+        return JSONResponse({"errCode":"9001","message":"callbackId가 없습니다."}, status_code=400)
 
-    # 1) 짧게 캡차/콜백 상태를 폴링
-    #    - PUSH(카카오/통신사PASS 등)는 callbackResponse 없이도 어느 순간 본요청이 0000이 됨
-    #    - SMS/OTP 류는 사용자가 숫자 입력을 끝내야 0000이 됨
+    # (a) 캡차/콜백 상태 폴링
     max_wait_sec = 60
     deadline = time.time() + max_wait_sec
-
-    last_captcha = None
     while time.time() < deadline:
-        # (a) /scrap/captcha 상태 확인
         try:
-            last_captcha = DATAHUB.post_captcha(
-                callbackId=cbid,
-                callbackType=cbtype or any # 'ANY' 사용 가능. 가이드상 'SMS'/'CAPTCHA'/'OTP'/'TWO'/'SINGLE'/'ANY'
-            )
+            cap = DATAHUB.simple_auth_complete(callback_id=cbid, callback_type="ANY")
         except Exception as e:
-            # 네 logging 포맷에 맞춰 필요하면 바꿔도 됨
             print("[DH-COMPLETE][ERR][captcha]", repr(e))
             time.sleep(2)
             continue
 
-        # (b) 본요청 재시도 (CALLBACKID 포함)
+        # (b) 콜백ID로 결과 재조회(새 인증 시작 X)
         try:
-            res = DATAHUB.medical_checkup_simple(callback_id=cbid)
+            res = DATAHUB.post_medical_glance_simple_with_callbackid(callbackId=cbid)
         except Exception as e:
             print("[DH-COMPLETE][ERR][glance]", repr(e))
             time.sleep(2)
             continue
 
-        err = res.get("errCode")
+        err = str(res.get("errCode",""))
         if err == "0000":
-            # 성공! 데이터 저장하고 종료
-            data = (res or {}).get("data") or {}
+            # 최신 1건 추려서 세션 저장(엑셀 병합용)
+            try:
+                picked = pick_latest_general(res)
+                request.session["nhis_latest"] = picked
+            except Exception as e:
+                print("[DH-COMPLETE][WARN][pick]", repr(e))
+            return JSONResponse({"errCode":"0000","message":"OK","data":{}}, status_code=200)
 
-            # 10년 내 최신 1건만 골라서 세션/DB에 저장
-            latest = pick_latest_one(res.get("data") or res)
-            request.session["nhis_latest"] = latest
-            request.session["nhis_raw"]    = res
-            return JSONResponse({"ok": True, "stage": "complete", "errCode": "0000", "data": latest}, status_code=200)
-
-        # 아직 대기(0001)면 2초 쉬고 다시
+        # 아직 원천기관 처리 중 → 잠깐 대기 후 재시도
         time.sleep(2)
 
-    # 끝까지 0000 안 됨 → 아직 사용자 인증이 미완료
-    return JSONResponse(
-        {"ok": False, "stage": "complete", "errCode": "WAIT", "msg": "아직 인증이 완료되지 않았습니다."},
-        status_code=202
-    )
+    # 타임아웃 → 프론트엔 재시도 유도(=202)
+    return JSONResponse({"errCode":"2020","message":"PENDING"}, status_code=202)
+
 
 
 # ---- 유틸: 최신 1건 선택 (연/월/일 기준) ----

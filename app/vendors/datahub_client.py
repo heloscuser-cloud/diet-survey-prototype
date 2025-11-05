@@ -344,6 +344,31 @@ class DatahubClient:
         return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", body)
 
 
+    # === 1) 간편인증 Step1: 시작/즉시조회 ===
+    def simple_auth_start(
+        self,
+        login_option: str,
+        user_name: str,
+        hp_number: str,
+        jumin_or_birth: str,
+        telecom_gubun: str | None = None,
+    ) -> Dict[str, Any]:
+        body = {
+            "LOGINOPTION": login_option,
+            "USERNAME": user_name,
+            "HPNUMBER": hp_number,
+            "JUMIN": encrypt_field(jumin_or_birth),
+        }
+        if login_option == "3" and telecom_gubun:
+            body["TELECOMGUBUN"] = telecom_gubun
+        return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", body)
+
+
+    # === 1-2) 콜백ID로만 결과 재조회 (새 인증 X) ===
+    def post_medical_glance_simple_with_callbackid(self, callbackId: str) -> Dict[str, Any]:
+        return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", {"CALLBACKID": callbackId})
+
+
     # --- 2) 간편인증 Step2: captcha(최종 완료 콜)
     def simple_auth_complete(self, callback_id: str, callback_type: str = "SIMPLE", **kwargs) -> Dict[str, Any]:
         body = {
