@@ -1646,10 +1646,49 @@ async def admin_export_xlsx(
     
     exam_date = ""
     try:
-        nj = sr.nhis_json if isinstance(sr.nhis_json, dict) else json.loads(sr.nhis_json or "{}")
-        exam_date = (nj or {}).get("exam_date") or ""
+        # SQLModel JSONB 컬럼이 dict로 올 수도, 문자열일 수도 있으니 모두 대응
+        nj_raw = sr.nhis_json
+        if isinstance(nj_raw, str):
+            nj = json.loads(nj_raw) if nj_raw.strip() else {}
+        elif isinstance(nj_raw, dict):
+            nj = nj_raw
+        else:
+            nj = {}
+
+        # 1순위: 표준 키
+        exam_date = (nj.get("exam_date") or "").strip()
+
+        # 2순위: 원본에서 백업 추출 (연/월/일 조합)
+        if not exam_date:
+            raw = sr.nhis_raw
+            if isinstance(raw, str):
+                raw = json.loads(raw) if raw.strip() else {}
+            if isinstance(raw, dict):
+                data = raw.get("data") or {}
+                income = data.get("INCOMELIST") or []
+                if isinstance(income, list) and income:
+                    it = income[0]
+                    # GUNYEAR: "YYYY" 혹은 "YYYY년" 모두 수용
+                    gy = str(it.get("GUNYEAR") or "").strip()
+                    if gy.endswith("년"):
+                        gy = gy[:-1]
+                    # GUNDATE: "MM/DD" 또는 "YYYYMMDD" 변형도 방어
+                    gd = str(it.get("GUNDATE") or "").strip().replace(".", "/").replace("-", "/")
+                    y, m, d = "", "", ""
+                    if len(gd) == 8 and gd.isdigit():
+                        # YYYYMMDD
+                        y, m, d = gd[:4], gd[4:6], gd[6:8]
+                    elif "/" in gd:
+                        parts = [p.zfill(2) for p in gd.split("/") if p]
+                        if len(parts) == 2:
+                            m, d = parts
+                            y = gy
+                        elif len(parts) == 3:
+                            y, m, d = parts
+                    if y and m and d:
+                        exam_date = f"{y}-{m}-{d}"
     except Exception as _e:
-        print("export.xlsx: exam_date parse err:", repr(_e))
+        print("export.xlsx: exam_date parse err (safe):", repr(_e))
     
     fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별", "신장", "체중"]
     nhis_headers  = [
@@ -1872,18 +1911,19 @@ async def dh_simple_complete(request: Request):
             # 🔹 세션에는 '작은' 결과만 저장 (쿠키 4KB 보호)
             request.session["nhis_latest"] = latest or {}
 
-            # 🔹 디버그: 크기 로깅 (문자열화 길이만 확인)
+            # === 요약 로그 추가 ===
             try:
-                latest_len = len(json.dumps(latest or {}, ensure_ascii=False))
-                res_len    = len(json.dumps(res or {}, ensure_ascii=False))
-                print(f"[DH-COMPLETE][SIZE] latest={latest_len}B raw={res_len}B (raw는 세션에 저장하지 않음)")
+                data = (res or {}).get("data") or {}
+                income = data.get("INCOMELIST") or []
+                print(f"[DH-COMPLETE][SUMMARY] latest_ok={bool(latest)} "
+                      f"income_count={len(income) if isinstance(income, list) else 'NA'} "
+                      f"keys={list(data.keys())[:6]}")
+                if latest:
+                    print("[DH-COMPLETE][LATEST]", {k: latest.get(k) for k in ("exam_date","height","weight","bmi")})
             except Exception:
                 pass
 
-            return JSONResponse(
-                {"ok": True, "errCode": "0000", "message": "OK", "data": latest or {}},
-                status_code=200,
-            )
+            return JSONResponse({"ok": True, "errCode":"0000","message":"OK","data": latest or {}}, status_code=200)
 
         time.sleep(2)
 

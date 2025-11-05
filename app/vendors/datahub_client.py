@@ -393,65 +393,116 @@ class DatahubClient:
 
 def pick_latest_general(resp: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
-    DataHub '건강검진결과 한눈에 보기' 응답에서 최신 1건만 골라
+    DataHub '건강검진결과 한눈에 보기' 응답에서 '최근 10년 중 가장 최신 1건'만 골라
     서비스 표준 키로 변환해 반환.
-    기대: resp["data"]["INCOMELIST"] = [ {...}, ... ]
+    기대: resp["data"]["INCOMELIST"] = [ {...}, ... ]  (키 대소/케이스 다양성 방어)
+    - 연도(GUNYEAR): "YYYY" 또는 "YYYY년" 등 문자열
+    - 일자(GUNDATE): "MM/DD" 또는 "YYYYMMDD" 혹은 "YYYY.MM.DD" / "YYYY-MM-DD"
+    - 일부 응답엔 CheckUpDate: "YYYYMMDD"
     """
+
+    def _s(x) -> str:
+        return str(x or "").strip()
+
+    def _norm_year(y: str) -> str:
+        y = _s(y)
+        if y.endswith("년"):
+            y = y[:-1].strip()
+        # 숫자만 추출(문자 섞여 있어도 첫 숫자그룹 사용)
+        nums = re.findall(r"\d{4}", y)
+        return nums[0] if nums else ""
+
+    def _norm_gundate(gy: str, gd: str) -> str:
+        """
+        gy: GUNYEAR ("YYYY" 혹은 "YYYY년")
+        gd: GUNDATE ("MM/DD" or "YYYYMMDD" or "YYYY.MM.DD" or "YYYY-MM-DD")
+        -> "YYYY-MM-DD" 반환(실패 시 빈 문자열)
+        """
+        y = _norm_year(gy)
+        s = _s(gd).replace(".", "/").replace("-", "/")
+
+        # 케이스1: YYYYMMDD 순수 숫자 8자리
+        only_digits = re.fullmatch(r"\d{8}", s)
+        if only_digits:
+            yy, mm, dd = s[:4], s[4:6], s[6:8]
+            return f"{yy}-{mm}-{dd}"
+
+        # 케이스2: 슬래시 구분
+        parts = [p for p in s.split("/") if p]
+        if len(parts) == 2:
+            # MM/DD + 연도는 gy에서
+            mm = parts[0].zfill(2)
+            dd = parts[1].zfill(2)
+            if y:
+                return f"{y}-{mm}-{dd}"
+            return ""  # 연도가 없으면 불가
+        if len(parts) == 3:
+            # YYYY/MM/DD 또는 YY/MM/DD 등 → 앞은 연도로 취급
+            yy = parts[0].zfill(4)
+            mm = parts[1].zfill(2)
+            dd = parts[2].zfill(2)
+            return f"{yy}-{mm}-{dd}"
+
+        return ""
+
+    # 1) 리스트 위치/이름 방어
     data = (resp or {}).get("data") or resp.get("Data") or {}
-    items: List[Dict[str, Any]] = data.get("INCOMELIST") or data.get("incomeList") or []
+    items: List[Dict[str, Any]] = (
+        data.get("INCOMELIST")
+        or data.get("incomeList")
+        or []
+    )
     if not isinstance(items, list) or not items:
         return None
 
-    def to_iso_date(year: str, md: str) -> str:
-        # GUNDATE 예: "11/02" → MM/DD
-        m = d = 0
-        if isinstance(md, str):
-            m_d = re.findall(r"\d+", md)
-            if len(m_d) >= 2:
-                m, d = int(m_d[0]), int(m_d[1])
-        y = 0
-        if year:
-            y_nums = re.findall(r"\d+", str(year))
-            if y_nums:
-                y = int(y_nums[0])
-        if y and m and d:
-            return f"{y:04d}-{m:02d}-{d:02d}"
-        # fallback: 연도만이라도 있으면 연말로
-        return f"{y:04d}-12-31" if y else "0000-01-01"
+    # 2) 날짜 파싱 → 최신 1건 선별
+    def to_iso_date(it: Dict[str, Any]) -> str:
+        gy = _s(it.get("GUNYEAR"))
+        gd = _s(it.get("GUNDATE"))
+        iso = _norm_gundate(gy, gd)
+        if not iso:
+            # 백업: CheckUpDate가 "YYYYMMDD"로 올 수 있음
+            cud = _s(it.get("CheckUpDate"))
+            if re.fullmatch(r"\d{8}", cud):
+                iso = f"{cud[:4]}-{cud[4:6]}-{cud[6:8]}"
+        if iso:
+            return iso
+        # 정말 아무것도 없으면 연말 fallback(연도만 있을 때도 UI 정렬을 위해)
+        y = _norm_year(gy)
+        return f"{y}-12-31" if y else "0000-01-01"
 
-    ranked = sorted(
-        items,
-        key=lambda x: to_iso_date(x.get("GUNYEAR"), x.get("GUNDATE")),
-        reverse=True,
-    )
+    ranked = sorted(items, key=to_iso_date, reverse=True)
     top = ranked[0]
-    iso_date = to_iso_date(top.get("GUNYEAR"), top.get("GUNDATE"))
+    iso_date = to_iso_date(top)
 
-    # 표준 키 맵핑 (엑셀 병합/화면 바인딩 공통 사용)
+    # 3) 표준 키 매핑 (모두 문자열 타입 가정)
+    def _sv(key: str) -> str:
+        return _s(top.get(key))
+
     mapped = {
-        "exam_date": iso_date,                               # YYYY-MM-DD
-        "exam_year": (top.get("GUNYEAR") or "").strip(),
-        "exam_place": (top.get("GUNPLACE") or "").strip(),
-        "height": (top.get("HEIGHT") or "").strip(),
-        "weight": (top.get("WEIGHT") or "").strip(),
-        "bmi": (top.get("BODYMASS") or "").strip(),
-        "bp": (top.get("BLOODPRESS") or "").strip(),         # "120/80"
-        "vision": (top.get("SIGHT") or "").strip(),
-        "hearing": (top.get("HEARING") or "").strip(),
-        "hemoglobin": (top.get("HEMOGLOBIN") or "").strip(),
-        "fbs": (top.get("BLOODSUGAR") or "").strip(),        # 공복혈당
-        "tc": (top.get("TOTCHOLESTEROL") or "").strip(),
-        "hdl": (top.get("HDLCHOLESTEROL") or "").strip(),
-        "ldl": (top.get("LDLCHOLESTEROL") or "").strip(),
-        "tg": (top.get("TRIGLYCERIDE") or "").strip(),
-        "gfr": (top.get("GFR") or "").strip(),
-        "creatinine": (top.get("SERUMCREATININE") or "").strip(),
-        "ast": (top.get("SGOT") or "").strip(),
-        "alt": (top.get("SGPT") or "").strip(),
-        "ggt": (top.get("YGPT") or "").strip(),
-        "urine_protein": (top.get("YODANBAK") or "").strip(),
-        "chest": (top.get("CHESTTROUBLE") or "").strip(),
-        "judgment": (top.get("JUDGMENT") or "").strip(),
-        "_raw": top,  # 디버깅용
+        "exam_date": iso_date,              # YYYY-MM-DD
+        "exam_year": _s(top.get("GUNYEAR")),
+        "exam_place": _sv("GUNPLACE"),
+        "height": _sv("HEIGHT"),
+        "weight": _sv("WEIGHT"),
+        "bmi": _sv("BODYMASS"),
+        "bp": _sv("BLOODPRESS"),            # "120/80"
+        "vision": _sv("SIGHT"),
+        "hearing": _sv("HEARING"),
+        "hemoglobin": _sv("HEMOGLOBIN"),
+        "fbs": _sv("BLOODSUGAR"),           # 공복혈당
+        "tc": _sv("TOTCHOLESTEROL"),
+        "hdl": _sv("HDLCHOLESTEROL"),
+        "ldl": _sv("LDLCHOLESTEROL"),
+        "tg": _sv("TRIGLYCERIDE"),
+        "gfr": _sv("GFR"),
+        "creatinine": _sv("SERUMCREATININE"),
+        "ast": _sv("SGOT"),
+        "alt": _sv("SGPT"),
+        "ggt": _sv("YGPT"),
+        "urine_protein": _sv("YODANBAK"),
+        "chest": _sv("CHESTTROUBLE"),
+        "judgment": _sv("JUDGMENT"),
+        "_raw": top,  # 디버깅용(필요 없으면 제거 가능)
     }
     return mapped
