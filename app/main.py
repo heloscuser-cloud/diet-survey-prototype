@@ -225,9 +225,14 @@ class User(SQLModel, table=True):
     weight_kg: Optional[float] = None
 
 class SurveyResponse(SQLModel, table=True):
-    # 
-    nhis_json: dict | None = Field(default=None, sa_column=Column(JSONB))
-    nhis_raw: dict | None  = Field(default=None, sa_column=Column(JSONB))
+    id: Optional[int] = Field(default=None, primary_key=True)
+    respondent_id: Optional[int] = None
+    answers_json: Optional[str] = None
+    score: Optional[int] = None
+    submitted_at: Optional[datetime] = None
+
+    nhis_json: Optional[dict] = Field(default=None, sa_column=Column(JSONB))
+    nhis_raw: Optional[dict]  = Field(default=None, sa_column=Column(JSONB))
 
 class Respondent(SQLModel, table=True):
     __tablename__ = "respondent"
