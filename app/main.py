@@ -646,44 +646,57 @@ def verify_token(token: str) -> int:
         return -1
 
 # --- NHIS: 인증 완료 후 실제 데이터 1건 조회 + 세션 저장 헬퍼---
-def _fetch_and_save_latest_nhis(request, start_payload, callback_id: Optional[str] = None):
+# --- NHIS: 인증 완료 후 실제 데이터 1건 조회 + 세션 저장(공통 헬퍼) ---
+def _fetch_and_save_latest_nhis(request, start_payload: dict | None = None, callback_id: Optional[str] = None) -> dict:
     """
-    start_payload 예:
-    {
-      "loginOption": "3",
-      "telecom": "3",
-      "userName": "홍길동",
-      "hpNumber": "01012345678",
-      "birth": "19900101"
-    }
+    콜백형: callback_id만으로 최종 조회 (재인증 금지)
+    즉시형: start_payload를 그대로 넘겨 재조회(필요 시)
+    결과는 세션에 저장:
+      - request.session["nhis_latest"]: pick_latest_general 결과(최신 1건, 일반검진으로 표준화)
+      - request.session["nhis_raw"]   : 원본 응답 dict
     """
-    loginOption   = str(start_payload.get("loginOption","")).strip()
-    telecom       = str(start_payload.get("telecom","")).strip()
-    userName      = str(start_payload.get("userName","")).strip()
-    hpNumber      = str(start_payload.get("hpNumber","")).strip()
-    birth         = str(start_payload.get("birth","")).strip()
-    telecom_gubun = telecom if loginOption == "3" and telecom else None
+    # 0) start_payload 없으면 세션에서 복구 (start 라우트에서 저장해둔 값)
+    if not start_payload:
+        start_payload = (request.session or {}).get("nhis_start_payload") or {}
 
-    # 실제 데이터 조회
-    rsp2 = DATAHUB.medical_checkup_simple(
-        login_option=loginOption,
-        user_name=userName,
-        hp_number=hpNumber,
-        jumin_or_birth=birth,     # 라이브러리 시그니처가 jumin_or_birth면 birth를 그대로 넣음
-        telecom_gubun=telecom_gubun,
-        callback_id=callback_id,
-    )
+    # 1) 조회 분기
+    if callback_id:
+        # 콜백형: callbackId만으로 최종 결과 조회 (새 인증 절대 X)
+        rsp2 = DATAHUB.post_medical_glance_simple_with_callbackid(callbackId=callback_id)
+    else:
+        # 즉시형(혹은 재조회 필요 시): start payload로 직접 조회
+        loginOption   = str(start_payload.get("loginOption","")).strip()
+        telecom       = str(start_payload.get("telecom","")).strip()
+        userName      = str(start_payload.get("userName","")).strip()
+        hpNumber      = str(start_payload.get("hpNumber","")).strip()
+        # birth / juminOrBirth 어느 쪽이든 수용
+        jumin_or_birth = str(start_payload.get("juminOrBirth") or start_payload.get("birth") or "").strip()
+        telecom_gubun = telecom if loginOption == "3" and telecom else None
 
-    # 가장 최근 일반검진 1건만 추출
+        rsp2 = DATAHUB.medical_checkup_simple(
+            login_option=loginOption,
+            user_name=userName,
+            hp_number=hpNumber,
+            jumin_or_birth=jumin_or_birth,
+            telecom_gubun=telecom_gubun,
+            callback_id=None,  # 즉시형 재조회는 callbackId 없이 파라미터 그대로
+        )
+
+    # 2) 최신 1건 표준화 추출 (함수 이름은 프로젝트 내 기존 것과 동일 사용)
     try:
-        picked = pick_latest_general(rsp2.get("data") or rsp2)
+        # datahub 응답이 {errCode, data:{...}} 형태일 수도 있으니 유연 처리
+        base = rsp2.get("data") or rsp2
+        picked = pick_latest_general(base)
     except Exception:
         picked = None
 
+    # 3) 세션 저장 (엑셀 병합/finish 저장용)
     request.session["nhis_latest"] = picked
-    request.session["nhis_raw"] = rsp2  # 디버깅용
+    request.session["nhis_raw"]    = rsp2
 
     return rsp2
+
+
 
 
 class SurveyIn(BaseModel):
@@ -1354,14 +1367,10 @@ def survey_finish(request: Request,
                 answers_indices.append(i if (i is None or i >= 1) else None)
             except:
                 answers_indices.append(None)
-
-
-    nhis_latest = request.session.get("nhis_latest")
-
+ 
     # DB에는 깔끔하게 번호만 저장
     normalized_payload = {"answers_indices": answers_indices}
     resp = session.get(Respondent, respondent_id)
-
    
     nhis = request.session.get("nhis_latest")
 
@@ -1375,8 +1384,8 @@ def survey_finish(request: Request,
         respondent_id=respondent_id,
         answers_json=json.dumps(normalized_payload, ensure_ascii=False),
         score=None,
-        nhis_json=(json.dumps(nhis_latest, ensure_ascii=False) if nhis_latest is not None else None),
-        nhis_raw=(json.dumps(nhis_raw, ensure_ascii=False) if nhis_raw is not None else None),
+        nhis_json=nhis_latest,  # DB가 jsonb면 dict 그대로
+        nhis_raw=nhis_raw,
     )
     session.add(sr)
     
@@ -1426,6 +1435,7 @@ def survey_finish(request: Request,
     return response
 
 
+
 @app.post("/admin/responses/export.xlsx")
 async def admin_export_xlsx(
     request: Request,
@@ -1434,22 +1444,141 @@ async def admin_export_xlsx(
     session: Session = Depends(get_session),
     _auth: None = Depends(admin_required),
 ):
+    # ---------------------------
+    # 0) 유틸
+    # ---------------------------
+    def get_nhis_dict(v):
+        """jsonb(dict) 또는 JSON 문자열 모두 수용"""
+        if not v:
+            return {}
+        if isinstance(v, dict):
+            return v
+        try:
+            return json.loads(v)
+        except Exception:
+            return {}
 
-    # 디버그 로그
+    def nhis_extract_all(nj: dict) -> dict:
+        """
+        표준 키(exam_date 등)를 최우선 사용.
+        없으면 원본(data/INCOMELIST[0] or ResultList[0])에서 백업 추출.
+        """
+        if not isinstance(nj, dict):
+            nj = {}
+
+        # 1) 표준화된 형태 우선 (pick_latest_general 결과)
+        std = {
+            "exam_date": nj.get("exam_date") or "",
+            "exam_place": nj.get("exam_place") or "",
+            "height": nj.get("height") or "",
+            "weight": nj.get("weight") or "",
+            "bmi": nj.get("bmi") or "",
+            "bp": nj.get("bp") or "",
+            "vision": nj.get("vision") or "",
+            "hearing": nj.get("hearing") or "",
+            "hemoglobin": nj.get("hemoglobin") or "",
+            "fbs": nj.get("fbs") or "",
+            "tc": nj.get("tc") or "",
+            "hdl": nj.get("hdl") or "",
+            "ldl": nj.get("ldl") or "",
+            "tg": nj.get("tg") or "",
+            "gfr": nj.get("gfr") or "",
+            "creatinine": nj.get("creatinine") or "",
+            "ast": nj.get("ast") or "",
+            "alt": nj.get("alt") or "",
+            "ggt": nj.get("ggt") or "",
+            "urine_protein": nj.get("urine_protein") or "",
+            "chest": nj.get("chest") or "",
+            "judgment": nj.get("judgment") or "",
+        }
+
+        # 2) 표준 값이 비어 있으면 원본에서 백업 추출
+        #    - DataHub '한눈에 보기' 응답: data.INCOMELIST[0].GUNYEAR/GUNDATE...
+        #    - (이전 틸코/기타) ResultList[0].CheckUpDate ...
+        def first_or_none(lst):
+            return lst[0] if isinstance(lst, list) and lst else None
+
+        # (a) INCOMELIST 소스
+        d_data = nj.get("data") or nj.get("Data") or {}
+        top = first_or_none(d_data.get("INCOMELIST") or d_data.get("incomeList") or [])
+        if top:
+            def _patch_if_empty(key, val):
+                if not std[key] and val is not None:
+                    std[key] = str(val).strip()
+
+            # 날짜 조합: GUNYEAR + GUNDATE(MM/DD)
+            if not std["exam_date"]:
+                guny = str(top.get("GUNYEAR") or "").strip()
+                gund = str(top.get("GUNDATE") or "").strip()
+                try:
+                    # "MM/DD" → YYYY-MM-DD
+                    mm, dd = [int(x) for x in gund.split("/")[:2]] if "/" in gund else (0, 0)
+                    yy = int("".join(ch for ch in guny if ch.isdigit())) if guny else 0
+                    if yy and mm and dd:
+                        std["exam_date"] = f"{yy:04d}-{mm:02d}-{dd:02d}"
+                except Exception:
+                    pass
+
+            _patch_if_empty("exam_place",     top.get("GUNPLACE"))
+            _patch_if_empty("height",         top.get("HEIGHT"))
+            _patch_if_empty("weight",         top.get("WEIGHT"))
+            _patch_if_empty("bmi",            top.get("BODYMASS"))
+            _patch_if_empty("bp",             top.get("BLOODPRESS"))
+            _patch_if_empty("vision",         top.get("SIGHT"))
+            _patch_if_empty("hearing",        top.get("HEARING"))
+            _patch_if_empty("hemoglobin",     top.get("HEMOGLOBIN"))
+            _patch_if_empty("fbs",            top.get("BLOODSUGAR"))
+            _patch_if_empty("tc",             top.get("TOTCHOLESTEROL"))
+            _patch_if_empty("hdl",            top.get("HDLCHOLESTEROL"))
+            _patch_if_empty("ldl",            top.get("LDLCHOLESTEROL"))
+            _patch_if_empty("tg",             top.get("TRIGLYCERIDE"))
+            _patch_if_empty("gfr",            top.get("GFR"))
+            _patch_if_empty("creatinine",     top.get("SERUMCREATININE"))
+            _patch_if_empty("ast",            top.get("SGOT"))
+            _patch_if_empty("alt",            top.get("SGPT"))
+            _patch_if_empty("ggt",            top.get("YGPT"))
+            _patch_if_empty("urine_protein",  top.get("YODANBAK"))
+            _patch_if_empty("chest",          top.get("CHESTTROUBLE"))
+            _patch_if_empty("judgment",       top.get("JUDGMENT"))
+
+        # (b) ResultList 소스(과거 구조 백업)
+        if not std["exam_date"]:
+            rl = nj.get("ResultList") or nj.get("resultList")
+            if isinstance(rl, list) and rl:
+                std["exam_date"] = str(rl[0].get("CheckUpDate") or rl[0].get("checkUpDate") or "").strip()
+
+        return std
+
+    def fmt(v):
+        if isinstance(v, list): 
+            return ",".join(str(x) for x in v)
+        return "" if v is None else str(v)
+
+    def calc_age(bd, ref_date):
+        if not bd: 
+            return ""
+        return ref_date.year - bd.year - ((ref_date.month, ref_date.day) < (bd.month, bd.day))
+
+    # ---------------------------
+    # 1) ids 파싱
+    # ---------------------------
     print("export.xlsx ids raw:", repr(ids))
-
-    # ids 파싱
     id_list = [int(x) for x in (ids or "").split(",") if x.strip().isdigit()]
     if not id_list:
         return RedirectResponse(url="/admin/responses", status_code=303)
 
-    # 답 파서 (여러 저장포맷 대응)
+    # ---------------------------
+    # 2) 질문 준비
+    # ---------------------------
+    def q_title(q: dict):
+        return (q.get("title") or q.get("text") or q.get("label")
+                or q.get("question") or q.get("prompt") or q.get("name")
+                or f"Q{q.get('id','')}")
+    questions_sorted = sorted(ALL_QUESTIONS, key=lambda x: x["id"])
+    questions = [q_title(q) for q in questions_sorted]
+
+    # 답 파서 (answers_indices 우선 → 없으면 q{id} 스캔)
     def extract_answers(payload: dict, questions_sorted: list[dict]) -> list:
-        """
-        answers_indices가 있으면 우선 사용하되,
-        그 안에서 빈칸(None, "", [])은 q{id} 값으로 보정.
-        없으면 q{id}로 전체 구성.
-        """
         def to_num(v):
             if v is None or v == "": return ""
             if isinstance(v, list):
@@ -1460,12 +1589,11 @@ async def admin_export_xlsx(
 
         ai = payload.get("answers_indices")
         if isinstance(ai, list) and len(ai) == len(questions_sorted):
-            # 보정용 map (answers/acc/data 등 nested에서도 q{id} 찾아봄)
             candidates = [payload]
             for k in ("answers", "acc", "data"):
                 if isinstance(payload.get(k), dict):
                     candidates.append(payload[k])
-            def fallback(idx, qid):
+            def fallback(qid):
                 for cand in candidates:
                     v = cand.get(f"q{qid}")
                     num = to_num(v)
@@ -1478,7 +1606,6 @@ async def admin_export_xlsx(
                 out.append(fallback(q["id"]) if empty else v)
             return out
 
-        # answers_indices가 없으면 q{id}로 구성
         candidates = [payload]
         for k in ("answers", "acc", "data"):
             if isinstance(payload.get(k), dict):
@@ -1493,37 +1620,33 @@ async def admin_export_xlsx(
                 return out
         return ["" for _ in questions_sorted]
 
-    # 엑셀 워크북/시트
+    # ---------------------------
+    # 3) 워크북/시트 + 헤더
+    # ---------------------------
     wb = Workbook()
     ws = wb.active
     ws.title = "문진결과"
 
-    # 질문 타이틀
-    def q_title(q: dict):
-        return (q.get("title") or q.get("text") or q.get("label")
-                or q.get("question") or q.get("prompt") or q.get("name")
-                or f"Q{q.get('id','')}")
-    questions_sorted = sorted(ALL_QUESTIONS, key=lambda x: x["id"])
-    questions = [q_title(q) for q in questions_sorted]
-
-    # 헤더
-    fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별", "신장", "체중", "검진일자"]
-    ws.append(fixed_headers + questions)
-
-    # 유틸
     today = now_kst().date()
-    def calc_age(bd, ref_date):
-        if not bd: return ""
-        return ref_date.year - bd.year - ((ref_date.month, ref_date.day) < (bd.month, bd.day))
-    def fmt(v):
-        if isinstance(v, list): return ",".join(str(x) for x in v)
-        return "" if v is None else str(v)
 
-    # 데이터 행
+    fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별", "신장", "체중"]
+    nhis_headers  = [
+        "검진일자","검진기관","신장(NHIS)","체중(NHIS)","BMI",
+        "혈압","시력","청력","혈색소","공복혈당",
+        "총콜레스테롤","HDL","LDL","중성지방",
+        "GFR","크레아티닌","AST","ALT","GGT",
+        "요단백","흉부소견","종합판정",
+    ]
+    ws.append(fixed_headers + nhis_headers + questions)
+
+    # ---------------------------
+    # 4) 데이터 행
+    # ---------------------------
     for idx, rid in enumerate(id_list, start=1):
         sr = session.get(SurveyResponse, rid)
         if not sr:
             continue
+
         resp = session.get(Respondent, sr.respondent_id) if sr.respondent_id else None
         user = session.get(User, resp.user_id) if resp and resp.user_id else None
 
@@ -1544,15 +1667,8 @@ async def admin_export_xlsx(
             payload = {}
         answers = extract_answers(payload, questions_sorted)
 
-        # NHIS exam_date 뽑기
-        exam_date = ""
-        try:
-            if sr.nhis_json:
-                nj = json.loads(sr.nhis_json)
-                # datahub_client.pick_latest_general의 표준화 키 사용
-                exam_date = nj.get("exam_date") or ""
-        except Exception:
-            pass
+        # NHIS 표준+백업 추출
+        nhis_std = nhis_extract_all(get_nhis_dict(sr.nhis_json))
 
         row = [
             idx,
@@ -1563,11 +1679,36 @@ async def admin_export_xlsx(
             gender,
             ("" if height is None else height),
             ("" if weight is None else weight),
-            exam_date,   # ← 추가
+            # NHIS 열들
+            nhis_std["exam_date"],
+            nhis_std["exam_place"],
+            nhis_std["height"],
+            nhis_std["weight"],
+            nhis_std["bmi"],
+            nhis_std["bp"],
+            nhis_std["vision"],
+            nhis_std["hearing"],
+            nhis_std["hemoglobin"],
+            nhis_std["fbs"],
+            nhis_std["tc"],
+            nhis_std["hdl"],
+            nhis_std["ldl"],
+            nhis_std["tg"],
+            nhis_std["gfr"],
+            nhis_std["creatinine"],
+            nhis_std["ast"],
+            nhis_std["alt"],
+            nhis_std["ggt"],
+            nhis_std["urine_protein"],
+            nhis_std["chest"],
+            nhis_std["judgment"],
         ] + [fmt(v) for v in answers]
+
         ws.append(row)
 
-    # 바이너리 응답
+    # ---------------------------
+    # 5) 바이너리 응답
+    # ---------------------------
     mem = BytesIO()
     wb.save(mem)
     mem.seek(0)
@@ -1610,6 +1751,14 @@ async def dh_simple_start(request: Request):
     juminOrBirth = str(payload.get("juminOrBirth") or payload.get("birth") or "").strip()
 
     telecom_gubun = telecom if loginOption == "3" and telecom else None
+
+    request.session["nhis_start_payload"] = {
+        "loginOption": loginOption,
+        "telecom": telecom,
+        "userName": userName,
+        "hpNumber": hpNumber,
+        "birth": juminOrBirth,  # 또는 birth
+    }
 
     # 1) 시작 호출
     rsp = DATAHUB.simple_auth_start(
@@ -1654,6 +1803,13 @@ async def dh_simple_start(request: Request):
 
 @app.post("/api/dh/simple/complete")
 async def dh_simple_complete(request: Request):
+    """
+    콜백형 완료:
+      1) /scrap/captcha 로 콜
+      2) 같은 callbackId로 /scrap/common/...Simple 재조회
+      3) 0000 되면 _fetch_and_save_latest_nhis 로 세션에 저장 → 200 OK
+      4) 60초 내 미완료면 202
+    """
     payload = await request.json()
     cbid = str(payload.get("callbackId","")).strip()
     if not cbid:
@@ -1662,11 +1818,11 @@ async def dh_simple_complete(request: Request):
     if not cbid:
         return JSONResponse({"ok": False, "errCode":"9001", "message":"callbackId가 없습니다. 처음부터 다시 진행해주세요."}, status_code=400)
 
-    # 콜백 완료까지 짧게 폴링
+    # 폴링
     max_wait_sec = 60
     deadline = time.time() + max_wait_sec
     while time.time() < deadline:
-        # 1) captcha 콜 (네트워크/서버 예외만 재시도)
+        # 1) captcha
         try:
             _ = DATAHUB.simple_auth_complete(callback_id=cbid, callback_type="SIMPLE")
         except Exception as e:
@@ -1674,7 +1830,7 @@ async def dh_simple_complete(request: Request):
             time.sleep(2)
             continue
 
-        # 2) 같은 cbid로 결과 재조회
+        # 2) 같은 cbid로 최종 결과 조회
         try:
             res = DATAHUB.post_medical_glance_simple_with_callbackid(callbackId=cbid)
         except Exception as e:
@@ -1692,12 +1848,9 @@ async def dh_simple_complete(request: Request):
             request.session["nhis_raw"]    = res
             return JSONResponse({"ok": True, "errCode":"0000","message":"OK","data": latest or {}}, status_code=200)
 
-        # 아직 대기 상태면 잠깐 쉬고 재시도
         time.sleep(2)
 
     return JSONResponse({"ok": False, "errCode":"2020","message":"아직 인증이 완료되지 않았습니다."}, status_code=202)
-
-
 
 
 # ---- 유틸: 최신 1건 선택 (연/월/일 기준) ----

@@ -1,6 +1,6 @@
 import os, json, base64, hashlib
-from typing import Any, Dict, Optional, Tuple
-import requests
+from typing import Any, Dict, Optional, Tuple, List
+import requests, re
 
 from Crypto.Cipher import AES
 
@@ -391,33 +391,68 @@ class DatahubClient:
         }
         return self._post("/scrap/common/nhis/MedicalCheckupResult", body)
 
-def pick_latest_general(datahub_response: Dict[str, Any]) -> Dict[str, Any]:
+
+def pick_latest_general(resp: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
-    간편인증 응답(data.INCOMELIST[])에서 가장 최신 1건만 { exam_date, items, raw }로 정규화
-    - GUNYEAR: "2022"
-    - GUNDATE: "11/02"
-    - 기타 가공은 필요 시 확장
+    DataHub '건강검진결과 한눈에 보기' 응답에서 최신 1건만 골라
+    서비스 표준 키로 변환해 반환.
+    기대: resp["data"]["INCOMELIST"] = [ {...}, ... ]
     """
-    data = (datahub_response or {}).get("data") or {}
-    rows = data.get("INCOMELIST") or []
+    data = (resp or {}).get("data") or resp.get("Data") or {}
+    items: List[Dict[str, Any]] = data.get("INCOMELIST") or data.get("incomeList") or []
+    if not isinstance(items, list) or not items:
+        return None
 
-    # 날짜 정렬 키 만들기 (YYYYMMDD)
-    def yyyymmdd(r):
-        y = str(r.get("GUNYEAR") or "").strip()
-        md = str(r.get("GUNDATE") or "").strip()  # "MM/DD"
-        mm, dd = "01", "01"
-        if "/" in md:
-            parts = md.split("/")
-            if len(parts) == 2:
-                mm = parts[0].zfill(2)
-                dd = parts[1].zfill(2)
-        return (y + mm + dd) if len(y) == 4 else ""
+    def to_iso_date(year: str, md: str) -> str:
+        # GUNDATE 예: "11/02" → MM/DD
+        m = d = 0
+        if isinstance(md, str):
+            m_d = re.findall(r"\d+", md)
+            if len(m_d) >= 2:
+                m, d = int(m_d[0]), int(m_d[1])
+        y = 0
+        if year:
+            y_nums = re.findall(r"\d+", str(year))
+            if y_nums:
+                y = int(y_nums[0])
+        if y and m and d:
+            return f"{y:04d}-{m:02d}-{d:02d}"
+        # fallback: 연도만이라도 있으면 연말로
+        return f"{y:04d}-12-31" if y else "0000-01-01"
 
-    rows.sort(key=yyyymmdd, reverse=True)
-    latest = rows[0] if rows else None
-    if not latest:
-        return {"exam_date": "", "items": [], "raw": datahub_response}
+    ranked = sorted(
+        items,
+        key=lambda x: to_iso_date(x.get("GUNYEAR"), x.get("GUNDATE")),
+        reverse=True,
+    )
+    top = ranked[0]
+    iso_date = to_iso_date(top.get("GUNYEAR"), top.get("GUNDATE"))
 
-    exam_date = latest.get("GUNYEAR","") + "-" + (latest.get("GUNDATE","").replace("/", "-"))
-    return {"exam_date": exam_date, "items": [], "raw": latest}
-
+    # 표준 키 맵핑 (엑셀 병합/화면 바인딩 공통 사용)
+    mapped = {
+        "exam_date": iso_date,                               # YYYY-MM-DD
+        "exam_year": (top.get("GUNYEAR") or "").strip(),
+        "exam_place": (top.get("GUNPLACE") or "").strip(),
+        "height": (top.get("HEIGHT") or "").strip(),
+        "weight": (top.get("WEIGHT") or "").strip(),
+        "bmi": (top.get("BODYMASS") or "").strip(),
+        "bp": (top.get("BLOODPRESS") or "").strip(),         # "120/80"
+        "vision": (top.get("SIGHT") or "").strip(),
+        "hearing": (top.get("HEARING") or "").strip(),
+        "hemoglobin": (top.get("HEMOGLOBIN") or "").strip(),
+        "fbs": (top.get("BLOODSUGAR") or "").strip(),        # 공복혈당
+        "tc": (top.get("TOTCHOLESTEROL") or "").strip(),
+        "hdl": (top.get("HDLCHOLESTEROL") or "").strip(),
+        "ldl": (top.get("LDLCHOLESTEROL") or "").strip(),
+        "tg": (top.get("TRIGLYCERIDE") or "").strip(),
+        "gfr": (top.get("GFR") or "").strip(),
+        "creatinine": (top.get("SERUMCREATININE") or "").strip(),
+        "ast": (top.get("SGOT") or "").strip(),
+        "alt": (top.get("SGPT") or "").strip(),
+        "ggt": (top.get("YGPT") or "").strip(),
+        "urine_protein": (top.get("YODANBAK") or "").strip(),
+        "chest": (top.get("CHESTTROUBLE") or "").strip(),
+        "judgment": (top.get("JUDGMENT") or "").strip(),
+        "_raw": top,  # 디버깅용
+    }
+    return mapped
