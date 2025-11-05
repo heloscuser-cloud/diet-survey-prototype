@@ -1301,10 +1301,15 @@ async def survey_step_post(request: Request, step: int,
 
 @app.get("/survey/finish")
 def survey_finish(request: Request,
+                  
                   acc: str,
                   rtoken: str,
                   background_tasks: BackgroundTasks,
                   session: Session = Depends(get_session)):
+    # NHIS(국가검진) 최신 결과 세션에서 꺼내기 (없으면 None)
+    nhis_latest = (request.session or {}).get("nhis_latest")
+    # 나중에 안전하게 접근하려고 사전 초기화
+    sr = None
     respondent_id = verify_token(rtoken)
     if respondent_id < 0:
         return templates.TemplateResponse("error.html", {"request": request, "message": "세션이 만료되었습니다. 다시 시작해주세요."}, status_code=401)
@@ -1347,8 +1352,6 @@ def survey_finish(request: Request,
 
 
     nhis_latest = request.session.get("nhis_latest")
-    if nhis_latest:
-        sr.nhis_json = nhis_latest
 
     # DB에는 깔끔하게 번호만 저장
     normalized_payload = {"answers_indices": answers_indices}
@@ -1360,9 +1363,9 @@ def survey_finish(request: Request,
     if nhis:
         normalized_payload["nhis"] = nhis 
 
-
     sr = SurveyResponse(
         respondent_id=respondent_id,
+        nhis_json=nhis_latest,
         answers_json=json.dumps(normalized_payload, ensure_ascii=False),
         score=None
     )
@@ -1405,8 +1408,10 @@ def survey_finish(request: Request,
     except Exception as e:
         print("[EMAIL] enqueue failed:", repr(e))
 
-    response = RedirectResponse(url="/portal", status_code=302)
+    request.session.pop("nhis_latest", None)
+    request.session.pop("nhis_raw", None)
     
+    response = RedirectResponse(url="/portal", status_code=302)
     # 설문 완료 플래그(브라우저 뒤로가기로 입력 복귀 차단용)
     response.set_cookie("survey_completed", "1", max_age=60*60*24*7, httponly=True, samesite="Lax", secure=bool(int(os.getenv("SECURE_COOKIE","1"))))
     return response
