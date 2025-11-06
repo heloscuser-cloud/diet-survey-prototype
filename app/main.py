@@ -1722,6 +1722,9 @@ async def dh_simple_start(
         logging.warning("[DH-START][VALIDATION] missing=%s", missing)
         return JSONResponse({"result":"FAIL","message":"필수 입력 누락","missing":missing}, status_code=400)
 
+    # hpNumber: 숫자만
+    hpNumber     = re.sub(r"[^0-9]", "", hpNumber)
+
     # 콜백형 강제 규격 (LOGINOPTION 0~7 지원)
     dh_body = {
         "LOGINOPTION":   loginOption,                          # "0"~"7" 문자열
@@ -1730,6 +1733,11 @@ async def dh_simple_start(
         "USERNAME":      userName,
         "JUMIN":         juminOrBirth,                         # YYMMDD(6)
     }
+    
+    # (선택) 민감값 마스킹 로그
+    _safe = {**dh_body, "HPNUMBER":"***", "JUMIN":"***"}
+    logging.info("[DH-START][BODY]%s", _safe)
+    
     request.session["nhis_start_payload"] = dh_body
 
     # 1) 시작 호출
@@ -1759,15 +1767,17 @@ async def dh_simple_start(
 
 
     err  = str(rsp.get("errCode","")).strip()
-    cbid = ((rsp.get("data") or {}).get("callbackId") or "").strip()
+    data = rsp.get("data") or {}
+    cbid = (data.get("callbackId") or "").strip()
+
     if err == "0001" and cbid:
-        request.session["nhis_callback_id"] = cbid
+        request.session["nhis_callback_id"]   = cbid
         request.session["nhis_callback_type"] = "SIMPLE"
         return JSONResponse({"errCode":"0001","message":"NEED_CALLBACK","data":{"callbackId": cbid}}, status_code=200)
 
-    # 그 외는 실패로 간주 (0000이라도 콜백 없으면 실패)
+    # ★ 여기서부터는 전부 실패로 처리 (0000이라도 콜백 없으면 실패)
     msg = (rsp.get("errMsg") or "간편인증 시작 실패").strip()
-    return JSONResponse({"errCode": err or "9999", "message": msg, "data": rsp.get("data") or {}}, status_code=200)
+    return JSONResponse({"errCode": err or "9999", "message": msg, "data": data}, status_code=200)
 
 
 # ===========================================
