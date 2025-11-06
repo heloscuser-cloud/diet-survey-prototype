@@ -339,7 +339,7 @@ class DatahubClient:
             "LOGINOPTION":  str(login_option or "0"),  # "0"~"7"
             "USERNAME":     user_name,
             "HPNUMBER":     hp_number,
-            "JUMIN":        jumin_or_birth,            # YYMMDD(6) 암호화 전 단계에서 이미 정규화됨
+            "JUMIN":        encrypt_field(jumin_or_birth),  # ★ 반드시 암호화해서 보냄
             "TELECOMGUBUN": (telecom_gubun if str(login_option) == "3" and telecom_gubun else ""),
         }
         return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", body, timeout=(5,25))

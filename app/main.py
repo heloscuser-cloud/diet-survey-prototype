@@ -1689,8 +1689,10 @@ from fastapi import Body, Request, HTTPException
 # ===========================================
 
 @app.post("/api/dh/simple/start")
-async def dh_simple_start(request: Request):
-    
+async def dh_simple_start(
+    request: Request,
+    session: Session = Depends(get_session),   # ★ 추가: 감사로그에 씁니다
+):
     payload = await request.json()
 
     loginOption  = str(payload.get("loginOption", "")).strip()
