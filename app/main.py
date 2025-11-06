@@ -692,9 +692,7 @@ def _fetch_and_save_latest_nhis(request, start_payload: dict | None = None, call
 
     # 2) 최신 1건 표준화 추출 (함수 이름은 프로젝트 내 기존 것과 동일 사용)
     try:
-        # datahub 응답이 {errCode, data:{...}} 형태일 수도 있으니 유연 처리
-        base = rsp2.get("data") or rsp2
-        picked = pick_latest_general(base)
+        picked = pick_latest_general(rsp2)  # 전체 응답을 그대로 넘김
     except Exception:
         picked = None
 
@@ -703,7 +701,6 @@ def _fetch_and_save_latest_nhis(request, start_payload: dict | None = None, call
     request.session["nhis_raw"]    = rsp2
 
     return rsp2
-
 
 
 
@@ -1344,7 +1341,17 @@ def survey_finish(
 
     # NHIS(국가검진) 최신 결과 세션에서 꺼내기
     nhis_latest = (request.session or {}).get("nhis_latest")
+    stmt_raw = sa_text("""
+        SELECT response_json
+        FROM nhis_audit
+        WHERE respondent_id = :rid
+        ORDER BY id DESC
+        LIMIT 1
+    """).bindparams(rid=respondent_id)
 
+    row = session.exec(stmt_raw).first()
+    nhis_raw = row[0] if row else None
+    
     # 응답 폼(acc) 파싱
     try:
         acc_obj = json.loads(acc) if acc else {}
@@ -1390,8 +1397,13 @@ def survey_finish(
         score=None,
         submitted_at=now_kst(),       # ✅ 핵심 추가
         nhis_json=nhis_latest,        # DB jsonb면 dict 그대로 저장됨
+        nhis_raw=nhis_raw,
     )
-
+    
+    # nhis_raw 슬림화 (원본 보존이 덜 중요할 때만)
+    if isinstance(nhis_raw, dict):
+        nhis_raw = {"data": nhis_raw.get("data")}
+    
     session.add(sr)
     if resp:
         resp.status = "submitted"
@@ -1612,7 +1624,7 @@ async def admin_export_xlsx(
   
     fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별", "신장", "체중"]
     nhis_headers  = [
-        "검진일자","검진기관","신장(NHIS)","체중(NHIS)","BMI",
+        "검진년도","신장(NHIS)","체중(NHIS)","BMI",
         "혈압","시력","청력","혈색소","공복혈당",
         "총콜레스테롤","HDL","LDL","중성지방",
         "GFR","크레아티닌","AST","ALT","GGT",
@@ -1653,6 +1665,7 @@ async def admin_export_xlsx(
         get_nhis_dict(sr.nhis_json),
         get_nhis_dict(sr.nhis_raw),
 )
+        
         row = [
             idx,
             serial_no,
@@ -1662,30 +1675,31 @@ async def admin_export_xlsx(
             gender,
             ("" if height is None else height),
             ("" if weight is None else weight),
-            # NHIS 열들
-            nhis_std["exam_date"],
-            nhis_std["exam_place"],
-            nhis_std["height"],
-            nhis_std["weight"],
-            nhis_std["bmi"],
-            nhis_std["bp"],
-            nhis_std["vision"],
-            nhis_std["hearing"],
-            nhis_std["hemoglobin"],
-            nhis_std["fbs"],
-            nhis_std["tc"],
-            nhis_std["hdl"],
-            nhis_std["ldl"],
-            nhis_std["tg"],
-            nhis_std["gfr"],
-            nhis_std["creatinine"],
-            nhis_std["ast"],
-            nhis_std["alt"],
-            nhis_std["ggt"],
-            nhis_std["urine_protein"],
-            nhis_std["chest"],
-            nhis_std["judgment"],
+
+            # NHIS 열들 (년도만, 기관 없음)
+            nhis_std.get("exam_year", ""),
+            nhis_std.get("height", ""),
+            nhis_std.get("weight", ""),
+            nhis_std.get("bmi", ""),
+            nhis_std.get("bp", ""),
+            nhis_std.get("vision", ""),
+            nhis_std.get("hearing", ""),
+            nhis_std.get("hemoglobin", ""),
+            nhis_std.get("fbs", ""),
+            nhis_std.get("tc", ""),
+            nhis_std.get("hdl", ""),
+            nhis_std.get("ldl", ""),
+            nhis_std.get("tg", ""),
+            nhis_std.get("gfr", ""),
+            nhis_std.get("creatinine", ""),
+            nhis_std.get("ast", ""),
+            nhis_std.get("alt", ""),
+            nhis_std.get("ggt", ""),
+            nhis_std.get("urine_protein", ""),
+            nhis_std.get("chest", ""),
+            nhis_std.get("judgment", ""),
         ] + [fmt(v) for v in answers]
+
 
         ws.append(row)
 
@@ -1726,7 +1740,24 @@ from fastapi import Body, Request, HTTPException
 
 @app.post("/api/dh/simple/start")
 async def dh_simple_start(request: Request):
+    
     payload = await request.json()
+    
+    # === 필수값 검증 (누락 시 400) ===
+    missing = []
+    if not loginOption:  missing.append("loginOption")
+    if not userName:     missing.append("userName")
+    if not hpNumber:     missing.append("hpNumber")
+    if not juminOrBirth: missing.append("birth(YYYYMMDD)")
+    if loginOption == "3" and not telecom:
+        missing.append("telecom(PASS)")
+    if missing:
+        logging.warning("[DH-START][VALIDATION] missing=%s", missing)
+        return JSONResponse(
+            {"result":"FAIL","message":"필수 입력 누락","missing":missing},
+            status_code=400
+        )
+    
     loginOption  = str(payload.get("loginOption","")).strip()
     telecom      = str(payload.get("telecom","")).strip()
     userName     = str(payload.get("userName","")).strip()
@@ -1865,6 +1896,9 @@ async def dh_simple_complete(
 
             # 🔹 세션에는 '작은' 결과만 저장 (쿠키 4KB 보호)
             request.session["nhis_latest"] = latest or {}
+            
+            # 🔹 원본도 저장 (엑셀/감사 확인용) / 쿠키 보호차원 주석처리
+            # request.session["nhis_raw"] = res 
 
             # === 요약 로그 추가 ===
             try:
@@ -1893,15 +1927,16 @@ async def dh_simple_complete(
             except:
                 pass
 
-            session.exec(sa_text("""
+            stmt = sa_text("""
                 INSERT INTO nhis_audit (respondent_id, callback_id, request_json, response_json)
                 VALUES (:rid, :cbid, :req, :res)
-            """), {
-                "rid": resp_id,
-                "cbid": cbid,
-                "req": json.dumps((request.session or {}).get("nhis_start_payload") or {}),
-                "res": json.dumps(res or {}),
-            })
+            """).bindparams(
+                rid=resp_id,
+                cbid=cbid,
+                req=json.dumps((request.session or {}).get("nhis_start_payload") or {}),
+                res=json.dumps(res or {}),
+            )
+            session.exec(stmt)
             session.commit()
         except Exception as e:
             print("[NHIS][AUDIT][ERR]", repr(e))
