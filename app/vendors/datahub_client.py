@@ -371,18 +371,33 @@ class DatahubClient:
 
 
     # --- 2) 간편인증 Step2: captcha(최종 완료 콜)
-    def simple_auth_complete(self, callback_id: str, callback_type: str = "SIMPLE") -> Dict[str, Any]:
+    def simple_auth_complete(
+        self,
+        callback_id: str,
+        callback_type: str = "SIMPLE",
+        callbackResponse: str = "",
+        callbackResponse1: str = "",
+        callbackResponse2: str = "",
+        retry: str = "",
+    ) -> Dict[str, Any]:
+        # NOTE: 간편인증은 callbackResponse* 키들이 비어 있어도 '키 자체'가 필요한 케이스가 있어
+        #       항상 4개 키를 포함시킵니다.
         body = {
             "callbackId": callback_id,
             "callbackType": callback_type or "SIMPLE",
+            "callbackResponse":  callbackResponse or "",
+            "callbackResponse1": callbackResponse1 or "",
+            "callbackResponse2": callbackResponse2 or "",
+            "retry":             retry or "",
         }
         return self._post("/scrap/captcha", body)
+
 
 
     # --- 3) 인증서 방식: 건강검진 결과 조회
     def nhis_medical_checkup(self, jumin: str, cert_name: str, cert_pwd: str, der_b64: str, key_b64: str) -> Dict[str, Any]:
         body = {
-            "JUMIN": encrypt_field(jumin),         # 13자리
+            "JUMIN": encrypt_field(jumin),         # 8자리
             "P_CERTNAME": cert_name,               # cn=... 문자열
             "P_CERTPWD": encrypt_field(cert_pwd),  # 암호화 TRUE
             "P_SIGNCERT_DER": der_b64,             # BASE64

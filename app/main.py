@@ -1815,137 +1815,142 @@ async def dh_simple_start(request: Request):
 # DataHub 간편인증 Step2: 완료(captcha)
 # ===========================================
 
+
 @app.post("/api/dh/simple/complete")
 async def dh_simple_complete(
     request: Request,
-    session: Session = Depends(get_session),   # ✅ 기존 DI 세션 재사용
+    session: Session = Depends(get_session),
 ):
     """
     콜백형 완료:
-      1) /scrap/captcha 로 콜
-      2) 같은 callbackId로 /scrap/common/...Simple 재조회
-      3) 0000 되면 _fetch_and_save_latest_nhis 로 세션에 저장 → 200 OK
-      4) 60초 내 미완료면 202
+      1) /scrap/captcha (Step2) 를 '한 번' 호출 (callbackResponse* 키 포함)
+      2) 같은 callbackId로 /scrap/common/...Simple 를 폴링 재조회
+      3) 0000 수신 시 pick_latest_general 로 표준화 후 세션에 작은 dict 저장
+      4) 60초 내 미완료면 202로 종료
     """
+    import time, json
+    from sqlalchemy import text as sa_text
+
     payload = await request.json()
-    cbid = str(payload.get("callbackId","")).strip()
-    if not cbid:
-        sess_cb = (request.session or {}).get("dh_callback") or {}
-        cbid = (sess_cb.get("id") or "").strip()
-    if not cbid:
-        return JSONResponse({"ok": False, "errCode":"9001", "message":"callbackId가 없습니다. 처음부터 다시 진행해주세요."}, status_code=400)
 
-    # 폴링
-    max_wait_sec = 60
-    deadline = time.time() + max_wait_sec
+    # 0) 세션(or 요청)에서 콜백 값 복구
+    cbid = (request.session or {}).get("nhis_callback_id") or str(payload.get("callbackId") or "")
+    cbtp = (request.session or {}).get("nhis_callback_type") or str(payload.get("callbackType") or "SIMPLE")
+
+    # callbackid 확인용 임시 로그
+    logging.info(
+        "[DH-COMPLETE][DEBUG] callbackId sources => session:%s | payload:%s | final:%s",
+        (request.session or {}).get("nhis_callback_id"),
+        payload.get("callbackId"),
+        cbid,
+    )
+    
+    # callbacktype 확인용 임시 로그
+    logging.info(
+    "[DH-COMPLETE][DEBUG] callbackType sources => session:%s | payload:%s | final:%s",
+    (request.session or {}).get("nhis_callback_type"),
+    payload.get("callbackType"),
+    cbtp,
+    )
+    
+    # 0-1) 최소 검증 (DataHub 호출 낭비 방지)
+    if not cbid or not cbtp:
+        logging.warning("[DH-COMPLETE][VALIDATION] missing=%s", [k for k,v in {"callbackId":cbid,"callbackType":cbtp}.items() if not v])
+        return JSONResponse({"result":"FAIL","message":"필수 입력 누락","missing":["callbackId","callbackType"]}, status_code=400)
+
+    # 1) Step2: /scrap/captcha (키는 반드시 모두 포함; 값은 비어도 OK)
+    step2_res = DATAHUB.simple_auth_complete(
+        callback_id=cbid,
+        callback_type=cbtp,
+        callbackResponse=str(payload.get("callbackResponse")  or ""),
+        callbackResponse1=str(payload.get("callbackResponse1") or ""),
+        callbackResponse2=str(payload.get("callbackResponse2") or ""),
+        retry=str(payload.get("retry") or ""),
+    )
+
+    # 1-1) 감사로그: Step2 요청/응답 저장
+    try:
+        resp_id = None
+        try:
+            tok = (request.query_params.get("rtoken") or request.cookies.get("rtoken") or "")
+            rid = verify_token(tok) if tok else -1
+            if rid > 0:
+                resp_id = rid
+        except Exception:
+            pass
+
+        stmt = sa_text("""
+            INSERT INTO nhis_audit (respondent_id, callback_id, request_json, response_json)
+            VALUES (:rid, :cbid, :req, :res)
+        """).bindparams(
+            rid=resp_id,
+            cbid=cbid,
+            req=json.dumps({"step":"captcha","body":{
+                "callbackId":cbid,"callbackType":cbtp,
+                "callbackResponse":"","callbackResponse1":"","callbackResponse2":"","retry":""
+            }}, ensure_ascii=False),
+            res=json.dumps(step2_res or {}, ensure_ascii=False),
+        )
+        session.exec(stmt)
+        session.commit()
+    except Exception as e:
+        print("[NHIS][AUDIT][ERR][captcha]", repr(e))
+
+    # 2) 결과 재조회 폴링 (CALLBACKID 대문자 키 사용)
+    deadline = time.time() + 60
     while time.time() < deadline:
-        # 1) captcha
         try:
-            _ = DATAHUB.simple_auth_complete(callback_id=cbid, callback_type="SIMPLE")
-        except Exception as e:
-            print("[DH-COMPLETE][ERR][captcha]", repr(e))
-            time.sleep(2)
-            continue
+            fetch_body = {"CALLBACKID": cbid}
+            rsp2 = DATAHUB.post_medical_glance_simple_with_callbackid(callbackId=cbid)
 
-        # 2) 같은 cbid로 최종 결과 조회
-        try:
-            res = DATAHUB.post_medical_glance_simple_with_callbackid(callbackId=cbid)
-        except Exception as e:
-            print("[DH-COMPLETE][ERR][glance]", repr(e))
-            time.sleep(2)
-            continue
-
-
-        # --- (추적) 원문 저장: nhis_audit 임시로그---
-        try:
-            sess_cb = (request.session or {}).get("dh_callback") or {}
-            resp_id = None
+            # 감사로그: 재조회 요청/응답 저장
             try:
-                tok = (request.query_params.get("rtoken") or request.cookies.get("rtoken") or "")
-                rid = verify_token(tok) if tok else -1
-                if rid > 0:
-                    resp_id = rid
-            except:
-                pass
-
-            stmt = sa_text("""
-                INSERT INTO nhis_audit (respondent_id, callback_id, request_json, response_json)
-                VALUES (:rid, :cbid, :req, :res)
-            """).bindparams(
-                rid=resp_id,
-                cbid=cbid,
-                req=json.dumps((request.session or {}).get("nhis_start_payload") or {}),
-                res=json.dumps(res or {}),
-            )
-            session.exec(stmt)
-            session.commit()
-
-        except Exception as e:
-            print("[NHIS][AUDIT][ERR]", repr(e))
-            
-
-
-        err2 = str(res.get("errCode","")).strip()
-        if err2 == "0000":
-            # 🔹 표준화: 최근 1건만 (작은 dict)
-            try:
-                latest = pick_latest_general(res)
+                stmt = sa_text("""
+                    INSERT INTO nhis_audit (respondent_id, callback_id, request_json, response_json)
+                    VALUES (:rid, :cbid, :req, :res)
+                """).bindparams(
+                    rid=resp_id,
+                    cbid=cbid,
+                    req=json.dumps({"step":"fetch","body":fetch_body}, ensure_ascii=False),
+                    res=json.dumps(rsp2 or {}, ensure_ascii=False),
+                )
+                session.exec(stmt)
+                session.commit()
             except Exception as e:
-                print("[DH-COMPLETE][WARN][pick]", repr(e))
-                latest = None
+                print("[NHIS][AUDIT][ERR][fetch]", repr(e))
 
-            # 🔹 세션에는 '작은' 결과만 저장 (쿠키 4KB 보호)
-            request.session["nhis_latest"] = latest or {}
-            
-            # 🔹 원본도 저장 (엑셀/감사 확인용) / 쿠키 보호차원 주석처리
-            # request.session["nhis_raw"] = res 
+            err2 = str((rsp2 or {}).get("errCode") or "")
+            if err2 == "0000":
+                try:
+                    latest = pick_latest_general(rsp2)
+                except Exception as e:
+                    print("[DH-COMPLETE][WARN][pick]", repr(e))
+                    latest = None
 
-            # === 요약 로그 추가 ===
-            try:
-                data = (res or {}).get("data") or {}
-                income = data.get("INCOMELIST") or []
-                print(f"[DH-COMPLETE][SUMMARY] latest_ok={bool(latest)} "
-                      f"income_count={len(income) if isinstance(income, list) else 'NA'} "
-                      f"keys={list(data.keys())[:6]}")
-                if latest:
-                    print("[DH-COMPLETE][LATEST]", {k: latest.get(k) for k in ("exam_date","height","weight","bmi")})
-            except Exception:
-                pass
+                # 세션에는 '작은' 결과만 저장 (쿠키 4KB 보호)
+                request.session["nhis_latest"] = latest or {}
 
-            return JSONResponse({"ok": True, "errCode":"0000","message":"OK","data": latest or {}}, status_code=200)
+                # 요약 로그
+                try:
+                    data = (rsp2 or {}).get("data") or {}
+                    income = data.get("INCOMELIST") or data.get("RESULTLIST") or []
+                    print(f"[DH-COMPLETE][SUMMARY] latest_ok={bool(latest)} "
+                          f"income_count={(len(income) if isinstance(income, list) else 'NA')} "
+                          f"keys={(list(data.keys())[:6])}")
+                except Exception:
+                    pass
 
+                return JSONResponse({"ok": True, "errCode":"0000","message":"OK","data": latest or {}}, status_code=200)
 
-        # --- (추적) 원문 저장: nhis_audit 임시로그---
-        try:
-            sess_cb = (request.session or {}).get("dh_callback") or {}
-            resp_id = None
-            try:
-                tok = (request.query_params.get("rtoken") or request.cookies.get("rtoken") or "")
-                rid = verify_token(tok) if tok else -1
-                if rid > 0:
-                    resp_id = rid
-            except:
-                pass
-
-            stmt = sa_text("""
-                INSERT INTO nhis_audit (respondent_id, callback_id, request_json, response_json)
-                VALUES (:rid, :cbid, :req, :res)
-            """).bindparams(
-                rid=resp_id,
-                cbid=cbid,
-                req=json.dumps((request.session or {}).get("nhis_start_payload") or {}),
-                res=json.dumps(res or {}),
-            )
-            session.exec(stmt)
-            session.commit()
         except Exception as e:
-            print("[NHIS][AUDIT][ERR]", repr(e))
-
-
+            print("[DH-COMPLETE][ERR][fetch]", repr(e))
 
         time.sleep(2)
 
+    # 3) 타임아웃
     return JSONResponse({"ok": False, "errCode":"2020","message":"아직 인증이 완료되지 않았습니다."}, status_code=202)
+
+
 
 
 # ---- 유틸: 최신 1건 선택 (연/월/일 기준) ----
