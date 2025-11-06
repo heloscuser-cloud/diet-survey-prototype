@@ -282,17 +282,30 @@ class DatahubClient:
         # 이후 토큰 검증
         if not self.token:
             raise DatahubError("DATAHUB_TOKEN is missing")
-            
-    def _post(self, path: str, body: Dict[str, Any], timeout=25) -> Dict[str, Any]:
-        url = f"{self.base}{path}"
+ 
+    def _post(self, path: str, body: Dict[str, Any], timeout: Tuple[int, int] = (5, 25)) -> Dict[str, Any]:
+        """
+        DataHub 공통 POST 함수
+        - timeout: (connect, read)
+          기본 (5, 25) / Step2(captcha)는 (5, 5) 권장
+        """
+        url = f"{self.base.rstrip('/')}{path}"
         headers = {
             "Authorization": f"Token {self.token}",
             "Content-Type": "application/json;charset=UTF-8",
         }
+
         try:
+            # 요청 로그
+            print("[DATAHUB][BASE]", repr(self.base))
+            print("[DATAHUB][URL ]", url)
+            print("[DATAHUB][REQ ]", path, list(body.keys()))
+
+            # 요청 실행 (timeout 튜플 적용)
             r = requests.post(url, headers=headers, json=body, timeout=timeout)
         except Exception as e:
             print("[DATAHUB][ERR-REQ]", path, repr(e))
+            # timeout 등 예외는 DatahubError로 감싸서 상위에서 처리
             raise DatahubError(f"REQUEST_ERROR: {e}")
 
         try:
@@ -300,13 +313,11 @@ class DatahubClient:
         except Exception:
             data = {"errCode": "HTTP", "errMsg": r.text, "result": "FAIL"}
 
-        # 🔍 요청/응답 요약을 '항상' 먼저 기록
+        # 응답 요약 로그
         try:
-            print("[DATAHUB][BASE]", repr(self.base))
-            print("[DATAHUB][URL ]", url)
-            print("[DATAHUB][REQ ]", path, list(body.keys()))
             print("[DATAHUB][RSP-STATUS]", r.status_code)
-            print("[DATAHUB][RSP-SHORT]", data.get("errCode"), data.get("result"), (data.get("errMsg") or "")[:200])
+            print("[DATAHUB][RSP-SHORT]",
+                  data.get("errCode"), data.get("result"), (data.get("errMsg") or "")[:200])
         except Exception:
             pass
 
@@ -314,7 +325,9 @@ class DatahubClient:
             raise DatahubError(f"HTTP {r.status_code}: {data}")
 
         return data
-    
+
+ 
+ 
     def medical_checkup_simple(
         self,
         login_option: str,
@@ -380,17 +393,22 @@ class DatahubClient:
         callbackResponse2: str = "",
         retry: str = "",
     ) -> Dict[str, Any]:
-        # NOTE: 간편인증은 callbackResponse* 키들이 비어 있어도 '키 자체'가 필요한 케이스가 있어
-        #       항상 4개 키를 포함시킵니다.
+        """
+        Step2 - 간편인증 완료 확인 (/scrap/captcha)
+        ※ callbackResponse* 키들은 비어 있어도 반드시 포함해야 함.
+        ※ timeout=(5,5): 5초 내 미응답이면 상위에서 폴링으로 진행.
+        """
         body = {
             "callbackId": callback_id,
             "callbackType": callback_type or "SIMPLE",
-            "callbackResponse":  callbackResponse or "",
+            "callbackResponse": callbackResponse or "",
             "callbackResponse1": callbackResponse1 or "",
             "callbackResponse2": callbackResponse2 or "",
-            "retry":             retry or "",
+            "retry": retry or "",
         }
-        return self._post("/scrap/captcha", body)
+
+        # Step2는 짧은 읽기 타임아웃
+        return self._post("/scrap/captcha", body, timeout=(5, 5))
 
 
 

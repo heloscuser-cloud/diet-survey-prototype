@@ -2078,7 +2078,7 @@ def debug_whoami():
         }
     })
 
-#임시 인코딩 테스트 용도 
+#인코딩 테스트
 @app.get("/debug/datahub-finder")
 def debug_datahub_finder():
     """
