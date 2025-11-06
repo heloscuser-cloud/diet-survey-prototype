@@ -328,52 +328,22 @@ class DatahubClient:
 
  
  
-    def medical_checkup_simple(
-        self,
-        login_option: str,
-        user_name: str,
-        hp_number: str,
-        jumin_or_birth: str,
-        telecom_gubun: str | None = None,
-        callback_id: Optional[str] = None,
-    ) -> dict:
-        body = {
-            "LOGINOPTION": login_option,
-            "USERNAME": user_name,
-            "HPNUMBER": hp_number,
-            "JUMIN": encrypt_field(jumin_or_birth),
-        }
-        if login_option == "3" and telecom_gubun:
-            body["TELECOMGUBUN"] = telecom_gubun
-        
-        if body["LOGINOPTION"] == "3":
-            if telecom_gubun not in {"1","2","3"}:
-                raise DatahubError("통신사 간편인증은 TELECOMGUBUN(1/2/3)이 필요합니다.")
-            body["TELECOMGUBUN"] = telecom_gubun
-        if callback_id:
-            body["CALLBACKID"] = callback_id  # ★ 기존 인증 세션을 이어받아 결과 조회
-
-        return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", body)
+    def medical_checkup_simple(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        # payload 예: {"CALLBACKID": "...", "CALLBACKTYPE": "SIMPLE"}
+        return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", payload, timeout=(5,25))
 
 
     # === 1) 간편인증 Step1: 시작/즉시조회 ===
-    def simple_auth_start(
-        self,
-        login_option: str,
-        user_name: str,
-        hp_number: str,
-        jumin_or_birth: str,
-        telecom_gubun: str | None = None,
-    ) -> Dict[str, Any]:
+    def simple_auth_start(self, login_option, user_name, hp_number, jumin_or_birth, telecom_gubun=None):
         body = {
-            "LOGINOPTION": login_option,
-            "USERNAME": user_name,
-            "HPNUMBER": hp_number,
-            "JUMIN": encrypt_field(jumin_or_birth),
+            "LOGINOPTION":  str(login_option or "0"),  # "0"~"7"
+            "USERNAME":     user_name,
+            "HPNUMBER":     hp_number,
+            "JUMIN":        jumin_or_birth,            # YYMMDD(6) 암호화 전 단계에서 이미 정규화됨
+            "TELECOMGUBUN": (telecom_gubun if str(login_option) == "3" and telecom_gubun else ""),
         }
-        if login_option == "3" and telecom_gubun:
-            body["TELECOMGUBUN"] = telecom_gubun
-        return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", body)
+        return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", body, timeout=(5,25))
+
 
 
     # --- 2) 간편인증 Step2: captcha(최종 완료 콜)

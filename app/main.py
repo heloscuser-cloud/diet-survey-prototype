@@ -1693,63 +1693,79 @@ async def dh_simple_start(request: Request):
     
     payload = await request.json()
 
-    loginOption  = str(payload.get("loginOption","")).strip()
-    telecom      = str(payload.get("telecom","")).strip()
-    userName     = str(payload.get("userName","")).strip()
-    hpNumber     = str(payload.get("hpNumber","")).strip()
+    loginOption  = str(payload.get("loginOption", "")).strip()
+    telecom      = str(payload.get("telecom", "")).strip()
+    userName     = str(payload.get("userName", "")).strip()
+    hpNumber     = str(payload.get("hpNumber", "")).strip()
     juminOrBirth = re.sub(r"[^0-9]", "", str(payload.get("juminOrBirth") or payload.get("birth") or ""))
-    # 붙여넣기 방어: 8자리(YYYYMMDD) 오면 뒤 6자리만 유지
+
+    # 6자리 YYMMDD로 강제
     if len(juminOrBirth) >= 6:
         juminOrBirth = juminOrBirth[-6:]
 
-    telecom_gubun = telecom if loginOption == "3" and telecom else None
+    # ✅ LOGINOPTION 허용값: 0~7
+    allowed = {"0","1","2","3","4","5","6","7"}
 
-    # === 필수값 검증 (누락 시 400) ===
     missing = []
-    if not loginOption:  missing.append("loginOption")
-    if not userName:     missing.append("userName")
-    if not hpNumber:     missing.append("hpNumber")
-    if not juminOrBirth: missing.append("birth(YYMMDD)")
-    elif not re.fullmatch(r"\d{6}", juminOrBirth): missing.append("birth(YYMMDD 6자리)")
+    if not loginOption or loginOption not in allowed:  missing.append("loginOption(0~7)")
+    if not userName:                                   missing.append("userName")
+    if not hpNumber:                                   missing.append("hpNumber")
+    if not juminOrBirth:                               missing.append("birth(YYMMDD)")
+    elif not re.fullmatch(r"\d{6}", juminOrBirth):     missing.append("birth(YYMMDD 6자리)")
+    # 통신사(PASS)일 때만 요구
     if loginOption == "3" and not telecom:
-        missing.append("telecom(PASS)")
+        missing.append("telecom(PASS: SKT|KT|LGU+ 등)")
+
     if missing:
         logging.warning("[DH-START][VALIDATION] missing=%s", missing)
-        return JSONResponse(
-            {"result":"FAIL","message":"필수 입력 누락","missing":missing},
-            status_code=400
-        )
+        return JSONResponse({"result":"FAIL","message":"필수 입력 누락","missing":missing}, status_code=400)
 
-    request.session["nhis_start_payload"] = {
-        "LOGINOPTION": loginOption,
-        "TELECOMGUBUN": (telecom if loginOption == "3" and telecom else ""),
-        "USERNAME": userName,
-        "HPNUMBER": hpNumber,
-        "JUMIN": juminOrBirth,  # 또는 birth
+    # 콜백형 강제 규격 (LOGINOPTION 0~7 지원)
+    dh_body = {
+        "LOGINOPTION":   loginOption,                          # "0"~"7" 문자열
+        "TELECOMGUBUN":  (telecom if loginOption == "3" else ""),  # 3(PASS)만 값, 나머지는 ""
+        "HPNUMBER":      hpNumber,
+        "USERNAME":      userName,
+        "JUMIN":         juminOrBirth,                         # YYMMDD(6)
     }
+    request.session["nhis_start_payload"] = dh_body
 
     # 1) 시작 호출
     rsp = DATAHUB.simple_auth_start(
-        login_option=loginOption,
-        user_name=userName,
-        hp_number=hpNumber,
-        jumin_or_birth=juminOrBirth,
-        telecom_gubun=telecom_gubun,
+        login_option=dh_body["LOGINOPTION"],      # "0"~"7"
+        user_name=dh_body["USERNAME"],
+        hp_number=dh_body["HPNUMBER"],
+        jumin_or_birth=dh_body["JUMIN"],
+        telecom_gubun=(dh_body["TELECOMGUBUN"] or None),
     )
 
-    err  = str(rsp.get("errCode","")).strip()
-    data = rsp.get("data") or rsp.get("Data") or {}
 
-    # --- 콜백형: 0001 + callbackId → 세션에 저장 후 프론트에 전달
-    cbid = (data.get("callbackId") or rsp.get("callbackId") or "").strip()
+    try:
+        stmt = sa_text("""
+            INSERT INTO nhis_audit (respondent_id, callback_id, request_json, response_json)
+            VALUES (:rid, :cbid, :req, :res)
+        """).bindparams(
+            rid=None,  # 알 수 없으면 None
+            cbid=(rsp.get("data") or {}).get("callbackId") or "",
+            req=json.dumps({"step":"start","body":dh_body}, ensure_ascii=False),
+            res=json.dumps(rsp or {}, ensure_ascii=False),
+        )
+        session.exec(stmt)
+        session.commit()
+    except Exception as e:
+        print("[NHIS][AUDIT][ERR][start]", repr(e))
+
+
+    err  = str(rsp.get("errCode","")).strip()
+    cbid = ((rsp.get("data") or {}).get("callbackId") or "").strip()
     if err == "0001" and cbid:
         request.session["nhis_callback_id"] = cbid
         request.session["nhis_callback_type"] = "SIMPLE"
         return JSONResponse({"errCode":"0001","message":"NEED_CALLBACK","data":{"callbackId": cbid}}, status_code=200)
 
-    # --- 그 외: 에러 그대로 통지 (즉시형은 제거)
+    # 그 외는 실패로 간주 (0000이라도 콜백 없으면 실패)
     msg = (rsp.get("errMsg") or "간편인증 시작 실패").strip()
-    return JSONResponse({"errCode": err or "9999", "message": msg, "data": data}, status_code=200)
+    return JSONResponse({"errCode": err or "9999", "message": msg, "data": rsp.get("data") or {}}, status_code=200)
 
 
 # ===========================================
