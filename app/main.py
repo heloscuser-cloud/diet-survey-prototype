@@ -1742,7 +1742,15 @@ from fastapi import Body, Request, HTTPException
 async def dh_simple_start(request: Request):
     
     payload = await request.json()
-    
+
+    loginOption  = str(payload.get("loginOption","")).strip()
+    telecom      = str(payload.get("telecom","")).strip()
+    userName     = str(payload.get("userName","")).strip()
+    hpNumber     = str(payload.get("hpNumber","")).strip()
+    juminOrBirth = str(payload.get("juminOrBirth") or payload.get("birth") or "").strip()
+
+    telecom_gubun = telecom if loginOption == "3" and telecom else None
+
     # === 필수값 검증 (누락 시 400) ===
     missing = []
     if not loginOption:  missing.append("loginOption")
@@ -1757,14 +1765,6 @@ async def dh_simple_start(request: Request):
             {"result":"FAIL","message":"필수 입력 누락","missing":missing},
             status_code=400
         )
-    
-    loginOption  = str(payload.get("loginOption","")).strip()
-    telecom      = str(payload.get("telecom","")).strip()
-    userName     = str(payload.get("userName","")).strip()
-    hpNumber     = str(payload.get("hpNumber","")).strip()
-    juminOrBirth = str(payload.get("juminOrBirth") or payload.get("birth") or "").strip()
-
-    telecom_gubun = telecom if loginOption == "3" and telecom else None
 
     request.session["nhis_start_payload"] = {
         "loginOption": loginOption,
