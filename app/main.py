@@ -653,71 +653,6 @@ def verify_token(token: str) -> int:
     except (BadSignature, SignatureExpired):
         return -1
 
-# --- NHIS: 인증 완료 후 실제 데이터 1건 조회 + 세션 저장 헬퍼---
-# --- NHIS: 인증 완료 후 실제 데이터 1건 조회 + 세션 저장(공통 헬퍼) ---
-def _fetch_and_save_latest_nhis(request, start_payload: dict | None = None, callback_id: Optional[str] = None) -> dict:
-    """
-    콜백형: callback_id만으로 최종 조회 (재인증 금지)
-    즉시형: start_payload를 그대로 넘겨 재조회(필요 시)
-    결과는 세션에 저장:
-      - request.session["nhis_latest"]: pick_latest_general 결과(최신 1건, 일반검진으로 표준화)
-      - request.session["nhis_raw"]   : 원본 응답 dict
-    """
-    # 0) start_payload 없으면 세션에서 복구 (start 라우트에서 저장해둔 값)
-    if not start_payload:
-        start_payload = (request.session or {}).get("nhis_start_payload") or {}
-
-    # 1) 조회 분기
-    if callback_id:
-        # 콜백형: callbackId만으로 최종 결과 조회 (새 인증 절대 X)
-        rsp2 = DATAHUB.post_medical_glance_simple_with_callbackid(callbackId=callback_id)
-    else:
-        # 즉시형(혹은 재조회 필요 시): start payload로 직접 조회 (대/소문자 키 모두 지원)
-        SP = start_payload or {}
-        def gs(*keys, default=""):
-            for k in keys:
-                v = SP.get(k)
-                if v not in (None, ""):
-                    return str(v).strip()
-            return default
-
-        loginOption   = gs("LOGINOPTION", "loginOption")
-        telecom       = gs("TELECOMGUBUN", "telecom")
-        userName      = gs("USERNAME", "userName")
-        hpNumber      = gs("HPNUMBER", "hpNumber")
-
-        # birth: 대문자 JUMIN(신규) / JUMINNUM(구버전) / 소문자 대체키 모두 수용
-        jumin_or_birth = gs("JUMIN", "JUMINNUM", "juminOrBirth", "birth")
-
-        # YYMMDD 6자리로 강제
-        jumin_or_birth = re.sub(r"[^0-9]", "", jumin_or_birth or "")
-        if len(jumin_or_birth) >= 6:
-            jumin_or_birth = jumin_or_birth[-6:]
-
-        telecom_gubun = telecom if (loginOption == "3" and telecom) else None
-
-        rsp2 = DATAHUB.medical_checkup_simple(
-            login_option=loginOption,
-            user_name=userName,
-            hp_number=hpNumber,
-            jumin_or_birth=jumin_or_birth,
-            telecom_gubun=telecom_gubun,
-            callback_id=None,
-        )
-
-    # 2) 최신 1건 표준화 추출 (함수 이름은 프로젝트 내 기존 것과 동일 사용)
-    try:
-        picked = pick_latest_general(rsp2)  # 전체 응답을 그대로 넘김
-    except Exception:
-        picked = None
-
-    # 3) 세션 저장 (엑셀 병합/finish 저장용)
-    request.session["nhis_latest"] = picked
-    request.session["nhis_raw"]    = rsp2
-
-    return rsp2
-
-
 
 class SurveyIn(BaseModel):
     meals_per_day: int
@@ -1808,24 +1743,11 @@ async def dh_simple_start(request: Request):
     # --- 콜백형: 0001 + callbackId → 세션에 저장 후 프론트에 전달
     cbid = (data.get("callbackId") or rsp.get("callbackId") or "").strip()
     if err == "0001" and cbid:
-        request.session["dh_callback"] = {"id": cbid, "type": "SIMPLE"}
+        request.session["nhis_callback_id"] = cbid
+        request.session["nhis_callback_type"] = "SIMPLE"
         return JSONResponse({"errCode":"0001","message":"NEED_CALLBACK","data":{"callbackId": cbid}}, status_code=200)
 
-    # --- 즉시형: 0000 → 이 응답에 이미 결과가 포함된 케이스
-    if err == "0000":
-        # 결과가 data에 있는 경우/형식이 달라도 pick_latest_general가 안전하게 뽑도록 시도
-        try:
-            latest = pick_latest_general(rsp)
-        except Exception:
-            latest = None
-
-        # 세션 보관(엑셀 병합/후속 단계 용)
-        request.session["nhis_latest"] = latest
-        request.session["nhis_raw"]    = rsp
-
-        return JSONResponse({"errCode":"0000","message":"OK","data": latest or {}}, status_code=200)
-
-    # --- 그 외: 에러 그대로 통지
+    # --- 그 외: 에러 그대로 통지 (즉시형은 제거)
     msg = (rsp.get("errMsg") or "간편인증 시작 실패").strip()
     return JSONResponse({"errCode": err or "9999", "message": msg, "data": data}, status_code=200)
 
@@ -1919,8 +1841,8 @@ async def dh_simple_complete(
     deadline = time.time() + 60
     while time.time() < deadline:
         try:
-            fetch_body = {"CALLBACKID": cbid}
-            rsp2 = DATAHUB.post_medical_glance_simple_with_callbackid(callbackId=cbid)
+            fetch_body = {"CALLBACKID": cbid, "CALLBACKTYPE": cbtp}  # CALLBACKTYPE 추가
+            rsp2 = DATAHUB.medical_checkup_simple(fetch_body)       # 대문자 키 payload 통째로 전송
 
             # 감사로그: 재조회 요청/응답 저장
             try:

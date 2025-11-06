@@ -198,16 +198,6 @@ const birth = (birthRaw || '').replace(/[^0-9]/g,'').slice(-6);
       return;
     }
 
-    // ── 성공 케이스 분기 ─────────────────────────────────
-    // 1) 즉시형(0000) → 이미 결과가 도착함 → 바로 다음 단계로
-if (data.errCode === "0000") {
-gStartDone = true;
-  setStatus('건강검진 데이터 수신 완료. 다음 단계로 이동합니다.', 'ok');
-  // 서버 세션에 저장되어 있으니 바로 next로 이동
-window.location.href = nextUrlEl.value || '/info';
-  return;
-}
-
     // 2) 콜백형(0001) → callbackId 필요
   // 콜백형: 인증 대기 → 완료 버튼 활성화
 if (data.errCode === "0001" && data.data && data.data.callbackId) {
