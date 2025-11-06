@@ -1480,115 +1480,54 @@ async def admin_export_xlsx(
         except Exception:
             return {}
 
-    def nhis_extract_all(nj_std: dict, nj_raw: dict) -> dict:
+
+    def nhis_extract_all(nj_std: dict, nj_raw: dict):
         """
-        표준 키(exam_date 등)를 최우선 사용.
-        없으면 원본(data/INCOMELIST[0] 등)에서 백업 추출.
-        - nj_std: pick_latest_general가 만든 표준화 dict (sr.nhis_json)
-        - nj_raw: DataHub 응답 원문 dict (sr.nhis_raw)
+        국가검진 데이터에서 표준값(nhis_json)과 원본(nhis_raw)을 받아
+        엑셀에 필요한 최소 필드만 단순 추출.
+        - 가장 최근년도(INCOMELIST, RESULTLIST)만 사용
+        - 검진기관 제거
         """
-        if not isinstance(nj_std, dict):
-            nj_std = {}
-        if not isinstance(nj_raw, dict):
-            nj_raw = {}
+        if not nj_raw:
+            return {}
 
-        # 1) 표준화된 형태 우선 (pick_latest_general 결과)
-        std = {
-            "exam_date": nj_std.get("exam_date") or "",
-            "exam_place": nj_std.get("exam_place") or "",
-            "height": nj_std.get("height") or "",
-            "weight": nj_std.get("weight") or "",
-            "bmi": nj_std.get("bmi") or "",
-            "bp": nj_std.get("bp") or "",
-            "vision": nj_std.get("vision") or "",
-            "hearing": nj_std.get("hearing") or "",
-            "hemoglobin": nj_std.get("hemoglobin") or "",
-            "fbs": nj_std.get("fbs") or "",
-            "tc": nj_std.get("tc") or "",
-            "hdl": nj_std.get("hdl") or "",
-            "ldl": nj_std.get("ldl") or "",
-            "tg": nj_std.get("tg") or "",
-            "gfr": nj_std.get("gfr") or "",
-            "creatinine": nj_std.get("creatinine") or "",
-            "ast": nj_std.get("ast") or "",
-            "alt": nj_std.get("alt") or "",
-            "ggt": nj_std.get("ggt") or "",
-            "urine_protein": nj_std.get("urine_protein") or "",
-            "chest": nj_std.get("chest") or "",
-            "judgment": nj_std.get("judgment") or "",
-        }
-
-        # 2) 표준 값이 비어 있으면 '원본'에서 백업 추출
-        #    DataHub 응답: data.INCOMELIST[] / REFERECELIST[] 등
-        def first_or_none(lst):
-            return lst[0] if isinstance(lst, list) and lst else None
-
-        d_data = nj_raw.get("data") or nj_raw.get("Data") or {}
+        d_data = (nj_raw or {}).get("data") or {}
         src_list = (
             d_data.get("INCOMELIST")
             or d_data.get("incomeList")
-            or d_data.get("REFERECELIST")
-            or d_data.get("REFLIST")
-            or d_data.get("INCOME_LIST")
+            or d_data.get("RESULTLIST")
+            or d_data.get("resultList")
             or []
         )
-        top = first_or_none(src_list)
 
-        def _patch_if_empty(key, val):
-            if not std[key] and val not in (None, ""):
-                std[key] = str(val).strip()
+        if isinstance(src_list, dict):
+            src_list = [src_list]
+        if not isinstance(src_list, list) or not src_list:
+            return {}
 
-        if top:
-            # 날짜 조합: GUNYEAR ("YYYY" 또는 "YYYY년"), GUNDATE ("MM/DD" 또는 "YYYYMMDD")
-            if not std["exam_date"]:
-                guny = str(top.get("GUNYEAR") or "").strip()
-                if guny.endswith("년"):
-                    guny = guny[:-1]
-                gund = str(top.get("GUNDATE") or "").strip().replace(".", "/").replace("-", "/")
-                y, m, d = "", "", ""
-                if len(gund) == 8 and gund.isdigit():
-                    y, m, d = gund[:4], gund[4:6], gund[6:8]
-                elif "/" in gund:
-                    parts = [p.zfill(2) for p in gund.split("/") if p]
-                    if len(parts) == 2:
-                        m, d = parts
-                        y = guny
-                    elif len(parts) == 3:
-                        y, m, d = parts
-                if y and m and d:
-                    std["exam_date"] = f"{y}-{m}-{d}"
+        def get_year(it):
+            for key in ["GUNYEAR", "EXAMYEAR", "CHECKUPYEAR"]:
+                val = str(it.get(key) or "").strip()
+                if val.isdigit():
+                    return int(val)
+            return 0
 
-            _patch_if_empty("exam_place",     top.get("GUNPLACE"))
-            _patch_if_empty("height",         top.get("HEIGHT"))
-            _patch_if_empty("weight",         top.get("WEIGHT"))
-            _patch_if_empty("bmi",            top.get("BODYMASS"))
-            _patch_if_empty("bp",             top.get("BLOODPRESS"))
-            _patch_if_empty("vision",         top.get("SIGHT"))
-            _patch_if_empty("hearing",        top.get("HEARING"))
-            _patch_if_empty("hemoglobin",     top.get("HEMOGLOBIN"))
-            _patch_if_empty("fbs",            top.get("BLOODSUGAR"))
-            _patch_if_empty("tc",             top.get("TOTCHOLESTEROL"))
-            _patch_if_empty("hdl",            top.get("HDLCHOLESTEROL"))
-            _patch_if_empty("ldl",            top.get("LDLCHOLESTEROL"))
-            _patch_if_empty("tg",             top.get("TRIGLYCERIDE"))
-            _patch_if_empty("gfr",            top.get("GFR"))
-            _patch_if_empty("creatinine",     top.get("SERUMCREATININE"))
-            _patch_if_empty("ast",            top.get("SGOT"))
-            _patch_if_empty("alt",            top.get("SGPT"))
-            _patch_if_empty("ggt",            top.get("YGPT"))
-            _patch_if_empty("urine_protein",  top.get("YODANBAK"))
-            _patch_if_empty("chest",          top.get("CHESTTROUBLE"))
-            _patch_if_empty("judgment",       top.get("JUDGMENT"))
+        latest = max(src_list, key=get_year)
+        year = str(get_year(latest))
 
-        # (과거 구조 백업) ResultList 케이스
-        if not std["exam_date"]:
-            rl = nj_raw.get("ResultList") or nj_raw.get("resultList")
-            if isinstance(rl, list) and rl:
-                std["exam_date"] = str(
-                    rl[0].get("CheckUpDate") or rl[0].get("checkUpDate") or ""
-                ).strip()
+        # 엑셀용 표준 필드 구성 (기관 제외)
+        result = {
+            "exam_year": year,
+            # 필요 시 여기에 주요 결과값 매핑
+            # 예: "혈압": latest.get("SYSTOLICBLOODPRESSURE")
+        }
 
-        return std
+        # 표준 nhis_json 값이 있으면 우선 적용
+        if nj_std:
+            result.update(nj_std)
+
+        return result
+
 
 
     def fmt(v):
@@ -1898,16 +1837,18 @@ async def dh_simple_complete(
             except:
                 pass
 
-            session.exec(sa_text("""
+            stmt = sa_text("""
                 INSERT INTO nhis_audit (respondent_id, callback_id, request_json, response_json)
                 VALUES (:rid, :cbid, :req, :res)
-            """), {
-                "rid": resp_id,
-                "cbid": cbid,
-                "req": json.dumps((request.session or {}).get("nhis_start_payload") or {}),
-                "res": json.dumps(res or {}),
-            })
+            """).bindparams(
+                rid=resp_id,
+                cbid=cbid,
+                req=json.dumps((request.session or {}).get("nhis_start_payload") or {}),
+                res=json.dumps(res or {}),
+            )
+            session.exec(stmt)
             session.commit()
+
         except Exception as e:
             print("[NHIS][AUDIT][ERR]", repr(e))
             

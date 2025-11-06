@@ -391,121 +391,42 @@ class DatahubClient:
         return self._post("/scrap/common/nhis/MedicalCheckupResult", body)
 
 
-def pick_latest_general(resp: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+
+
+def pick_latest_general(resp: dict):
     """
-    DataHub '건강검진결과 한눈에 보기' 응답에서 '최근 10년 중 가장 최신 1건'만 골라
-    서비스 표준 키로 변환해 반환.
-    기대: resp["data"]["INCOMELIST"] = [ {...}, ... ]  (키 대소/케이스 다양성 방어)
-    - 연도(GUNYEAR): "YYYY" 또는 "YYYY년" 등 문자열
-    - 일자(GUNDATE): "MM/DD" 또는 "YYYYMMDD" 혹은 "YYYY.MM.DD" / "YYYY-MM-DD"
-    - 일부 응답엔 CheckUpDate: "YYYYMMDD"
+    건강검진 결과 중 가장 최근년도(INCOMELIST 또는 RESULTLIST) 데이터만 반환
     """
+    from datetime import datetime
 
-    def _s(x) -> str:
-        return str(x or "").strip()
-
-    def _norm_year(y: str) -> str:
-        y = _s(y)
-        if y.endswith("년"):
-            y = y[:-1].strip()
-        # 숫자만 추출(문자 섞여 있어도 첫 숫자그룹 사용)
-        nums = re.findall(r"\d{4}", y)
-        return nums[0] if nums else ""
-
-    def _norm_gundate(gy: str, gd: str) -> str:
-        """
-        gy: GUNYEAR ("YYYY" 혹은 "YYYY년")
-        gd: GUNDATE ("MM/DD" or "YYYYMMDD" or "YYYY.MM.DD" or "YYYY-MM-DD")
-        -> "YYYY-MM-DD" 반환(실패 시 빈 문자열)
-        """
-        y = _norm_year(gy)
-        s = _s(gd).replace(".", "/").replace("-", "/")
-
-        # 케이스1: YYYYMMDD 순수 숫자 8자리
-        only_digits = re.fullmatch(r"\d{8}", s)
-        if only_digits:
-            yy, mm, dd = s[:4], s[4:6], s[6:8]
-            return f"{yy}-{mm}-{dd}"
-
-        # 케이스2: 슬래시 구분
-        parts = [p for p in s.split("/") if p]
-        if len(parts) == 2:
-            # MM/DD + 연도는 gy에서
-            mm = parts[0].zfill(2)
-            dd = parts[1].zfill(2)
-            if y:
-                return f"{y}-{mm}-{dd}"
-            return ""  # 연도가 없으면 불가
-        if len(parts) == 3:
-            # YYYY/MM/DD 또는 YY/MM/DD 등 → 앞은 연도로 취급
-            yy = parts[0].zfill(4)
-            mm = parts[1].zfill(2)
-            dd = parts[2].zfill(2)
-            return f"{yy}-{mm}-{dd}"
-
-        return ""
-
-    # 1) 리스트 위치/이름 방어
-    data = (resp or {}).get("data") or resp.get("Data") or {}
-    items: List[Dict[str, Any]] = (
+    data = (resp or {}).get("data") or {}
+    # 실제 검진 결과는 INCOMELIST 또는 RESULTLIST에 있음
+    items = (
         data.get("INCOMELIST")
         or data.get("incomeList")
-        or data.get("REFERECELIST")  # ✅ DataHub가 여기로 내보내는 케이스 존재
-        or data.get("REFLIST")
-        or data.get("INCOME_LIST")
+        or data.get("RESULTLIST")
+        or data.get("resultList")
         or []
     )
+
+    if isinstance(items, dict):
+        items = [items]
     if not isinstance(items, list) or not items:
         return None
 
-    # 2) 날짜 파싱 → 최신 1건 선별
-    def to_iso_date(it: Dict[str, Any]) -> str:
-        gy = _s(it.get("GUNYEAR"))
-        gd = _s(it.get("GUNDATE"))
-        iso = _norm_gundate(gy, gd)
-        if not iso:
-            # 백업: CheckUpDate가 "YYYYMMDD"로 올 수 있음
-            cud = _s(it.get("CheckUpDate"))
-            if re.fullmatch(r"\d{8}", cud):
-                iso = f"{cud[:4]}-{cud[4:6]}-{cud[6:8]}"
-        if iso:
-            return iso
-        # 정말 아무것도 없으면 연말 fallback(연도만 있을 때도 UI 정렬을 위해)
-        y = _norm_year(gy)
-        return f"{y}-12-31" if y else "0000-01-01"
+    # 문자열로 된 연도 추출 함수
+    def get_year(it):
+        for key in ["GUNYEAR", "EXAMYEAR", "CHECKUPYEAR"]:
+            val = str(it.get(key) or "").strip()
+            if val.isdigit():
+                return int(val)
+        return 0
 
-    ranked = sorted(items, key=to_iso_date, reverse=True)
-    top = ranked[0]
-    iso_date = to_iso_date(top)
+    # 가장 최근년도 항목 선택
+    latest = max(items, key=get_year)
 
-    # 3) 표준 키 매핑 (모두 문자열 타입 가정)
-    def _sv(key: str) -> str:
-        return _s(top.get(key))
-
-    mapped = {
-        "exam_date": iso_date,              # YYYY-MM-DD
-        "exam_year": _s(top.get("GUNYEAR")),
-        "exam_place": _sv("GUNPLACE"),
-        "height": _sv("HEIGHT"),
-        "weight": _sv("WEIGHT"),
-        "bmi": _sv("BODYMASS"),
-        "bp": _sv("BLOODPRESS"),            # "120/80"
-        "vision": _sv("SIGHT"),
-        "hearing": _sv("HEARING"),
-        "hemoglobin": _sv("HEMOGLOBIN"),
-        "fbs": _sv("BLOODSUGAR"),           # 공복혈당
-        "tc": _sv("TOTCHOLESTEROL"),
-        "hdl": _sv("HDLCHOLESTEROL"),
-        "ldl": _sv("LDLCHOLESTEROL"),
-        "tg": _sv("TRIGLYCERIDE"),
-        "gfr": _sv("GFR"),
-        "creatinine": _sv("SERUMCREATININE"),
-        "ast": _sv("SGOT"),
-        "alt": _sv("SGPT"),
-        "ggt": _sv("YGPT"),
-        "urine_protein": _sv("YODANBAK"),
-        "chest": _sv("CHESTTROUBLE"),
-        "judgment": _sv("JUDGMENT"),
-        "_raw": top,  # 디버깅용(필요 없으면 제거 가능)
+    # 결과 요약만 표준화해서 반환 (기관정보 제외)
+    return {
+        "exam_year": str(get_year(latest)),
+        "result_raw": latest,  # 원본 전체는 남겨둠
     }
-    return mapped
