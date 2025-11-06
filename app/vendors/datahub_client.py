@@ -430,7 +430,6 @@ def pick_latest_general(resp: dict):
     """
     건강검진 결과 중 가장 최근년도(INCOMELIST 또는 RESULTLIST) 데이터만 반환
     """
-    from datetime import datetime
 
     data = (resp or {}).get("data") or {}
     # 실제 검진 결과는 INCOMELIST 또는 RESULTLIST에 있음

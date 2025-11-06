@@ -479,7 +479,7 @@ def healthz():
 async def info_submit(
     request: Request,
     name: str = Form(...),
-    birth_date: str = Form(...),   # "YYYY-MM-DD"
+    birth_date: str = Form(...),   # "YYMMDD"
     gender: str = Form(...),       # "남" | "여"
     height_cm: str = Form(None),
     weight_kg: str = Form(None),
@@ -494,7 +494,7 @@ async def info_submit(
     try:
         bd = datetime.strptime(birth_date, "%Y-%m-%d").date()
     except:
-        return templates.TemplateResponse("error.html", {"request": request, "message": "생년월일 형식이 올바르지 않습니다(YYYY-MM-DD)."}, status_code=400)
+        return templates.TemplateResponse("error.html", {"request": request, "message": "생년월일 형식이 올바르지 않습니다(YYMMDD)."}, status_code=400)
     if gender not in ("남", "여"):
         return templates.TemplateResponse("error.html", {"request": request, "message": "성별은 남/여 중 선택해주세요."}, status_code=400)
 
@@ -672,14 +672,29 @@ def _fetch_and_save_latest_nhis(request, start_payload: dict | None = None, call
         # 콜백형: callbackId만으로 최종 결과 조회 (새 인증 절대 X)
         rsp2 = DATAHUB.post_medical_glance_simple_with_callbackid(callbackId=callback_id)
     else:
-        # 즉시형(혹은 재조회 필요 시): start payload로 직접 조회
-        loginOption   = str(start_payload.get("loginOption","")).strip()
-        telecom       = str(start_payload.get("telecom","")).strip()
-        userName      = str(start_payload.get("userName","")).strip()
-        hpNumber      = str(start_payload.get("hpNumber","")).strip()
-        # birth / juminOrBirth 어느 쪽이든 수용
-        jumin_or_birth = str(start_payload.get("juminOrBirth") or start_payload.get("birth") or "").strip()
-        telecom_gubun = telecom if loginOption == "3" and telecom else None
+        # 즉시형(혹은 재조회 필요 시): start payload로 직접 조회 (대/소문자 키 모두 지원)
+        SP = start_payload or {}
+        def gs(*keys, default=""):
+            for k in keys:
+                v = SP.get(k)
+                if v not in (None, ""):
+                    return str(v).strip()
+            return default
+
+        loginOption   = gs("LOGINOPTION", "loginOption")
+        telecom       = gs("TELECOMGUBUN", "telecom")
+        userName      = gs("USERNAME", "userName")
+        hpNumber      = gs("HPNUMBER", "hpNumber")
+
+        # birth: 대문자 JUMIN(신규) / JUMINNUM(구버전) / 소문자 대체키 모두 수용
+        jumin_or_birth = gs("JUMIN", "JUMINNUM", "juminOrBirth", "birth")
+
+        # YYMMDD 6자리로 강제
+        jumin_or_birth = re.sub(r"[^0-9]", "", jumin_or_birth or "")
+        if len(jumin_or_birth) >= 6:
+            jumin_or_birth = jumin_or_birth[-6:]
+
+        telecom_gubun = telecom if (loginOption == "3" and telecom) else None
 
         rsp2 = DATAHUB.medical_checkup_simple(
             login_option=loginOption,
@@ -687,7 +702,7 @@ def _fetch_and_save_latest_nhis(request, start_payload: dict | None = None, call
             hp_number=hpNumber,
             jumin_or_birth=jumin_or_birth,
             telecom_gubun=telecom_gubun,
-            callback_id=None,  # 즉시형 재조회는 callbackId 없이 파라미터 그대로
+            callback_id=None,
         )
 
     # 2) 최신 1건 표준화 추출 (함수 이름은 프로젝트 내 기존 것과 동일 사용)
@@ -1747,7 +1762,10 @@ async def dh_simple_start(request: Request):
     telecom      = str(payload.get("telecom","")).strip()
     userName     = str(payload.get("userName","")).strip()
     hpNumber     = str(payload.get("hpNumber","")).strip()
-    juminOrBirth = str(payload.get("juminOrBirth") or payload.get("birth") or "").strip()
+    juminOrBirth = re.sub(r"[^0-9]", "", str(payload.get("juminOrBirth") or payload.get("birth") or ""))
+    # 붙여넣기 방어: 8자리(YYYYMMDD) 오면 뒤 6자리만 유지
+    if len(juminOrBirth) >= 6:
+        juminOrBirth = juminOrBirth[-6:]
 
     telecom_gubun = telecom if loginOption == "3" and telecom else None
 
@@ -1756,7 +1774,8 @@ async def dh_simple_start(request: Request):
     if not loginOption:  missing.append("loginOption")
     if not userName:     missing.append("userName")
     if not hpNumber:     missing.append("hpNumber")
-    if not juminOrBirth: missing.append("birth(YYYYMMDD)")
+    if not juminOrBirth: missing.append("birth(YYMMDD)")
+    elif not re.fullmatch(r"\d{6}", juminOrBirth): missing.append("birth(YYMMDD 6자리)")
     if loginOption == "3" and not telecom:
         missing.append("telecom(PASS)")
     if missing:
@@ -1767,11 +1786,11 @@ async def dh_simple_start(request: Request):
         )
 
     request.session["nhis_start_payload"] = {
-        "loginOption": loginOption,
-        "telecom": telecom,
-        "userName": userName,
-        "hpNumber": hpNumber,
-        "birth": juminOrBirth,  # 또는 birth
+        "LOGINOPTION": loginOption,
+        "TELECOMGUBUN": (telecom if loginOption == "3" and telecom else ""),
+        "USERNAME": userName,
+        "HPNUMBER": hpNumber,
+        "JUMIN": juminOrBirth,  # 또는 birth
     }
 
     # 1) 시작 호출

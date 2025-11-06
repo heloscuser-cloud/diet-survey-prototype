@@ -69,10 +69,10 @@
           <input id="phone" type="tel" inputmode="numeric" placeholder="01012345678" value="{{ user_phone or '' }}">
         </div>
 <div>
-<!-- 식별값: 생년월일 8자리로 통일 -->
-<label for="birth" id="jLabel" class="block text-sm font-medium">생년월일(8자리)</label>
-<input id="birth" type="text" inputmode="numeric" placeholder="YYYYMMDD"
-       class="mt-1 w-full border rounded px-3 py-2" maxlength="8" />
+<!-- 식별값: 생년월일 6자리로 통일 -->
+<label for="birth" id="jLabel" class="block text-sm font-medium">생년월일(6자리, YYMMDD)</label>
+<input id="birth" type="text" inputmode="numeric" placeholder="YYMMDD"
+       class="mt-1 w-full border rounded px-3 py-2" maxlength="6" />
 </div>
         </div>
       </div>
@@ -132,14 +132,21 @@ function setStatus(text, cls) {
   // 입력 제한
   nameEl?.addEventListener('input', validateStartEnabled);
   phoneEl?.addEventListener('input', (e)=>{ e.target.value = onlyDigits(e.target.value).slice(0,11); validateStartEnabled(); });
-  birthEl?.addEventListener('input', (e)=>{ e.target.value = onlyDigits(e.target.value).slice(0,8);  validateStartEnabled(); });
+birthEl?.addEventListener('input', (e)=>{
+  const only = (e.target.value || '').replace(/[^0-9]/g, '');
+  // 붙여넣기 방어: 8자(YYYYMMDD) 들어오면 뒤 6자리만 보존
+  const yyMMdd = only.length > 6 ? only.slice(-6) : only.slice(0,6);
+  e.target.value = yyMMdd;
+  validateStartEnabled();
+});
+
 
   function validateStartEnabled(){
     const opt    = loginSel?.value || '';
     const isPASS = (opt === '3');
     const nameOk  = !!(nameEl?.value || '').trim();
     const phoneOk = onlyDigits(phoneEl?.value).length >= 10;
-    const birthOk = onlyDigits(birthEl?.value).length === 8;
+const birthOk = onlyDigits(birthEl?.value).length === 6;
     const telOk   = !isPASS || !!(telecomSel?.value || '');
     btnStart.disabled = !(opt && nameOk && phoneOk && birthOk && telOk);
   }
@@ -156,7 +163,9 @@ btnStart.addEventListener('click', async () => {
   const telecom     = telecomSel.value;    // "1"/"2"/"3" (PASS일 때만 사용)
   const name        = $('#name').value.trim();
   const phone       = $('#phone').value.trim();
-  const birth       = $('#birth').value.trim();  // 8자리(YYYYMMDD)
+// 항상 6자리(YYMMDD)로 보냄. 8자 붙여넣으면 뒤 6자리만 사용
+const birthRaw = $('#birth').value.trim();
+const birth = (birthRaw || '').replace(/[^0-9]/g,'').slice(-6);
 
   if (!loginOption) { alert('간편인증 수단을 선택하세요.'); return; }
   if (loginOption === '3' && !telecom) { alert('통신사를 선택하세요.'); return; }
