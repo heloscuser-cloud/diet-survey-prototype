@@ -1716,14 +1716,22 @@ async def dh_simple_start(
     elif not re.fullmatch(r"\d{6}", juminOrBirth):     missing.append("birth(YYMMDD 6자리)")
     # 통신사(PASS)일 때만 요구
     if loginOption == "3" and not telecom:
-        missing.append("telecom(PASS: SKT|KT|LGU+ 등)")
+        missing.append("telecom(PASS: 1~6, SKT|KT|LGU+ 등)")
 
     if missing:
         logging.warning("[DH-START][VALIDATION] missing=%s", missing)
         return JSONResponse({"result":"FAIL","message":"필수 입력 누락","missing":missing}, status_code=400)
 
-    # hpNumber: 숫자만
-    hpNumber     = re.sub(r"[^0-9]", "", hpNumber)
+    # hpNumber: 숫자만, 하이픈 추가
+    def _format_hp(num: str) -> str:
+        d = re.sub(r'[^0-9]', '', num or '')
+        if len(d) == 10:
+            return re.sub(r'^(\d{3})(\d{3})(\d{4})$', r'\1-\2-\3', d)
+        if len(d) == 11:
+            return re.sub(r'^(\d{3})(\d{4})(\d{4})$', r'\1-\2-\3', d)
+        return num or ''
+
+    hpNumber = _format_hp(hpNumber)
 
     # 콜백형 강제 규격 (LOGINOPTION 0~7 지원)
     dh_body = {

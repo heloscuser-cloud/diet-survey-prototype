@@ -55,9 +55,12 @@
           <label>통신사(PASS 선택 시)</label>
           <select id="telecom" class="mt-1 w-full border rounded px-3 py-2" disabled>
             <option value="" selected>-- 통신사 선택 --</option>
-            <option value="1">SKT</option>
-            <option value="2">KT</option>
-            <option value="3">LGU+</option>
+<option value="1">KT</option>
+<option value="2">SKT</option>
+<option value="3">LG</option>
+<option value="4">KT알뜰폰</option>
+<option value="5">SKT알뜰폰</option>
+<option value="6">LG알뜰폰</option>
           </select>
         </div>
         <div>
@@ -121,11 +124,19 @@ function setStatus(text, cls) {
   const onlyDigits = v => (v||'').replace(/[^0-9]/g, '');
 
   // UI 토글: PASS(3)일 때만 통신사 선택 required
-  function applyInputRule(){
-    const isPASS = (loginSel.value === '3');
-    telecomRow.style.display = isPASS ? 'block' : 'none';
-    validateStartEnabled();
+function applyInputRule(){
+  const isPASS = (loginSel.value === '3');
+  telecomRow.style.display = isPASS ? 'block' : 'none';
+  if (telecomSel) {
+    if (isPASS) {
+      telecomSel.disabled = false;
+    } else {
+      telecomSel.value = '';
+      telecomSel.disabled = true;
+    }
   }
+  validateStartEnabled();
+}
   loginSel?.addEventListener('change', applyInputRule);
   telecomSel?.addEventListener('change', validateStartEnabled);
 
@@ -159,17 +170,23 @@ const birthOk = onlyDigits(birthEl?.value).length === 6;
 btnStart.addEventListener('click', async () => {
   if (gStartDone) return; // 중복 방지
 
+function formatKoreanMobile(num){
+  const d = (num || '').replace(/[^0-9]/g,'');
+  if (d.length === 10) return d.replace(/^(\d{3})(\d{3})(\d{4})$/, '$1-$2-$3');
+  if (d.length === 11) return d.replace(/^(\d{3})(\d{4})(\d{4})$/, '$1-$2-$3');
+  return num; // 길이가 애매하면 원본 유지
+}
   const loginOption = loginSel.value;      // "0"~"7"
-  const telecom     = telecomSel.value;    // "1"/"2"/"3" (PASS일 때만 사용)
+  const telecom     = telecomSel.value;    // (PASS일 때만 사용)
   const name        = $('#name').value.trim();
-  const phone       = $('#phone').value.trim();
+ const phone       = formatKoreanMobile($('#phone').value.trim());
 // 항상 6자리(YYMMDD)로 보냄. 8자 붙여넣으면 뒤 6자리만 사용
 const birthRaw = $('#birth').value.trim();
 const birth = (birthRaw || '').replace(/[^0-9]/g,'').slice(-6);
 
   if (!loginOption) { alert('간편인증 수단을 선택하세요.'); return; }
   if (loginOption === '3' && !telecom) { alert('통신사를 선택하세요.'); return; }
-  if (!name || !phone || !birth) { alert('이름/휴대폰/생년월일(8자리)을 입력하세요.'); return; }
+  if (!name || !phone || !birth) { alert('이름/휴대폰/생년월일(6자리 YYMMDD)을 입력하세요.'); return; }
 
   setStatus('간편인증 요청 전송 중...');
   btnStart.disabled = true;
