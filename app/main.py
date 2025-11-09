@@ -1713,7 +1713,7 @@ async def dh_simple_start(
     if not userName:                                   missing.append("userName")
     if not hpNumber:                                   missing.append("hpNumber")
     if not juminOrBirth:                               missing.append("birth(YYMMDD)")
-    elif not re.fullmatch(r"\d{6}", juminOrBirth):     missing.append("birth(YYMMDD 6자리)")
+    elif not re.fullmatch(r"\d{8}", juminOrBirth):     missing.append("birth(YYMMDD 6자리)") #잠시 8자리로 바꿈
     # 통신사(PASS)일 때만 요구
     if loginOption == "3" and not telecom:
         missing.append("telecom(PASS: 1~6, SKT|KT|LGU+ 등)")
