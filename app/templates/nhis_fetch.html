@@ -146,7 +146,7 @@ function applyInputRule(){
 birthEl?.addEventListener('input', (e)=>{
   const only = (e.target.value || '').replace(/[^0-9]/g, '');
   // 붙여넣기 방어: 8자(YYYYMMDD) 들어오면 뒤 6자리만 보존
-  const yyMMdd = only.length > 6 ? only.slice(-8) : only.slice(0,8);
+  const yyMMdd = only.length > 8 ? only.slice(-8) : only.slice(0,8);
   e.target.value = yyMMdd;
   validateStartEnabled();
 });
