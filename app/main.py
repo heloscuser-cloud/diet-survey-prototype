@@ -1747,7 +1747,7 @@ async def dh_simple_start(
         user_name=dh_body["USERNAME"],
         hp_number=dh_body["HPNUMBER"],
         jumin_or_birth=dh_body["JUMIN"],
-        telecom_gubun=(dh_body["TELECOMGUBUN"] or None),
+        telecom_gubun=dh_body.get("TELECOMGUBUN"),
     )
 
 
