@@ -1702,8 +1702,8 @@ async def dh_simple_start(
     juminOrBirth = re.sub(r"[^0-9]", "", str(payload.get("juminOrBirth") or payload.get("birth") or ""))
 
     # 6자리 YYMMDD로 강제
-    if len(juminOrBirth) >= 6:
-        juminOrBirth = juminOrBirth[-6:]
+    #if len(juminOrBirth) >= 6:
+    #    juminOrBirth = juminOrBirth[-6:]
 
     # ✅ LOGINOPTION 허용값: 0~7
     allowed = {"0","1","2","3","4","5","6","7"}
