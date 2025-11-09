@@ -340,8 +340,9 @@ class DatahubClient:
             "USERNAME":     user_name,
             "HPNUMBER":     hp_number,
             "JUMIN":        encrypt_field(jumin_or_birth),  # ★ 반드시 암호화해서 보냄
-            "TELECOMGUBUN": (telecom_gubun if str(login_option) == "3" and telecom_gubun else ""),
         }
+        if str(login_option) == "3" and telecom_gubun:
+             body["TELECOMGUBUN"] = telecom_gubun  # 1~6 숫자코드
         return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", body, timeout=(5,25))
 
 

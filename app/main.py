@@ -1722,25 +1722,18 @@ async def dh_simple_start(
         logging.warning("[DH-START][VALIDATION] missing=%s", missing)
         return JSONResponse({"result":"FAIL","message":"필수 입력 누락","missing":missing}, status_code=400)
 
-    # hpNumber: 숫자만, 하이픈 추가
-    def _format_hp(num: str) -> str:
-        d = re.sub(r'[^0-9]', '', num or '')
-        if len(d) == 10:
-            return re.sub(r'^(\d{3})(\d{3})(\d{4})$', r'\1-\2-\3', d)
-        if len(d) == 11:
-            return re.sub(r'^(\d{3})(\d{4})(\d{4})$', r'\1-\2-\3', d)
-        return num or ''
-
-    hpNumber = _format_hp(hpNumber)
+    # hpNumber: 숫자만, 하이픈 없음
+    hpNumber = re.sub(r'[^0-9]', '', hpNumber or '')
 
     # 콜백형 강제 규격 (LOGINOPTION 0~7 지원)
     dh_body = {
-        "LOGINOPTION":   loginOption,                          # "0"~"7" 문자열
-        "TELECOMGUBUN":  (telecom if loginOption == "3" else ""),  # 3(PASS)만 값, 나머지는 ""
-        "HPNUMBER":      hpNumber,
-        "USERNAME":      userName,
-        "JUMIN":         juminOrBirth,                         # YYMMDD(6)
+        "LOGINOPTION": loginOption,
+        "HPNUMBER":    hpNumber,
+        "USERNAME":    userName,
+        "JUMIN":       juminOrBirth,
     }
+    if loginOption == "3" and telecom:
+        dh_body["TELECOMGUBUN"] = telecom  # 1~6
     
     # (선택) 민감값 마스킹 로그
     _safe = {**dh_body, "HPNUMBER":"***", "JUMIN":"***"}
