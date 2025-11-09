@@ -170,14 +170,15 @@ const birthOk = onlyDigits(birthEl?.value).length === 6;
 btnStart.addEventListener('click', async () => {
   if (gStartDone) return; // 중복 방지
 
-}
-  const loginOption = loginSel.value;      // "0"~"7"
-  const telecom     = telecomSel.value;    // (PASS일 때만 사용)
-  const name        = $('#name').value.trim();
- const phone       = $('#phone').value.trim());
-// 항상 6자리(YYMMDD)로 보냄. 8자 붙여넣으면 뒤 6자리만 사용
-const birthRaw = $('#birth').value.trim();
-const birth = (birthRaw || '').replace(/[^0-9]/g,'').slice(-6);
+  const loginOption = loginSel.value.trim();     // "0"~"7"
+  const telecomRaw  = (telecomSel?.value || '').trim();
+  const telecom     = (loginOption === '3') ? telecomRaw : ''; // PASS일 때만 1~6, 아니면 공백
+
+  const name  = $('#name').value.trim();
+  const phone = onlyDigits($('#phone').value).slice(0, 11);    // 휴대폰번호 숫자만
+  // 항상 6자리(YYMMDD)로 보냄. 8자 붙여넣으면 뒤 6자리만 사용
+  const birthRaw = $('#birth').value.trim();
+  const birth    = (birthRaw || '').replace(/[^0-9]/g,'').slice(-6);
 
   if (!loginOption) { alert('간편인증 수단을 선택하세요.'); return; }
   if (loginOption === '3' && !telecom) { alert('통신사를 선택하세요.'); return; }
@@ -192,9 +193,9 @@ const birth = (birthRaw || '').replace(/[^0-9]/g,'').slice(-6);
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({
         loginOption,
-        telecom,
+        telecom,          // PASS가 아니면 공백 문자열
         userName: name,
-        hpNumber: phone,
+        hpNumber: phone,  // 숫자만
         birth
       })
     });
@@ -203,28 +204,26 @@ const birth = (birthRaw || '').replace(/[^0-9]/g,'').slice(-6);
     console.log('[DH][start]', rsp.status, data);
 
     if (!rsp.ok) {
-      // 4xx/5xx
       btnStart.disabled = false;
       gStartDone = false;
       setStatus('간편인증 시작 실패: ' + (data?.message || '오류'), 'err');
       return;
     }
 
-    // 2) 콜백형(0001) → callbackId 필요
-  // 콜백형: 인증 대기 → 완료 버튼 활성화
-if (data.errCode === "0001" && data.data && data.data.callbackId) {
-  callbackId = data.data.callbackId;
-gStartDone = true;
-  setStatus('간편인증 요청 전송 성공. 스마트폰에서 인증 완료 후 "인증완료" 버튼을 누르세요.', 'ok');
-  btnComplete.disabled = false;
-  return;
-}
+    // 콜백형: 인증 대기 → 완료 버튼 활성화
+    if (data.errCode === "0001" && data.data && data.data.callbackId) {
+      callbackId = data.data.callbackId;
+      gStartDone = true;
+      setStatus('간편인증 요청 전송 성공. 스마트폰에서 인증 완료 후 "인증완료" 버튼을 누르세요.', 'ok');
+      btnComplete.disabled = false;
+      return;
+    }
 
-    // 그 외 에러
+    // 그 외는 실패로 처리 (0000 포함)
     btnStart.disabled = false;
     gStartDone = false;
-alert('간편인증 시작 실패: ' + (data.message || data.errCode));
-setStatus('간편인증 시작 실패', 'err');
+    alert('간편인증 시작 실패: ' + (data.message || data.errCode || '오류'));
+    setStatus('간편인증 시작 실패', 'err');
 
   } catch (e) {
     console.error(e);
