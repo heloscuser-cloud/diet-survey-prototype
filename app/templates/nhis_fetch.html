@@ -157,7 +157,7 @@ birthEl?.addEventListener('input', (e)=>{
     const isPASS = (opt === '3');
     const nameOk  = !!(nameEl?.value || '').trim();
     const phoneOk = onlyDigits(phoneEl?.value).length >= 9;
-const birthOk = onlyDigits(birthEl?.value).length === 6;
+const birthOk = onlyDigits(birthEl?.value).length === 8;
     const telOk   = !isPASS || !!(telecomSel?.value || '');
     btnStart.disabled = !(opt && nameOk && phoneOk && birthOk && telOk);
   }
