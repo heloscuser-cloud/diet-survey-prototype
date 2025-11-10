@@ -296,15 +296,30 @@ def on_startup():
     init_db()
 
 
+# --- NHIS 저장 헬퍼 (rtoken 없이 rid가 확실할 때) ---
+def _save_nhis_to_db_with_id(session, respondent_id: int, picked: dict, raw: dict):
+    try:
+        from sqlalchemy import text as sa_text
+        stmt = sa_text("""
+            UPDATE surveyresponse
+               SET nhis_json = :js,
+                   nhis_raw  = :raw
+             WHERE respondent_id = :rid
+        """).bindparams(
+            rid=respondent_id,
+            js=json.dumps(picked or {}, ensure_ascii=False),
+            raw=json.dumps(raw or {}, ensure_ascii=False),
+        )
+        session.exec(stmt)
+        session.commit()
+        logging.info("[NHIS][DB] saved-by-id rid=%s (json=%s, raw=%s)",
+                     respondent_id, bool(picked), bool(raw))
+    except Exception as e:
+        logging.error("[NHIS][DB][ERR][by-id] %r", e)
 
-# --- NHIS 저장 헬퍼 ---
+
+# --- NHIS 저장 헬퍼 (rtoken으로 rid 복구 시도) ---
 def _save_nhis_to_db(session, request, picked: dict, raw: dict):
-    """
-    surveyresponse.nhis_json / nhis_raw 컬럼에 저장
-    - respondent_id는 rtoken 쿠키/쿼리에서 복구
-    - picked: 표준화 소형 dict (엑셀 병합용)
-    - raw   : 원문 전체 응답 (감사/추후 분석용)
-    """
     try:
         rid = None
         try:
@@ -319,21 +334,7 @@ def _save_nhis_to_db(session, request, picked: dict, raw: dict):
             logging.info("[NHIS][DB] skip save: no respondent_id")
             return
 
-        from sqlalchemy import text as sa_text
-        stmt = sa_text("""
-            UPDATE surveyresponse
-               SET nhis_json = :js,
-                   nhis_raw  = :raw
-             WHERE respondent_id = :rid
-        """).bindparams(
-            rid=rid,
-            js=json.dumps(picked or {}, ensure_ascii=False),
-            raw=json.dumps(raw or {}, ensure_ascii=False),
-        )
-        session.exec(stmt)
-        session.commit()
-        logging.info("[NHIS][DB] saved for respondent_id=%s (json=%s, raw=%s)",
-                     rid, bool(picked), bool(raw))
+        _save_nhis_to_db_with_id(session, rid, picked, raw)
     except Exception as e:
         logging.error("[NHIS][DB][ERR] %r", e)
 
@@ -1333,6 +1334,20 @@ def survey_finish(
             status_code=401,
         )
 
+    # === NHIS 임시 보관분이 있으면, 지금 rid로 확정 저장 ===
+    try:
+        picked_tmp = (request.session or {}).get("nhis_latest") or {}
+        raw_tmp    = (request.session or {}).get("nhis_raw") or {}
+        if picked_tmp or raw_tmp:
+            _save_nhis_to_db_with_id(session, respondent_id, picked_tmp, raw_tmp)
+            # 원하면 임시 세션 비우기
+            request.session.pop("nhis_latest", None)
+            request.session.pop("nhis_raw", None)
+            logging.info("[NHIS][FINISH] persisted from session for rid=%s", respondent_id)
+    except Exception as e:
+        logging.error("[NHIS][FINISH][ERR] %r", e)
+
+        
     # NHIS(국가검진) 최신 결과 세션에서 꺼내기
     nhis_latest = (request.session or {}).get("nhis_latest")
     stmt_raw = sa_text("""
@@ -1921,10 +1936,13 @@ async def dh_simple_complete(
             picked = pick_latest_general(step2_res, mode=("all" if want_all else "latest"))
             request.session["nhis_latest"] = picked if isinstance(picked, dict) else {}
 
-            # ★ NHIS결과 DB 저장 (엑셀 병합용) — DB에는 '최근1건' 표준값 + 원문 저장
+            # ★ NHIS결과 DB 저장 (엑셀 병합용)
             try:
                 picked_one = pick_latest_general(step2_res, mode="latest")
                 _save_nhis_to_db(session, request, picked_one, step2_res)
+                # 저장이 스킵될 수도 있으니 세션에도 임시 보관
+                request.session["nhis_latest"] = picked_one or {}
+                request.session["nhis_raw"]    = step2_res or {}
             except Exception as e:
                 print("[NHIS][DB][WARN][captcha-save]", repr(e))
 
@@ -1987,8 +2005,12 @@ async def dh_simple_complete(
             try:
                 picked_one = pick_latest_general(rsp2, mode="latest")
                 _save_nhis_to_db(session, request, picked_one, rsp2)
+                # 저장이 스킵될 수도 있으니 세션에도 임시 보관
+                request.session["nhis_latest"] = picked_one or {}
+                request.session["nhis_raw"]    = rsp2 or {}
             except Exception as e:
                 print("[NHIS][DB][WARN][fetch-save]", repr(e))
+
 
             return JSONResponse({"ok": True, "errCode": "0000", "message": "OK", "data": picked}, status_code=200)
 
