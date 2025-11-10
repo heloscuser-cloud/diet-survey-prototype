@@ -77,6 +77,15 @@
 <input id="birth" type="text" inputmode="numeric" placeholder="YYYYMMDD"
        class="mt-1 w-full border rounded px-3 py-2" maxlength="8" />
 </div>
+<!-- 성별 선택 (인증에는 미사용, 저장용) -->
+<div class="row-inline" style="margin-top:8px">
+  <label style="display:inline-flex;align-items:center;gap:6px">
+    <input type="radio" name="pre_gender" value="남" /> <span>남</span>
+  </label>
+  <label style="display:inline-flex;align-items:center;gap:6px">
+    <input type="radio" name="pre_gender" value="여" /> <span>여</span>
+  </label>
+</div>
         </div>
       </div>
     </div>
@@ -185,16 +194,15 @@ btnStart.addEventListener('click', async () => {
   btnStart.disabled = true;
 
   try {
-    const rsp = await fetch('/api/dh/simple/start', {
-      method: 'POST',
+    const gEl = document.querySelector('input[name="pre_gender"]:checked');
+    const preGender = gEl ? gEl.value : "";  // '남' 또는 '여' 또는 빈값
+
+    const rsp = await fetch('/api/dh/simple/complete?all=1', {
+      method:'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        loginOption,
-        telecom,          // PASS가 아니면 공백 문자열
-        userName: name,
-        hpNumber: phone,  // 숫자만
-        birth
-      })
+      body: JSON.stringify(
+        callbackId ? { callbackId, gender: preGender } : { gender: preGender }
+      )
     });
 
     const data = await rsp.json();
@@ -252,7 +260,7 @@ btnComplete.addEventListener('click', async () => {
 
     if (rsp.status === 200 && data && data.ok) {
       setStatus('인증 및 데이터 수집 완료! 다음 단계로 이동합니다.', 'ok');
-      window.location.href = nextUrlEl.value || '/info';
+      window.location.href = '/survey';
       return true;
     }
     if (rsp.status === 202) {
