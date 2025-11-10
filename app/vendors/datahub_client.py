@@ -233,8 +233,6 @@ def encrypt_field(plain: str) -> str:
     return base64.b64encode(cipher.encrypt(data)).decode("ascii")
 
 
-
-
 def _crypto_selftest():
     """
     포털에서 준 Plain/EncData 쌍으로 '정답'을 맞출 수 있는지 테스트.
@@ -255,6 +253,57 @@ def _crypto_selftest():
     except Exception as e:
         print("[ENC][SELFTEST][ERR]", repr(e))
 
+
+    def pick_latest_general(resp: dict, mode: str = "latest"):
+        """
+        mode:
+        - "latest": 기존 동작 (가장 최근 1건)
+        - "all":    필터 없이 INCOMELIST 전체 반환 (연도 내림차순 정렬 시도)
+        """
+        data = (resp or {}).get("data") or {}
+        income = data.get("INCOMELIST") or data.get("INCOME_LIST") or []
+
+        # === 전체 그대로 반환 (테스트/진단용) ===
+        if mode == "all":
+            def _year_of(row):
+                for k in ("EXAMYEAR","GUNYEAR","YEAR","YY"):
+                    v = row.get(k)
+                    if isinstance(v, str) and v.isdigit(): return int(v)
+                    if isinstance(v, int): return v
+                for k in ("EXAMDATE","EXAM_DATE","검진일자","exam_date"):
+                    v = row.get(k)
+                    if isinstance(v, str) and len(v) >= 4 and v[:4].isdigit():
+                        return int(v[:4])
+                return -1
+            items = list(income) if isinstance(income, list) else []
+            try:
+                items.sort(key=_year_of, reverse=True)
+            except Exception:
+                pass
+            return {"items": items, "count": len(items), "keys": list(data.keys())}
+
+        # === 최근 1건 선택 ===
+        latest = None
+        best_year = -1
+        def _year_of(row):
+            for k in ("EXAMYEAR","GUNYEAR","YEAR","YY"):
+                v = row.get(k)
+                if isinstance(v, str) and v.isdigit(): return int(v)
+                if isinstance(v, int): return v
+            for k in ("EXAMDATE","EXAM_DATE","검진일자","exam_date"):
+                v = row.get(k)
+                if isinstance(v, str) and len(v) >= 4 and v[:4].isdigit():
+                    return int(v[:4])
+            return -1
+
+        if isinstance(income, list):
+            for row in income:
+                yr = _year_of(row)
+                if yr > best_year:
+                    best_year = yr
+                    latest = row
+
+        return latest or {}
 
 
 class DatahubClient:
@@ -386,58 +435,6 @@ class DatahubClient:
             "P_SIGNPRI_KEY": key_b64,              # BASE64
         }
         return self._post("/scrap/common/nhis/MedicalCheckupResult", body)
-
-
-    def pick_latest_general(resp: dict, mode: str = "latest"):
-        """
-        mode:
-        - "latest": 기존 동작 (가장 최근 1건)
-        - "all":    필터 없이 INCOMELIST 전체 반환 (연도 내림차순 정렬 시도)
-        """
-        data = (resp or {}).get("data") or {}
-        income = data.get("INCOMELIST") or data.get("INCOME_LIST") or []
-
-        # === 전체 그대로 반환 (테스트/진단용) ===
-        if mode == "all":
-            def _year_of(row):
-                for k in ("EXAMYEAR","GUNYEAR","YEAR","YY"):
-                    v = row.get(k)
-                    if isinstance(v, str) and v.isdigit(): return int(v)
-                    if isinstance(v, int): return v
-                for k in ("EXAMDATE","EXAM_DATE","검진일자","exam_date"):
-                    v = row.get(k)
-                    if isinstance(v, str) and len(v) >= 4 and v[:4].isdigit():
-                        return int(v[:4])
-                return -1
-            items = list(income) if isinstance(income, list) else []
-            try:
-                items.sort(key=_year_of, reverse=True)
-            except Exception:
-                pass
-            return {"items": items, "count": len(items), "keys": list(data.keys())}
-
-        # === 최근 1건 선택 ===
-        latest = None
-        best_year = -1
-        def _year_of(row):
-            for k in ("EXAMYEAR","GUNYEAR","YEAR","YY"):
-                v = row.get(k)
-                if isinstance(v, str) and v.isdigit(): return int(v)
-                if isinstance(v, int): return v
-            for k in ("EXAMDATE","EXAM_DATE","검진일자","exam_date"):
-                v = row.get(k)
-                if isinstance(v, str) and len(v) >= 4 and v[:4].isdigit():
-                    return int(v[:4])
-            return -1
-
-        if isinstance(income, list):
-            for row in income:
-                yr = _year_of(row)
-                if yr > best_year:
-                    best_year = yr
-                    latest = row
-
-        return latest or {}
 
 
     # 보강 재조회

@@ -4,7 +4,6 @@ from fastapi import (
     APIRouter, BackgroundTasks
 )
 from fastapi.staticfiles import StaticFiles
-from app.vendors.datahub_client import encrypt_field
 import re
 from fastapi.templating import Jinja2Templates
 from fastapi.routing import APIRoute
@@ -42,9 +41,9 @@ import secrets
 import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from app.vendors.datahub_client import DatahubClient, DatahubError
 import logging, pathlib
-from app.vendors.datahub_client import pick_latest_general, _crypto_selftest, encrypt_field, medical_checkup_simple_with_identity
+from app.vendors.datahub_client import DatahubClient, DatahubError, encrypt_field, _crypto_selftest, pick_latest_general
+
 
 # ★ 로그 설정(강제적용)
 logging.basicConfig(
