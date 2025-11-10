@@ -421,7 +421,7 @@ class DatahubClient:
         }
 
         # Step2는 짧은 읽기 타임아웃
-        return self._post("/scrap/captcha", body, timeout=(5, 5))
+        return self._post("/scrap/captcha", body, timeout=(5, 25))
 
 
 
