@@ -1334,90 +1334,55 @@ def survey_finish(
             status_code=401,
         )
 
-    # === NHIS 최종 반영: 세션에 있는 '작은 값' + nhis_audit 원문을 합쳐 surveyresponse에 저장 ===
+    # === NHIS 최종 수집: 세션의 '작은 값'(picked_tmp) + nhis_audit 원문(raw_from_audit) ===
     try:
         import json
         from sqlalchemy import text as sa_text
 
-        # 1) 세션의 작은 결과(없으면 빈 dict)
         picked_tmp = (request.session or {}).get("nhis_latest") or {}
 
-        # 2) 원문은 nhis_audit에서 끌어온다.
-        #    기준1: 가장 최근 callback_id의 응답
+        # 1순위: 이번 세션의 callbackId로 감사로그에서 가장 최근 원문
         cbid = (request.session or {}).get("nhis_callback_id")
         raw_from_audit = None
-
         if cbid:
-            stmt = sa_text("""
+            row = session.exec(sa_text("""
                 SELECT response_json
-                FROM nhis_audit
-                WHERE callback_id = :cbid
-                ORDER BY id DESC
-                LIMIT 1
-            """).bindparams(cbid=cbid)
-            row = session.exec(stmt).first()
+                  FROM nhis_audit
+                 WHERE callback_id = :cbid
+                 ORDER BY id DESC
+                 LIMIT 1
+            """).bindparams(cbid=cbid)).first()
             if row:
                 raw_from_audit = row[0]
 
-        # 기준2(보강): respondent_id가 이미 채워진 감사로그 중 최근 1건
+        # 2순위: respondent_id로 최근 감사로그
         if raw_from_audit is None:
-            stmt2 = sa_text("""
+            row2 = session.exec(sa_text("""
                 SELECT response_json
-                FROM nhis_audit
-                WHERE respondent_id = :rid
-                ORDER BY id DESC
-                LIMIT 1
-            """).bindparams(rid=respondent_id)
-            row2 = session.exec(stmt2).first()
+                  FROM nhis_audit
+                 WHERE respondent_id = :rid
+                 ORDER BY id DESC
+                 LIMIT 1
+            """).bindparams(rid=respondent_id)).first()
             if row2:
                 raw_from_audit = row2[0]
 
-        # 3) DB에 최종 저장
-        #    - nhis_json: '최근 1건' 표준화 결과가 들어가야 export가 붙음
-        #    - nhis_raw : 전체 원문 (감사/추후 분석용)
-        if picked_tmp or raw_from_audit:
-            # 표준값이 세션에 없다면, raw_from_audit로 계산해서 만들어준다.
-            if not picked_tmp and raw_from_audit:
-                try:
-                    picked_tmp = pick_latest_general(raw_from_audit, mode="latest")
-                except Exception:
-                    picked_tmp = {}
+        # 표준값이 비어있고 원문이 있으면, 원문으로부터 '최근 1건' 표준화 생성
+        if (not picked_tmp) and raw_from_audit:
+            try:
+                picked_tmp = pick_latest_general(raw_from_audit, mode="latest")
+            except Exception:
+                picked_tmp = {}
 
-            stmt_up = sa_text("""
-                UPDATE surveyresponse
-                SET nhis_json = :js,
-                    nhis_raw  = :raw
-                WHERE respondent_id = :rid
-            """).bindparams(
-                rid=respondent_id,
-                js=json.dumps(picked_tmp or {}, ensure_ascii=False),
-                raw=json.dumps(raw_from_audit or {}, ensure_ascii=False),
-            )
-            session.exec(stmt_up)
-            session.commit()
-            logging.info("[NHIS][FINISH] persisted rid=%s (json=%s, raw=%s)",
-                        respondent_id, bool(picked_tmp), bool(raw_from_audit))
-        else:
-            logging.info("[NHIS][FINISH] nothing to persist (rid=%s)", respondent_id)
+        # 이후 로직에서 사용할 이름으로 통일
+        nhis_latest = picked_tmp or {}
+        nhis_raw    = raw_from_audit or {}
 
     except Exception as e:
-        logging.error("[NHIS][FINISH][ERR] %r", e)
+        logging.error("[NHIS][FINISH][ERR-prep] %r", e)
+        nhis_latest, nhis_raw = {}, {}
 
-
-        
-    # NHIS(국가검진) 최신 결과 세션에서 꺼내기
-    nhis_latest = (request.session or {}).get("nhis_latest")
-    stmt_raw = sa_text("""
-        SELECT response_json
-        FROM nhis_audit
-        WHERE respondent_id = :rid
-        ORDER BY id DESC
-        LIMIT 1
-    """).bindparams(rid=respondent_id)
-
-    row = session.exec(stmt_raw).first()
-    nhis_raw = row[0] if row else None
-    
+    # ────────────────────────────────────────────────────────────────
     # 응답 폼(acc) 파싱
     try:
         acc_obj = json.loads(acc) if acc else {}
@@ -1453,23 +1418,32 @@ def survey_finish(
     if nhis_latest:
         normalized_payload["nhis"] = nhis_latest
 
-    # 응답자 조회
+    # 응답자/사용자 조회 (인적사항)
     resp = session.get(Respondent, respondent_id)
+    user = session.get(User, resp.user_id) if resp and resp.user_id else None
 
-    # SurveyResponse 생성
+    def calc_age(bd, ref_date):
+        if not bd:
+            return ""
+        return ref_date.year - bd.year - ((ref_date.month, ref_date.day) < (bd.month, bd.day))
+
+    today = now_kst().date()
+    name = (resp.applicant_name if resp and resp.applicant_name else (user.name_enc if user and user.name_enc else "")) or ""
+    bd = resp.birth_date if (resp and resp.birth_date) else (getattr(user, "birth_date", None) if user else None)
+    age = calc_age(bd, today) if bd else ""
+    gender = (resp.gender if resp and resp.gender else (user.gender if user and user.gender else "")) or ""
+    height = (getattr(resp, "height_cm", None) if resp else None) or (getattr(user, "height_cm", None) if user else None)
+    weight = (getattr(resp, "weight_kg", None) if resp else None) or (getattr(user, "weight_kg", None) if user else None)
+
+    # SurveyResponse 생성 (이번 제출 레코드에 NHIS를 '직접' 저장)
     sr = SurveyResponse(
         respondent_id=respondent_id,
         answers_json=json.dumps(normalized_payload, ensure_ascii=False),
         score=None,
-        submitted_at=now_kst(),       # ✅ 핵심 추가
-        nhis_json=nhis_latest,        # DB jsonb면 dict 그대로 저장됨
-        nhis_raw=nhis_raw,
+        submitted_at=now_kst(),
+        nhis_json=nhis_latest,   # 표준화된 작은 dict
+        nhis_raw=nhis_raw,       # 원문 전체
     )
-    
-    # nhis_raw 슬림화 (원본 보존이 덜 중요할 때만)
-    if isinstance(nhis_raw, dict):
-        nhis_raw = {"data": nhis_raw.get("data")}
-    
     session.add(sr)
     if resp:
         resp.status = "submitted"
@@ -1484,24 +1458,18 @@ def survey_finish(
         session.add(resp)
         session.commit()
         session.refresh(resp)
-    
-    # 건강검진 데이터 임시로그
-    print(
-        "[NHIS][SAVE]",
-        "latest_keys=", list((nhis_latest or {}).keys()) if isinstance(nhis_latest, dict) else type(nhis_latest),
-    )
-
 
     # 건강검진 데이터 임시로그
     try:
-        print("[NHIS][SAVE] latest:",
-            (nhis_latest or {}).get("exam_date"),
-            "| has_latest:", bool(nhis_latest))
+        print("[NHIS][SAVE] latest_keys=", list((nhis_latest or {}).keys()) if isinstance(nhis_latest, dict) else type(nhis_latest))
     except Exception as e:
-        print("[NHIS][SAVE][WARN]", repr(e))
+        print("[NHIS][SAVE][WARN1]", repr(e))
+    try:
+        print("[NHIS][SAVE] exam_year=", (nhis_latest or {}).get("exam_year"), "| has_latest:", bool(nhis_latest))
+    except Exception as e:
+        print("[NHIS][SAVE][WARN2]", repr(e))
 
     # ── 알림메일 비동기 발송 ───────────────────────────────
-    user = session.get(User, resp.user_id) if resp else None
     try:
         applicant_name = (
             (resp.applicant_name or (user.name_enc if user else ""))
@@ -1521,7 +1489,7 @@ def survey_finish(
     except Exception as e:
         print("[EMAIL][ERR]", repr(e))
 
-    # 세션 정리
+    # 세션 정리 (작은 dict만 보관했었다면 이제 비워도 OK)
     request.session.pop("nhis_latest", None)
     request.session.pop("nhis_raw", None)
 
@@ -1534,6 +1502,8 @@ def survey_finish(
         secure=bool(int(os.getenv("SECURE_COOKIE","1"))),
     )
     return response
+
+
 
 
 @app.post("/admin/responses/export.xlsx")
@@ -1558,63 +1528,93 @@ async def admin_export_xlsx(
         except Exception:
             return {}
 
-
-    def nhis_extract_all(nj_std: dict, nj_raw: dict):
+    def nhis_extract_all(nhis_json: dict | None, nhis_raw: dict | None) -> dict:
         """
-        국가검진 데이터에서 표준값(nhis_json)과 원본(nhis_raw)을 받아
-        엑셀에 필요한 최소 필드만 단순 추출.
-        - 가장 최근년도(INCOMELIST, RESULTLIST)만 사용
-        - 검진기관 제거
+        - 최우선: nhis_json(표준화된 최근 1건)에서 바로 꺼낸다.
+        - 보조: nhis_raw.data.INCOMELIST가 있으면, 최신년도 1건으로 보강.
+        - 결과: 엑셀 병합용 dict 리턴 (검진년도만 사용, 기관은 공란)
+        - 반환 키(영문): exam_year,height,weight,bmi,bp,vision,hearing,hemoglobin,fbs,tc,hdl,ldl,tg,
+                        gfr,creatinine,ast,alt,ggt,urine_protein,chest,judgment
         """
-        if not nj_raw:
-            return {}
+        nj = nhis_json or {}
 
-        d_data = (nj_raw or {}).get("data") or {}
-        src_list = (
-            d_data.get("INCOMELIST")
-            or d_data.get("incomeList")
-            or d_data.get("RESULTLIST")
-            or d_data.get("resultList")
-            or []
-        )
+        def _year_of(d: dict) -> str:
+            if not isinstance(d, dict):
+                return ""
+            for k in ("EXAMYEAR", "GUNYEAR", "YEAR", "YY"):
+                v = d.get(k)
+                if isinstance(v, int):
+                    return str(v)
+                if isinstance(v, str) and v.isdigit():
+                    return v
+            for k in ("EXAMDATE", "EXAM_DATE", "검진일자", "exam_date", "GUNDATE"):
+                v = d.get(k)
+                if isinstance(v, str) and len(v) >= 4 and v[:4].isdigit():
+                    return v[:4]
+            return ""
 
-        if isinstance(src_list, dict):
-            src_list = [src_list]
-        if not isinstance(src_list, list) or not src_list:
-            return {}
+        # 원본에서 최신 1건 추출
+        raw_item = None
+        if nhis_raw and isinstance(nhis_raw, dict):
+            data = nhis_raw.get("data") or {}
+            income = data.get("INCOMELIST") or []
+            if isinstance(income, list) and income:
+                def _yr(row: dict) -> int:
+                    y = _year_of(row)
+                    return int(y) if (y and y.isdigit()) else -1
+                try:
+                    income_sorted = sorted(income, key=_yr, reverse=True)
+                except Exception:
+                    income_sorted = list(income)
+                raw_item = income_sorted[0] if income_sorted else None
 
-        def get_year(it):
-            for key in ["GUNYEAR", "EXAMYEAR", "CHECKUPYEAR"]:
-                val = str(it.get(key) or "").strip()
-                if val.isdigit():
-                    return int(val)
-            return 0
+        # 값 선택: 표준값 우선 → 없으면 원본 보강
+        def pick(*keys: str) -> str:
+            for k in keys:
+                v = nj.get(k)
+                if v not in (None, "", []):
+                    return str(v)
+            if raw_item:
+                for k in keys:
+                    v = raw_item.get(k)
+                    if v not in (None, "", []):
+                        return str(v)
+            return ""
 
-        latest = max(src_list, key=get_year)
-        year = str(get_year(latest))
+        exam_year = _year_of(nj) or _year_of(raw_item or {})
 
-        # 엑셀용 표준 필드 구성 (기관 제외)
-        result = {
-            "exam_year": year,
-            # 필요 시 여기에 주요 결과값 매핑
-            # 예: "혈압": latest.get("SYSTOLICBLOODPRESSURE")
+        out = {
+            "exam_year":      exam_year,            # 검진년도(연도만)
+            "height":         pick("HEIGHT"),
+            "weight":         pick("WEIGHT"),
+            "bmi":            pick("BODYMASS", "BMI"),
+            "bp":             pick("BLOODPRESS"),
+            "vision":         pick("SIGHT"),
+            "hearing":        pick("HEARING"),
+            "hemoglobin":     pick("HEMOGLOBIN"),
+            "fbs":            pick("BLOODSUGAR"),   # 공복혈당
+            "tc":             pick("TOTCHOLESTEROL"),
+            "hdl":            pick("HDLCHOLESTEROL", "HDL_CHOLESTEROL"),
+            "ldl":            pick("LDLCHOLESTEROL", "LDL_CHOLESTEROL"),
+            "tg":             pick("TRIGLYCERIDE"),
+            "gfr":            pick("GFR"),
+            "creatinine":     pick("SERUMCREATININE"),
+            "ast":            pick("SGOT"),
+            "alt":            pick("SGPT"),
+            "ggt":            pick("YGPT", "GAMMAGTP"),
+            "urine_protein":  pick("YODANBAK"),
+            "chest":          pick("CHESTTROUBLE"),
+            "judgment":       pick("JUDGMENT"),
         }
-
-        # 표준 nhis_json 값이 있으면 우선 적용
-        if nj_std:
-            result.update(nj_std)
-
-        return result
-
-
+        return out
 
     def fmt(v):
-        if isinstance(v, list): 
+        if isinstance(v, list):
             return ",".join(str(x) for x in v)
         return "" if v is None else str(v)
 
     def calc_age(bd, ref_date):
-        if not bd: 
+        if not bd:
             return ""
         return ref_date.year - bd.year - ((ref_date.month, ref_date.day) < (bd.month, bd.day))
 
@@ -1636,7 +1636,6 @@ async def admin_export_xlsx(
     questions_sorted = sorted(ALL_QUESTIONS, key=lambda x: x["id"])
     questions = [q_title(q) for q in questions_sorted]
 
-    # 답 파서 (answers_indices 우선 → 없으면 q{id} 스캔)
     def extract_answers(payload: dict, questions_sorted: list[dict]) -> list:
         def to_num(v):
             if v is None or v == "": return ""
@@ -1687,7 +1686,7 @@ async def admin_export_xlsx(
     ws.title = "문진결과"
 
     today = now_kst().date()
-  
+
     fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별", "신장", "체중"]
     nhis_headers  = [
         "검진년도","신장(NHIS)","체중(NHIS)","BMI",
@@ -1728,10 +1727,10 @@ async def admin_export_xlsx(
 
         # NHIS 표준+백업 추출 (표준: nhis_json, 원본: nhis_raw)
         nhis_std = nhis_extract_all(
-        get_nhis_dict(sr.nhis_json),
-        get_nhis_dict(sr.nhis_raw),
-)
-        
+            get_nhis_dict(sr.nhis_json),
+            get_nhis_dict(sr.nhis_raw),
+        )
+
         row = [
             idx,
             serial_no,
@@ -1742,7 +1741,7 @@ async def admin_export_xlsx(
             ("" if height is None else height),
             ("" if weight is None else weight),
 
-            # NHIS 열들 (년도만, 기관 없음)
+            # NHIS 열들 (검진년도만, 기관 없음)
             nhis_std.get("exam_year", ""),
             nhis_std.get("height", ""),
             nhis_std.get("weight", ""),
@@ -1765,7 +1764,6 @@ async def admin_export_xlsx(
             nhis_std.get("chest", ""),
             nhis_std.get("judgment", ""),
         ] + [fmt(v) for v in answers]
-
 
         ws.append(row)
 
