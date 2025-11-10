@@ -42,7 +42,7 @@ import secrets
 import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from app.vendors.datahub_client import DatahubClient, DatahubError, pick_latest_general
+from app.vendors.datahub_client import DatahubClient, DatahubError, pick_latest_general, medical_checkup_simple_with_identity
 import logging, pathlib
 from app.vendors.datahub_client import DatahubClient, _crypto_selftest, encrypt_field
 
@@ -1837,6 +1837,7 @@ async def dh_simple_complete(
         retry=str(payload.get("retry") or ""),
     )
 
+
     # 1-1) 감사로그: Step2 요청/응답 저장
     try:
         resp_id = None
@@ -1865,67 +1866,88 @@ async def dh_simple_complete(
     except Exception as e:
         print("[NHIS][AUDIT][ERR][captcha]", repr(e))
 
-    # 2) 결과 재조회 폴링 (CALLBACKID 대문자 키 사용)
-    deadline = time.time() + 180
+
+
+    # ★ Step2 응답 자체에 데이터가 있는 경우(네 psql에서 income_len=1로 확인됨)
+    try:
+        step2_data = (step2_res or {}).get("data") or {}
+        income2 = step2_data.get("INCOMELIST") or []
+        if isinstance(income2, list) and len(income2) > 0:
+            picked = pick_latest_general(step2_res, mode="all" if (request.query_params.get("all") in ("1","true","yes")) else "latest")
+            request.session["nhis_latest"] = picked if isinstance(picked, dict) else {}
+            return JSONResponse({"ok": True, "errCode":"0000","message":"OK","data": picked}, status_code=200)
+    except Exception as e:
+        print("[DH-COMPLETE][WARN][captcha-pick]", repr(e))
+
+
+    # 2) 결과 재조회 폴링 > 경량 > 보강 2단계로 진행 (CALLBACKID 대문자 키 사용)
+    max_wait_sec = 120
+    deadline = time.time() + max_wait_sec
+    attempt = 0
+
+    SP = (request.session or {}).get("nhis_start_payload") or {}
+    loginOption = str(SP.get("LOGINOPTION","")).strip()
+    userName    = str(SP.get("USERNAME","")).strip()
+    hpNumber    = str(SP.get("HPNUMBER","")).strip()
+    juminVal    = str(SP.get("JUMIN","")).strip()
+    telecomGubun= str(SP.get("TELECOMGUBUN","")).strip() if loginOption=="3" else None
+
+    want_all = ((request.query_params.get("all") or "").lower() in ("1","true","yes"))
+
     while time.time() < deadline:
+        attempt += 1
         try:
-            fetch_body = {"CALLBACKID": cbid, "CALLBACKTYPE": cbtp}  # CALLBACKTYPE 추가
-            rsp2 = DATAHUB.medical_checkup_simple(fetch_body)       # 대문자 키 payload 통째로 전송
-
-            # 감사로그: 재조회 요청/응답 저장
-            try:
-                stmt = sa_text("""
-                    INSERT INTO nhis_audit (respondent_id, callback_id, request_json, response_json)
-                    VALUES (:rid, :cbid, :req, :res)
-                """).bindparams(
-                    rid=resp_id,
-                    cbid=cbid,
-                    req=json.dumps({"step":"fetch","body":fetch_body}, ensure_ascii=False),
-                    res=json.dumps(rsp2 or {}, ensure_ascii=False),
+            if attempt <= 3:
+                # ➊ 경량 재조회(콜백만)
+                fetch_body = {"CALLBACKID": cbid, "CALLBACKTYPE": cbtp}
+                rsp2 = DATAHUB.medical_checkup_simple(fetch_body)
+                kind = "light"
+            else:
+                # ➋ 보강 재조회(콜백 + 본인정보)
+                rsp2 = DATAHUB.medical_checkup_simple_with_identity(
+                    callback_id=cbid,
+                    callback_type=cbtp,
+                    login_option=loginOption,
+                    user_name=userName,
+                    hp_number=hpNumber,
+                    jumin_or_birth=juminVal,
+                    telecom_gubun=telecomGubun
                 )
-                session.exec(stmt)
-                session.commit()
-            except Exception as e:
-                print("[NHIS][AUDIT][ERR][fetch]", repr(e))
-
-            err2 = str((rsp2 or {}).get("errCode") or "")
-            if err2 == "0000":
-                # pick: 전체/최근1건 토글
-                try:
-                    want_all = False
-                    try:
-                        # URL 쿼리 or 바디 둘 다 허용
-                        q_all = (request.query_params.get("all") or "").lower()
-                        p_all = str((await request.json()).get("all") if request.method == "POST" else "").lower() if False else ""
-                        want_all = (q_all in ("1","true","yes")) or (p_all in ("1","true","yes"))
-                    except Exception:
-                        pass
-
-                    picked = pick_latest_general(rsp2, mode="all" if want_all else "latest")
-                except Exception as e:
-                    print("[DH-COMPLETE][WARN][pick]", repr(e))
-                    picked = {}
-
-                # 세션에는 가볍게: 전체 모드라도 세션에는 저장 안 하거나 아주 작은 요약만
-                if not want_all:
-                    request.session["nhis_latest"] = picked or {}
-                else:
-                    # 전체는 응답에만 내려주고 세션 저장은 생략 (쿠키/세션 부하 방지)
-                    pass
-
-                return JSONResponse(
-                    {"ok": True, "errCode":"0000","message":"OK","data": picked or {}},
-                    status_code=200
-                )
-
-
+                kind = "full"
         except Exception as e:
             print("[DH-COMPLETE][ERR][fetch]", repr(e))
+            time.sleep(2)
+            continue
+
+        # (선택) 감사로그 남기기: kind만 기록
+        try:
+            stmt = sa_text("""
+                INSERT INTO nhis_audit (respondent_id, callback_id, request_json, response_json)
+                VALUES (:rid, :cbid, :req, :res)
+            """).bindparams(
+                rid=None, cbid=cbid,
+                req=json.dumps({"step":"fetch","kind":kind}, ensure_ascii=False),
+                res=json.dumps(rsp2 or {}, ensure_ascii=False),
+            )
+            session.exec(stmt); session.commit()
+        except Exception as e:
+            print("[NHIS][AUDIT][ERR][fetch-log]", repr(e))
+
+        err2 = str((rsp2 or {}).get("errCode") or "")
+        data2= (rsp2 or {}).get("data") or {}
+        income2 = data2.get("INCOMELIST") or []
+
+        print(f"[DH-COMPLETE][FETCH] attempt={attempt} kind={kind} err={err2} income_len={len(income2) if isinstance(income2, list) else 'NA'} keys={list(data2.keys())[:6]}")
+
+        if err2 == "0000" and isinstance(income2, list) and len(income2) > 0:
+            picked = pick_latest_general(rsp2, mode=("all" if want_all else "latest"))
+            request.session["nhis_latest"] = picked if isinstance(picked, dict) else {}
+            return JSONResponse({"ok": True, "errCode":"0000","message":"OK","data": picked}, status_code=200)
 
         time.sleep(2)
 
-    # 3) 타임아웃
-    return JSONResponse({"ok": False, "errCode":"2020","message":"아직 인증이 완료되지 않았습니다."}, status_code=202)
+    return JSONResponse({"ok": False, "errCode":"2020","message":"아직 인증이 완료되지 않았거나 데이터가 준비되지 않았습니다."}, status_code=202)
+
 
 
 

@@ -336,13 +336,13 @@ class DatahubClient:
     # === 1) 간편인증 Step1: 시작/즉시조회 ===
     def simple_auth_start(self, login_option, user_name, hp_number, jumin_or_birth, telecom_gubun=None):
         body = {
-            "LOGINOPTION":  str(login_option or "0"),  # "0"~"7"
+            "LOGINOPTION":  str(login_option or "0"),
             "USERNAME":     user_name,
             "HPNUMBER":     hp_number,
-            "JUMIN":        encrypt_field(jumin_or_birth),  # ★ 반드시 암호화해서 보냄
+            "JUMIN":        encrypt_field(jumin_or_birth),
         }
         if str(login_option) == "3" and telecom_gubun:
-             body["TELECOMGUBUN"] = telecom_gubun  # 1~6 숫자코드
+            body["TELECOMGUBUN"] = telecom_gubun  # 1~6 숫자코드
         return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", body, timeout=(5,25))
 
 
@@ -390,39 +390,53 @@ class DatahubClient:
 
 
 
-def pick_latest_general(resp: dict):
+def pick_latest_general(resp: dict, mode: str = "latest"):
     """
-    건강검진 결과 중 가장 최근년도(INCOMELIST 또는 RESULTLIST) 데이터만 반환
+    mode:
+      - "latest": 기존 동작 (가장 최근 1건)
+      - "all":    필터 없이 INCOMELIST 전체 반환 (연도 내림차순 정렬 시도)
     """
-
     data = (resp or {}).get("data") or {}
-    # 실제 검진 결과는 INCOMELIST 또는 RESULTLIST에 있음
-    items = (
-        data.get("INCOMELIST")
-        or data.get("incomeList")
-        or data.get("RESULTLIST")
-        or data.get("resultList")
-        or []
-    )
+    income = data.get("INCOMELIST") or data.get("INCOME_LIST") or []
 
-    if isinstance(items, dict):
-        items = [items]
-    if not isinstance(items, list) or not items:
-        return None
+    # === 전체 그대로 반환 (테스트/진단용) ===
+    if mode == "all":
+        def _year_of(row):
+            for k in ("EXAMYEAR","GUNYEAR","YEAR","YY"):
+                v = row.get(k)
+                if isinstance(v, str) and v.isdigit(): return int(v)
+                if isinstance(v, int): return v
+            for k in ("EXAMDATE","EXAM_DATE","검진일자","exam_date"):
+                v = row.get(k)
+                if isinstance(v, str) and len(v) >= 4 and v[:4].isdigit():
+                    return int(v[:4])
+            return -1
+        items = list(income) if isinstance(income, list) else []
+        try:
+            items.sort(key=_year_of, reverse=True)
+        except Exception:
+            pass
+        return {"items": items, "count": len(items), "keys": list(data.keys())}
 
-    # 문자열로 된 연도 추출 함수
-    def get_year(it):
-        for key in ["GUNYEAR", "EXAMYEAR", "CHECKUPYEAR"]:
-            val = str(it.get(key) or "").strip()
-            if val.isdigit():
-                return int(val)
-        return 0
+    # === 최근 1건 선택 ===
+    latest = None
+    best_year = -1
+    def _year_of(row):
+        for k in ("EXAMYEAR","GUNYEAR","YEAR","YY"):
+            v = row.get(k)
+            if isinstance(v, str) and v.isdigit(): return int(v)
+            if isinstance(v, int): return v
+        for k in ("EXAMDATE","EXAM_DATE","검진일자","exam_date"):
+            v = row.get(k)
+            if isinstance(v, str) and len(v) >= 4 and v[:4].isdigit():
+                return int(v[:4])
+        return -1
 
-    # 가장 최근년도 항목 선택
-    latest = max(items, key=get_year)
+    if isinstance(income, list):
+        for row in income:
+            yr = _year_of(row)
+            if yr > best_year:
+                best_year = yr
+                latest = row
 
-    # 결과 요약만 표준화해서 반환 (기관정보 제외)
-    return {
-        "exam_year": str(get_year(latest)),
-        "result_raw": latest,  # 원본 전체는 남겨둠
-    }
+    return latest or {}
