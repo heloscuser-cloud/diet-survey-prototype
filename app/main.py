@@ -1885,6 +1885,10 @@ async def dh_simple_start(
     # ✅ LOGINOPTION 허용값: 0~7
     allowed = {"0","1","2","3","4","5","6","7"}
 
+    # 새 트랜잭션 시작: 낡은 콜백/상태 제거
+    for k in ("nhis_callback_id", "nhis_callback_type", "dh_callback"):
+        request.session.pop(k, None)
+
     missing = []
     if not loginOption or loginOption not in allowed:  missing.append("loginOption(0~7)")
     if not userName:                                   missing.append("userName")
@@ -1914,11 +1918,7 @@ async def dh_simple_start(
     # (선택) 민감값 마스킹 로그
     _safe = {**dh_body, "HPNUMBER": _mask_phone(dh_body.get("HPNUMBER","")), "JUMIN": _mask_birth(dh_body.get("JUMIN",""))}
     logging.debug("[DH-START][BODY]%s", _safe)
-    
-    # 새 트랜잭션 시작: 낡은 콜백/상태 제거
-    for k in ("nhis_callback_id", "nhis_callback_type", "dh_callback"):
-        request.session.pop(k, None)
-    
+ 
     request.session["nhis_start_payload"] = dh_body
 
     # 1) 시작 호출
