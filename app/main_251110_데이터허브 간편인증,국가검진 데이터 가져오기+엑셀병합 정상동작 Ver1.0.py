@@ -52,13 +52,6 @@ logging.basicConfig(
     force=True,
 )
 
-APP_ENV = (os.getenv("APP_ENV", "dev") or "").lower()
-if APP_ENV == "prod":
-    # uvicorn access 로그(요청 라인) 소음 감소
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-    # 템플릿/SQL 등 과다 로거도 억제하고 싶으면 여기서 조절
-    # logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
-
 # ★ 현재 실행 파일 경로/버전 태그 찍기
 logging.info("[BOOT] main.py loaded from %s", __file__)
 logging.info("[BOOT] CWD=%s PYTHONPATH=%s", os.getcwd(), sys.path)
@@ -74,11 +67,6 @@ print("[BOOT] DATAHUB ready")
 APP_SECRET = os.environ.get("APP_SECRET", "dev-secret")
 ADMIN_USER = os.environ.get("ADMIN_USER")
 ADMIN_PASS = os.environ.get("ADMIN_PASS")
-
-
-NHIS_MAX_LIGHT_FETCH = int(os.getenv("NHIS_MAX_LIGHT_FETCH", "1"))     # light는 기본 1회만
-NHIS_FETCH_INTERVAL  = float(os.getenv("NHIS_FETCH_INTERVAL", "2.0"))  # 폴링 간격(초)
-NHIS_POLL_MAX_SEC    = int(os.getenv("NHIS_POLL_MAX_SEC", "120"))      # 최대 대기(초)
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -181,10 +169,12 @@ async def completed_redirect_handler(request: Request, exc: HTTPException):
 
 @app.middleware("http")
 async def no_store_for_survey(request: Request, call_next):
-    p = request.url.path
-    if p == "/healthz":
-        return await call_next(request)  # 최소 비용 통과
+   
     response = await call_next(request)
+    #디버그용 경로허용
+    if request.url.path.startswith("/debug/"):
+        return await call_next(request)
+    p = request.url.path
     if p.startswith("/survey"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
@@ -221,21 +211,6 @@ def verify_user(token: str) -> int:
         return int(raw.split(":")[1])
     except Exception:
         return -1
-
-# --- 민감값 마스킹 헬퍼 (재사용) --- #
-def _mask_phone(s: str) -> str:
-    if not s: return ""
-    d = re.sub(r"[^0-9]", "", s)
-    if len(d) < 7: return "***"
-    return d[:3] + "-" + "*"*4 + "-" + d[-4:]
-
-def _mask_birth(s: str) -> str:
-    # YYYYMMDD → YYYY-**-**
-    if not s: return ""
-    d = re.sub(r"[^0-9]", "", s)
-    if len(d) >= 8:
-        return f"{d[:4]}-**-**"
-    return "***"
 
 
 
@@ -1489,9 +1464,10 @@ def survey_finish(
         print("[NHIS][SAVE] latest_keys=", list((nhis_latest or {}).keys()) if isinstance(nhis_latest, dict) else type(nhis_latest))
     except Exception as e:
         print("[NHIS][SAVE][WARN1]", repr(e))
-    ey = (nhis_latest.get("EXAMYEAR") or nhis_latest.get("GUNYEAR") or nhis_latest.get("exam_year"))
-    print("[NHIS][SAVE] exam_year=", ey, "| has_latest:", bool(nhis_latest))
-
+    try:
+        print("[NHIS][SAVE] exam_year=", (nhis_latest or {}).get("exam_year"), "| has_latest:", bool(nhis_latest))
+    except Exception as e:
+        print("[NHIS][SAVE][WARN2]", repr(e))
 
     # ── 알림메일 비동기 발송 ───────────────────────────────
     try:
@@ -1873,8 +1849,8 @@ async def dh_simple_start(
         dh_body["TELECOMGUBUN"] = telecom  # 1~6
     
     # (선택) 민감값 마스킹 로그
-    _safe = {**dh_body, "HPNUMBER": _mask_phone(dh_body.get("HPNUMBER","")), "JUMIN": _mask_birth(dh_body.get("JUMIN",""))}
-    logging.debug("[DH-START][BODY]%s", _safe)
+    _safe = {**dh_body, "HPNUMBER":"***", "JUMIN":"***"}
+    logging.info("[DH-START][BODY]%s", _safe)
     
     request.session["nhis_start_payload"] = dh_body
 
@@ -1935,6 +1911,8 @@ async def dh_simple_complete(
       3) 없으면 같은 callbackId로 /scrap/common/...Simple 폴링 재조회 (light만)
       4) 최대 120초 폴링, 미완료면 202
     """
+    import time, json
+    from sqlalchemy import text as sa_text
 
     payload = await request.json()
 
@@ -1942,27 +1920,27 @@ async def dh_simple_complete(
     cbid = (request.session or {}).get("nhis_callback_id") or str(payload.get("callbackId") or "")
     cbtp = (request.session or {}).get("nhis_callback_type") or str(payload.get("callbackType") or "SIMPLE")
 
-    # callbackid/type 확인 디버그 로그
-    logging.debug(
+    # callbackid/type 확인 로그
+    logging.info(
         "[DH-COMPLETE][DEBUG] callbackId sources => session:%s | payload:%s | final:%s",
         (request.session or {}).get("nhis_callback_id"),
         payload.get("callbackId"),
         cbid,
     )
-    logging.debug(
+    logging.info(
         "[DH-COMPLETE][DEBUG] callbackType sources => session:%s | payload:%s | final:%s",
         (request.session or {}).get("nhis_callback_type"),
         payload.get("callbackType"),
         cbtp,
     )
 
-    # 해당 시점 rtoken 유무 확인 디버그 로그
+    # 해당 시점 rtoken 유무 확인 로그
     try:
         rtok = (request.query_params.get("rtoken") or request.cookies.get("rtoken") or "")
         rid_dbg = verify_token(rtok) if rtok else None
-        logging.debug("[RTOKEN][DBG][complete] raw=%s | rid=%s", ("yes" if rtok else "no"), (rid_dbg if rid_dbg else "None"))
+        logging.info("[RTOKEN][DBG][complete] raw=%s | rid=%s", ("yes" if rtok else "no"), (rid_dbg if rid_dbg else "None"))
     except Exception as e:
-        logging.debug("[RTOKEN][DBG][complete][ERR] %r", e)
+        logging.info("[RTOKEN][DBG][complete][ERR] %r", e)
 
 
     # 0-1) 최소 검증 (DataHub 호출 낭비 방지)
@@ -2036,12 +2014,12 @@ async def dh_simple_complete(
     except Exception as e:
         print("[DH-COMPLETE][WARN][captcha-pick]", repr(e))
 
-    # 2) 결과 재조회 폴링 (light 1회 확인 후 → full만)
-    max_wait_sec = NHIS_POLL_MAX_SEC
+    # 2) 결과 재조회 폴링 (처음 3회 light → 이후 full(콜백+본인정보))
+    max_wait_sec = 120
     deadline = time.time() + max_wait_sec
     attempt = 0
 
-    # 시작 단계 값 복구
+    # 시작 단계에서 세션에 저장해둔 원본 정보 복구(대문자 키 그대로)
     SP = (request.session or {}).get("nhis_start_payload") or {}
     loginOption  = str(SP.get("LOGINOPTION", "")).strip()
     userName     = str(SP.get("USERNAME", "")).strip()
@@ -2051,17 +2029,18 @@ async def dh_simple_complete(
 
     want_all = ((request.query_params.get("all") or "").lower() in ("1", "true", "yes"))
 
-    did_full = False
     while time.time() < deadline:
         attempt += 1
         try:
-            if attempt <= NHIS_MAX_LIGHT_FETCH:
-                # ➊ light 1회만
+            if attempt <= 3:
+                # ➊ 경량 재조회(콜백만)
                 fetch_body = {"CALLBACKID": cbid, "CALLBACKTYPE": cbtp}
                 rsp2 = DATAHUB.medical_checkup_simple(fetch_body)
                 kind = "light"
             else:
-                # ➋ 이후는 계속 full
+                # ➋ 보강 재조회(콜백 + 본인정보)
+                #    - datahub_client.py의 medical_checkup_simple_with_identity 가
+                #      JUMIN 암호화 포함 동일 방식으로 호출하도록 구현되어 있어야 함
                 rsp2 = DATAHUB.medical_checkup_simple_with_identity(
                     callback_id=cbid,
                     callback_type=cbtp,
@@ -2072,10 +2051,9 @@ async def dh_simple_complete(
                     telecom_gubun=telecomGubun
                 )
                 kind = "full"
-                did_full = True
         except Exception as e:
-            logging.warning("[DH-COMPLETE][FETCH][ERR] %r", e)
-            time.sleep(NHIS_FETCH_INTERVAL)
+            print("[DH-COMPLETE][ERR][fetch]", repr(e))
+            time.sleep(2)
             continue
 
         # 감사로그(요약)
@@ -2090,35 +2068,37 @@ async def dh_simple_complete(
             )
             session.exec(stmt); session.commit()
         except Exception as e:
-            logging.warning("[NHIS][AUDIT][ERR][fetch-log] %r", e)
+            print("[NHIS][AUDIT][ERR][fetch-log]", repr(e))
 
         err2   = str((rsp2 or {}).get("errCode") or "")
         data2  = (rsp2 or {}).get("data") or {}
         income = data2.get("INCOMELIST") or []
 
-        # 내부 에러 힌트만 DEBUG로
+        # 내부 에러 힌트(있으면)
         inner_ecode  = data2.get("ECODE")
         inner_errmsg = data2.get("ERRMSG")
         if inner_ecode and inner_ecode != "0000":
-            logging.debug("[DH-COMPLETE][FETCH][INNER] ecode=%s msg=%s", inner_ecode, inner_errmsg)
+            print(f"[DH-COMPLETE][FETCH][INNER] ecode={inner_ecode} msg={inner_errmsg}")
 
-        logging.info("[DH-COMPLETE][FETCH] attempt=%s kind=%s err=%s income_len=%s",
-                     attempt, kind, err2, (len(income) if isinstance(income, list) else "NA"))
+        print(f"[DH-COMPLETE][FETCH] attempt={attempt} kind={kind} err={err2} "
+              f"income_len={len(income) if isinstance(income, list) else 'NA'} "
+              f"keys={list(data2.keys())[:6]}")
 
         if err2 == "0000" and isinstance(income, list) and len(income) > 0:
             picked = pick_latest_general(rsp2, mode=("all" if want_all else "latest"))
             request.session["nhis_latest"] = picked if isinstance(picked, dict) else {}
-            # DB 저장 (엑셀 병합용)
+
+            # DB 저장 (엑셀 병합용) - 세션에는 작은 dict만
             try:
                 picked_one = pick_latest_general(rsp2, mode="latest")
                 _save_nhis_to_db(session, request, picked_one, rsp2)
                 request.session["nhis_latest"] = picked_one or {}
             except Exception as e:
-                logging.warning("[NHIS][DB][WARN][fetch-save] %r", e)
+                print("[NHIS][DB][WARN][fetch-save]", repr(e))
+
             return JSONResponse({"ok": True, "errCode": "0000", "message": "OK", "data": picked}, status_code=200)
 
-        time.sleep(NHIS_FETCH_INTERVAL)
-
+        time.sleep(2)
 
     return JSONResponse({"ok": False, "errCode": "2020", "message": "아직 인증이 완료되지 않았거나 데이터가 준비되지 않았습니다."}, status_code=202)
 
