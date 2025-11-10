@@ -1915,6 +1915,10 @@ async def dh_simple_start(
     _safe = {**dh_body, "HPNUMBER": _mask_phone(dh_body.get("HPNUMBER","")), "JUMIN": _mask_birth(dh_body.get("JUMIN",""))}
     logging.debug("[DH-START][BODY]%s", _safe)
     
+    # 새 트랜잭션 시작: 낡은 콜백/상태 제거
+    for k in ("nhis_callback_id", "nhis_callback_type", "dh_callback"):
+        request.session.pop(k, None)
+    
     request.session["nhis_start_payload"] = dh_body
 
     # 1) 시작 호출

@@ -170,11 +170,29 @@ const birthOk = onlyDigits(birthEl?.value).length === 8;
   applyInputRule(); // 초기 1회
 
   // 상태 저장
-  let callbackId = '';   // 콜백형이면 채워짐
+let callbackId = "";   // 현재 트랜잭션의 콜백ID
+let gStartDone = false;
 
+function resetAuthState() {
+  callbackId = "";
+  gStartDone = false;
+  const btnComplete = document.querySelector('#btnComplete'); // 기존 id 사용
+  if (btnComplete) btnComplete.disabled = true;
+}
   // 간편인증 시작
 btnStart.addEventListener('click', async () => {
   if (gStartDone) return; // 중복 방지
+
+ // 성별 선택 확인 (라디오 name="pre_gender")
+  const gEl = document.querySelector('input[name="pre_gender"]:checked');
+  if (!gEl) {
+    alert('성별을 입력해주세요');
+    return;
+  }
+  const preGender = gEl.value; // '남' 또는 '여'
+
+  // 시작 전 상태 초기화 (이전 cbid/진행상태 제거 + 완료버튼 비활성)
+  resetAuthState();
 
   const loginOption = loginSel.value.trim();     // "0"~"7"
   const telecomRaw  = (telecomSel?.value || '').trim();
@@ -199,6 +217,7 @@ btnStart.addEventListener('click', async () => {
 
     const rsp = await fetch('/api/dh/simple/complete?all=1', {
       method:'POST',
+      credentials: 'include',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify(
         callbackId ? { callbackId, gender: preGender } : { gender: preGender }
@@ -248,11 +267,15 @@ btnComplete.addEventListener('click', async () => {
   setStatus('인증 완료 확인 중...');
   btnComplete.disabled = true;
 
+// 성별(선택값) 같이 전달
+const gEl = document.querySelector('input[name="pre_gender"]:checked');
+const preGender = gEl ? gEl.value : "";
+
   async function tryCompleteOnce() {
  const rsp = await fetch('/api/dh/simple/complete?all=1', {
    method:'POST',
    headers: {'Content-Type':'application/json'},
-   body: JSON.stringify(callbackId ? { callbackId } : {}),
+   body: JSON.stringify({ callbackId, gender: preGender }),
    credentials: 'include' 
  });
     const data = await rsp.json().catch(()=> ({}));
