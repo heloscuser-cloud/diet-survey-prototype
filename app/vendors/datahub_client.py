@@ -388,19 +388,37 @@ class DatahubClient:
         return self._post("/scrap/common/nhis/MedicalCheckupResult", body)
 
 
+    def pick_latest_general(resp: dict, mode: str = "latest"):
+        """
+        mode:
+        - "latest": 기존 동작 (가장 최근 1건)
+        - "all":    필터 없이 INCOMELIST 전체 반환 (연도 내림차순 정렬 시도)
+        """
+        data = (resp or {}).get("data") or {}
+        income = data.get("INCOMELIST") or data.get("INCOME_LIST") or []
 
+        # === 전체 그대로 반환 (테스트/진단용) ===
+        if mode == "all":
+            def _year_of(row):
+                for k in ("EXAMYEAR","GUNYEAR","YEAR","YY"):
+                    v = row.get(k)
+                    if isinstance(v, str) and v.isdigit(): return int(v)
+                    if isinstance(v, int): return v
+                for k in ("EXAMDATE","EXAM_DATE","검진일자","exam_date"):
+                    v = row.get(k)
+                    if isinstance(v, str) and len(v) >= 4 and v[:4].isdigit():
+                        return int(v[:4])
+                return -1
+            items = list(income) if isinstance(income, list) else []
+            try:
+                items.sort(key=_year_of, reverse=True)
+            except Exception:
+                pass
+            return {"items": items, "count": len(items), "keys": list(data.keys())}
 
-def pick_latest_general(resp: dict, mode: str = "latest"):
-    """
-    mode:
-      - "latest": 기존 동작 (가장 최근 1건)
-      - "all":    필터 없이 INCOMELIST 전체 반환 (연도 내림차순 정렬 시도)
-    """
-    data = (resp or {}).get("data") or {}
-    income = data.get("INCOMELIST") or data.get("INCOME_LIST") or []
-
-    # === 전체 그대로 반환 (테스트/진단용) ===
-    if mode == "all":
+        # === 최근 1건 선택 ===
+        latest = None
+        best_year = -1
         def _year_of(row):
             for k in ("EXAMYEAR","GUNYEAR","YEAR","YY"):
                 v = row.get(k)
@@ -411,32 +429,36 @@ def pick_latest_general(resp: dict, mode: str = "latest"):
                 if isinstance(v, str) and len(v) >= 4 and v[:4].isdigit():
                     return int(v[:4])
             return -1
-        items = list(income) if isinstance(income, list) else []
-        try:
-            items.sort(key=_year_of, reverse=True)
-        except Exception:
-            pass
-        return {"items": items, "count": len(items), "keys": list(data.keys())}
 
-    # === 최근 1건 선택 ===
-    latest = None
-    best_year = -1
-    def _year_of(row):
-        for k in ("EXAMYEAR","GUNYEAR","YEAR","YY"):
-            v = row.get(k)
-            if isinstance(v, str) and v.isdigit(): return int(v)
-            if isinstance(v, int): return v
-        for k in ("EXAMDATE","EXAM_DATE","검진일자","exam_date"):
-            v = row.get(k)
-            if isinstance(v, str) and len(v) >= 4 and v[:4].isdigit():
-                return int(v[:4])
-        return -1
+        if isinstance(income, list):
+            for row in income:
+                yr = _year_of(row)
+                if yr > best_year:
+                    best_year = yr
+                    latest = row
 
-    if isinstance(income, list):
-        for row in income:
-            yr = _year_of(row)
-            if yr > best_year:
-                best_year = yr
-                latest = row
+        return latest or {}
 
-    return latest or {}
+
+    # 보강 재조회
+    def medical_checkup_simple_with_identity(
+        self,
+        callback_id: str,
+        callback_type: str,             # "SIMPLE"
+        login_option: str,
+        user_name: str,
+        hp_number: str,
+        jumin_or_birth: str,            # 8자리 YYYYMMDD
+        telecom_gubun: Optional[str] = None,  # PASS(3)일 때만 "1"~"6"
+    ) -> Dict[str, Any]:
+        body = {
+            "CALLBACKID":   callback_id,
+            "CALLBACKTYPE": (callback_type or "SIMPLE"),
+            "LOGINOPTION":  str(login_option),
+            "USERNAME":     user_name,
+            "HPNUMBER":     hp_number,
+            "JUMIN":        encrypt_field(jumin_or_birth),  # ★ 암호화 필수
+        }
+        if str(login_option) == "3" and telecom_gubun:
+            body["TELECOMGUBUN"] = telecom_gubun
+        return self._post("/scrap/common/nhis/MedicalCheckupGlanceSimple", body, timeout=(5,25))

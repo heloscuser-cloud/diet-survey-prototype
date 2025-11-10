@@ -42,9 +42,9 @@ import secrets
 import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from app.vendors.datahub_client import DatahubClient, DatahubError, pick_latest_general, medical_checkup_simple_with_identity
+from app.vendors.datahub_client import DatahubClient, DatahubError
 import logging, pathlib
-from app.vendors.datahub_client import DatahubClient, _crypto_selftest, encrypt_field
+from app.vendors.datahub_client import pick_latest_general, _crypto_selftest, encrypt_field, medical_checkup_simple_with_identity
 
 # ★ 로그 설정(강제적용)
 logging.basicConfig(
