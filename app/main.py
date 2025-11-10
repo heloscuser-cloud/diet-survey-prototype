@@ -1838,9 +1838,7 @@ async def dh_simple_complete(
     콜백형 완료:
       1) /scrap/captcha (Step2) 1회 호출 (callbackResponse* 키 포함, 예외/타임아웃 안전 처리)
       2) Step2 응답에 INCOMELIST가 있으면 즉시 채택하여 종료
-      3) 없으면 같은 callbackId로 /scrap/common/...Simple 폴링 재조회
-         - 처음 3회: 경량(light) {CALLBACKID, CALLBACKTYPE}
-         - 이후    : 보강(full)  {콜백 + 본인정보(암호화 JUMIN)}
+      3) 없으면 같은 callbackId로 /scrap/common/...Simple 폴링 재조회 (light만)
       4) 최대 120초 폴링, 미완료면 202
     """
     import time, json
@@ -1922,20 +1920,19 @@ async def dh_simple_complete(
             want_all = (request.query_params.get("all") or "").lower() in ("1", "true", "yes")
             picked = pick_latest_general(step2_res, mode=("all" if want_all else "latest"))
             request.session["nhis_latest"] = picked if isinstance(picked, dict) else {}
-            
-        # ★★★ NHIS결과 DB 저장 (엑셀 병합용)
-        try:
-            # 세션에는 all 모드일 수도 있으니, DB에는 항상 '최근1건' 표준값도 같이 보존
-            picked_one = pick_latest_general(step2_res, mode="latest")
-            _save_nhis_to_db(session, request, picked_one, step2_res)
-        except Exception as e:
-            print("[NHIS][DB][WARN][captcha-save]", repr(e))
-            
+
+            # ★ NHIS결과 DB 저장 (엑셀 병합용) — DB에는 '최근1건' 표준값 + 원문 저장
+            try:
+                picked_one = pick_latest_general(step2_res, mode="latest")
+                _save_nhis_to_db(session, request, picked_one, step2_res)
+            except Exception as e:
+                print("[NHIS][DB][WARN][captcha-save]", repr(e))
+
             return JSONResponse({"ok": True, "errCode": "0000", "message": "OK", "data": picked}, status_code=200)
     except Exception as e:
         print("[DH-COMPLETE][WARN][captcha-pick]", repr(e))
 
-    # 2) 결과 재조회 폴링 > 경량 > 보강 2단계
+    # 2) 결과 재조회 폴링 (light만; captcha 재호출/풀 재조회 없음)
     max_wait_sec = 120
     deadline = time.time() + max_wait_sec
     attempt = 0
@@ -1951,37 +1948,12 @@ async def dh_simple_complete(
 
     while time.time() < deadline:
         attempt += 1
-        # 2-1) captcha 재호출: 첫 성공(0000) 이후에는 더 이상 호출하지 않음
-        # 루프 바깥에 선언된 플래그를 사용 (없으면 초기화)
-        if "captcha_done" not in locals():
-            captcha_done = False
 
-        if not captcha_done:
-            try:
-                _res_captcha = DATAHUB.simple_auth_complete({
-                    "callbackId": cbid,
-                    "callbackType": cbtp,
-                    "callbackResponse":  "",
-                    "callbackResponse1": "",
-                    "callbackResponse2": "",
-                    "retry":             "",
-                })
-                # 첫 호출이 0000이면 이후 captcha는 중단
-                if (_res_captcha or {}).get("errCode") == "0000":
-                    captcha_done = True
-            except Exception as e:
-                print("[DH-COMPLETE][ERR][captcha-retry]", repr(e))
-                time.sleep(2)
-                # captcha에서 에러가 나도 fetch는 계속 시도
-
-            
-        # 2-2) fetch: 경량 → 보강
+        # ➊ 항상 경량 재조회(콜백만, 대문자 키) — captcha는 더 이상 호출하지 않음
         try:
-            # 항상 경량 재조회(콜백만)
             fetch_body = {"CALLBACKID": cbid, "CALLBACKTYPE": cbtp}
             rsp2 = DATAHUB.medical_checkup_simple(fetch_body)
             kind = "light"
-
         except Exception as e:
             print("[DH-COMPLETE][ERR][fetch]", repr(e))
             time.sleep(2)
@@ -1997,8 +1969,7 @@ async def dh_simple_complete(
                 req=json.dumps({"step": "fetch", "kind": kind}, ensure_ascii=False),
                 res=json.dumps(rsp2 or {}, ensure_ascii=False),
             )
-            session.exec(stmt)
-            session.commit()
+            session.exec(stmt); session.commit()
         except Exception as e:
             print("[NHIS][AUDIT][ERR][fetch-log]", repr(e))
 
@@ -2011,18 +1982,20 @@ async def dh_simple_complete(
         if err2 == "0000" and isinstance(income, list) and len(income) > 0:
             picked = pick_latest_general(rsp2, mode=("all" if want_all else "latest"))
             request.session["nhis_latest"] = picked if isinstance(picked, dict) else {}
-            return JSONResponse({"ok": True, "errCode": "0000", "message": "OK", "data": picked}, status_code=200)
 
-        # ★★★ NHIS결과 DB 저장
-        try:
-            picked_one = pick_latest_general(rsp2, mode="latest")
-            _save_nhis_to_db(session, request, picked_one, rsp2)
-        except Exception as e:
-            print("[NHIS][DB][WARN][fetch-save]", repr(e))
+            # DB 저장 (엑셀 병합용)
+            try:
+                picked_one = pick_latest_general(rsp2, mode="latest")
+                _save_nhis_to_db(session, request, picked_one, rsp2)
+            except Exception as e:
+                print("[NHIS][DB][WARN][fetch-save]", repr(e))
+
+            return JSONResponse({"ok": True, "errCode": "0000", "message": "OK", "data": picked}, status_code=200)
 
         time.sleep(2)
 
     return JSONResponse({"ok": False, "errCode": "2020", "message": "아직 인증이 완료되지 않았거나 데이터가 준비되지 않았습니다."}, status_code=202)
+
 
 
 
