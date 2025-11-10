@@ -2014,28 +2014,43 @@ async def dh_simple_complete(
     except Exception as e:
         print("[DH-COMPLETE][WARN][captcha-pick]", repr(e))
 
-    # 2) 결과 재조회 폴링 (light만; captcha 재호출/풀 재조회 없음)
+    # 2) 결과 재조회 폴링 (처음 3회 light → 이후 full(콜백+본인정보))
     max_wait_sec = 120
     deadline = time.time() + max_wait_sec
     attempt = 0
 
+    # 시작 단계에서 세션에 저장해둔 원본 정보 복구(대문자 키 그대로)
     SP = (request.session or {}).get("nhis_start_payload") or {}
     loginOption  = str(SP.get("LOGINOPTION", "")).strip()
     userName     = str(SP.get("USERNAME", "")).strip()
     hpNumber     = str(SP.get("HPNUMBER", "")).strip()
-    juminVal     = str(SP.get("JUMIN", "")).strip()
+    juminVal     = str(SP.get("JUMIN", "")).strip() or str(SP.get("JUMINNUM", "")).strip()
     telecomGubun = str(SP.get("TELECOMGUBUN", "")).strip() if loginOption == "3" else None
 
     want_all = ((request.query_params.get("all") or "").lower() in ("1", "true", "yes"))
 
     while time.time() < deadline:
         attempt += 1
-
-        # ➊ 항상 경량 재조회(콜백만, 대문자 키) — captcha는 더 이상 호출하지 않음
         try:
-            fetch_body = {"CALLBACKID": cbid, "CALLBACKTYPE": cbtp}
-            rsp2 = DATAHUB.medical_checkup_simple(fetch_body)
-            kind = "light"
+            if attempt <= 3:
+                # ➊ 경량 재조회(콜백만)
+                fetch_body = {"CALLBACKID": cbid, "CALLBACKTYPE": cbtp}
+                rsp2 = DATAHUB.medical_checkup_simple(fetch_body)
+                kind = "light"
+            else:
+                # ➋ 보강 재조회(콜백 + 본인정보)
+                #    - datahub_client.py의 medical_checkup_simple_with_identity 가
+                #      JUMIN 암호화 포함 동일 방식으로 호출하도록 구현되어 있어야 함
+                rsp2 = DATAHUB.medical_checkup_simple_with_identity(
+                    callback_id=cbid,
+                    callback_type=cbtp,
+                    login_option=loginOption,
+                    user_name=userName,
+                    hp_number=hpNumber,
+                    jumin_or_birth=juminVal,
+                    telecom_gubun=telecomGubun
+                )
+                kind = "full"
         except Exception as e:
             print("[DH-COMPLETE][ERR][fetch]", repr(e))
             time.sleep(2)
@@ -2059,22 +2074,27 @@ async def dh_simple_complete(
         data2  = (rsp2 or {}).get("data") or {}
         income = data2.get("INCOMELIST") or []
 
-        print(f"[DH-COMPLETE][FETCH] attempt={attempt} kind={kind} err={err2} income_len={len(income) if isinstance(income, list) else 'NA'} keys={list(data2.keys())[:6]}")
+        # 내부 에러 힌트(있으면)
+        inner_ecode  = data2.get("ECODE")
+        inner_errmsg = data2.get("ERRMSG")
+        if inner_ecode and inner_ecode != "0000":
+            print(f"[DH-COMPLETE][FETCH][INNER] ecode={inner_ecode} msg={inner_errmsg}")
+
+        print(f"[DH-COMPLETE][FETCH] attempt={attempt} kind={kind} err={err2} "
+              f"income_len={len(income) if isinstance(income, list) else 'NA'} "
+              f"keys={list(data2.keys())[:6]}")
 
         if err2 == "0000" and isinstance(income, list) and len(income) > 0:
             picked = pick_latest_general(rsp2, mode=("all" if want_all else "latest"))
             request.session["nhis_latest"] = picked if isinstance(picked, dict) else {}
 
-            # DB 저장 (엑셀 병합용)
+            # DB 저장 (엑셀 병합용) - 세션에는 작은 dict만
             try:
                 picked_one = pick_latest_general(rsp2, mode="latest")
                 _save_nhis_to_db(session, request, picked_one, rsp2)
-                # 저장이 스킵될 수도 있으니 세션에도 임시 보관
                 request.session["nhis_latest"] = picked_one or {}
-                #request.session["nhis_raw"]    = step2_res or {}  #쿠키 터짐 저장하지 않음
             except Exception as e:
                 print("[NHIS][DB][WARN][fetch-save]", repr(e))
-
 
             return JSONResponse({"ok": True, "errCode": "0000", "message": "OK", "data": picked}, status_code=200)
 
