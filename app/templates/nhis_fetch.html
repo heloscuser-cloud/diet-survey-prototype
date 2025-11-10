@@ -245,6 +245,7 @@ btnComplete.addEventListener('click', async () => {
    method:'POST',
    headers: {'Content-Type':'application/json'},
    body: JSON.stringify(callbackId ? { callbackId } : {})
+   credentials: 'include' 
  });
     const data = await rsp.json().catch(()=> ({}));
     console.log('[COMPLETE][rsp]', rsp.status, data);
