@@ -212,6 +212,8 @@ def verify_user(token: str) -> int:
     except Exception:
         return -1
 
+
+
 # ---- Models ----
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -294,7 +296,50 @@ def on_startup():
     init_db()
 
 
-#---- 공단검진 결과 데이터 가공/저장 헬퍼 ----#
+
+# --- NHIS 저장 헬퍼 ---
+def _save_nhis_to_db(session, request, picked: dict, raw: dict):
+    """
+    surveyresponse.nhis_json / nhis_raw 컬럼에 저장
+    - respondent_id는 rtoken 쿠키/쿼리에서 복구
+    - picked: 표준화 소형 dict (엑셀 병합용)
+    - raw   : 원문 전체 응답 (감사/추후 분석용)
+    """
+    try:
+        rid = None
+        try:
+            tok = (request.query_params.get("rtoken") or request.cookies.get("rtoken") or "")
+            rid = verify_token(tok) if tok else -1
+            if rid and rid < 0:
+                rid = None
+        except Exception:
+            rid = None
+
+        if not rid:
+            logging.info("[NHIS][DB] skip save: no respondent_id")
+            return
+
+        from sqlalchemy import text as sa_text
+        stmt = sa_text("""
+            UPDATE surveyresponse
+               SET nhis_json = :js,
+                   nhis_raw  = :raw
+             WHERE respondent_id = :rid
+        """).bindparams(
+            rid=rid,
+            js=json.dumps(picked or {}, ensure_ascii=False),
+            raw=json.dumps(raw or {}, ensure_ascii=False),
+        )
+        session.exec(stmt)
+        session.commit()
+        logging.info("[NHIS][DB] saved for respondent_id=%s (json=%s, raw=%s)",
+                     rid, bool(picked), bool(raw))
+    except Exception as e:
+        logging.error("[NHIS][DB][ERR] %r", e)
+
+
+
+#---- 공단검진 결과 데이터 가공/저장 헬퍼 (legacy)----#
 
 def pick_latest_general_checkup(nhis_data: dict) -> dict | None:
     """
@@ -1877,6 +1922,15 @@ async def dh_simple_complete(
             want_all = (request.query_params.get("all") or "").lower() in ("1", "true", "yes")
             picked = pick_latest_general(step2_res, mode=("all" if want_all else "latest"))
             request.session["nhis_latest"] = picked if isinstance(picked, dict) else {}
+            
+        # ★★★ NHIS결과 DB 저장 (엑셀 병합용)
+        try:
+            # 세션에는 all 모드일 수도 있으니, DB에는 항상 '최근1건' 표준값도 같이 보존
+            picked_one = pick_latest_general(step2_res, mode="latest")
+            _save_nhis_to_db(session, request, picked_one, step2_res)
+        except Exception as e:
+            print("[NHIS][DB][WARN][captcha-save]", repr(e))
+            
             return JSONResponse({"ok": True, "errCode": "0000", "message": "OK", "data": picked}, status_code=200)
     except Exception as e:
         print("[DH-COMPLETE][WARN][captcha-pick]", repr(e))
@@ -1960,6 +2014,13 @@ async def dh_simple_complete(
             picked = pick_latest_general(rsp2, mode=("all" if want_all else "latest"))
             request.session["nhis_latest"] = picked if isinstance(picked, dict) else {}
             return JSONResponse({"ok": True, "errCode": "0000", "message": "OK", "data": picked}, status_code=200)
+
+            # ★★★ NHIS결과 DB 저장
+            try:
+                picked_one = pick_latest_general(rsp2, mode="latest")
+                _save_nhis_to_db(session, request, picked_one, rsp2)
+            except Exception as e:
+                print("[NHIS][DB][WARN][fetch-save]", repr(e))
 
         time.sleep(2)
 
