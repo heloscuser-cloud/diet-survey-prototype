@@ -1701,9 +1701,9 @@ async def dh_simple_start(
     hpNumber     = str(payload.get("hpNumber", "")).strip()
     juminOrBirth = re.sub(r"[^0-9]", "", str(payload.get("juminOrBirth") or payload.get("birth") or ""))
 
-    # 6자리 YYMMDD로 강제
-    #if len(juminOrBirth) >= 6:
-    #    juminOrBirth = juminOrBirth[-6:]
+    # 8자리 YYYYMMDD로 강제
+    if len(juminOrBirth) >= 8:
+        juminOrBirth = juminOrBirth[-8:]
 
     # ✅ LOGINOPTION 허용값: 0~7
     allowed = {"0","1","2","3","4","5","6","7"}
@@ -1712,9 +1712,8 @@ async def dh_simple_start(
     if not loginOption or loginOption not in allowed:  missing.append("loginOption(0~7)")
     if not userName:                                   missing.append("userName")
     if not hpNumber:                                   missing.append("hpNumber")
-    if not juminOrBirth:                               missing.append("birth(YYMMDD)")
-    #elif not re.fullmatch(r"\d{6}", juminOrBirth):     missing.append("birth(YYMMDD 6자리)") #잠시주석처리로 바꿈 테스트 종료 시 원복 필수
-    # 통신사(PASS)일 때만 요구
+    if not juminOrBirth:                               missing.append("birth(YYYYMMDD)")
+    elif not re.fullmatch(r"\d{8}", juminOrBirth):     missing.append("birth(YYYYMMDD 8자리)") 
     if loginOption == "3" and not telecom:
         missing.append("telecom(PASS: 1~6, SKT|KT|LGU+ 등)")
 
@@ -1867,7 +1866,7 @@ async def dh_simple_complete(
         print("[NHIS][AUDIT][ERR][captcha]", repr(e))
 
     # 2) 결과 재조회 폴링 (CALLBACKID 대문자 키 사용)
-    deadline = time.time() + 60
+    deadline = time.time() + 180
     while time.time() < deadline:
         try:
             fetch_body = {"CALLBACKID": cbid, "CALLBACKTYPE": cbtp}  # CALLBACKTYPE 추가
@@ -1891,26 +1890,34 @@ async def dh_simple_complete(
 
             err2 = str((rsp2 or {}).get("errCode") or "")
             if err2 == "0000":
+                # pick: 전체/최근1건 토글
                 try:
-                    latest = pick_latest_general(rsp2)
+                    want_all = False
+                    try:
+                        # URL 쿼리 or 바디 둘 다 허용
+                        q_all = (request.query_params.get("all") or "").lower()
+                        p_all = str((await request.json()).get("all") if request.method == "POST" else "").lower() if False else ""
+                        want_all = (q_all in ("1","true","yes")) or (p_all in ("1","true","yes"))
+                    except Exception:
+                        pass
+
+                    picked = pick_latest_general(rsp2, mode="all" if want_all else "latest")
                 except Exception as e:
                     print("[DH-COMPLETE][WARN][pick]", repr(e))
-                    latest = None
+                    picked = {}
 
-                # 세션에는 '작은' 결과만 저장 (쿠키 4KB 보호)
-                request.session["nhis_latest"] = latest or {}
-
-                # 요약 로그
-                try:
-                    data = (rsp2 or {}).get("data") or {}
-                    income = data.get("INCOMELIST") or data.get("RESULTLIST") or []
-                    print(f"[DH-COMPLETE][SUMMARY] latest_ok={bool(latest)} "
-                          f"income_count={(len(income) if isinstance(income, list) else 'NA')} "
-                          f"keys={(list(data.keys())[:6])}")
-                except Exception:
+                # 세션에는 가볍게: 전체 모드라도 세션에는 저장 안 하거나 아주 작은 요약만
+                if not want_all:
+                    request.session["nhis_latest"] = picked or {}
+                else:
+                    # 전체는 응답에만 내려주고 세션 저장은 생략 (쿠키/세션 부하 방지)
                     pass
 
-                return JSONResponse({"ok": True, "errCode":"0000","message":"OK","data": latest or {}}, status_code=200)
+                return JSONResponse(
+                    {"ok": True, "errCode":"0000","message":"OK","data": picked or {}},
+                    status_code=200
+                )
+
 
         except Exception as e:
             print("[DH-COMPLETE][ERR][fetch]", repr(e))
