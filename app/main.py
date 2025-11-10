@@ -1951,39 +1951,37 @@ async def dh_simple_complete(
 
     while time.time() < deadline:
         attempt += 1
-        # 2-1) captcha 재호출(상태 고정/재시도) — 예외는 폴링으로 넘김
-        try:
-            _res_captcha = DATAHUB.simple_auth_complete({
-                "callbackId": cbid,
-                "callbackType": cbtp,
-                "callbackResponse":  "",
-                "callbackResponse1": "",
-                "callbackResponse2": "",
-                "retry":             "",
-            })
-        except Exception as e:
-            print("[DH-COMPLETE][ERR][captcha-retry]", repr(e))
-            time.sleep(2)
-            # captcha에서 에러가 나도 fetch는 계속 시도
+        # 2-1) captcha 재호출: 첫 성공(0000) 이후에는 더 이상 호출하지 않음
+        # 루프 바깥에 선언된 플래그를 사용 (없으면 초기화)
+        if "captcha_done" not in locals():
+            captcha_done = False
+
+        if not captcha_done:
+            try:
+                _res_captcha = DATAHUB.simple_auth_complete({
+                    "callbackId": cbid,
+                    "callbackType": cbtp,
+                    "callbackResponse":  "",
+                    "callbackResponse1": "",
+                    "callbackResponse2": "",
+                    "retry":             "",
+                })
+                # 첫 호출이 0000이면 이후 captcha는 중단
+                if (_res_captcha or {}).get("errCode") == "0000":
+                    captcha_done = True
+            except Exception as e:
+                print("[DH-COMPLETE][ERR][captcha-retry]", repr(e))
+                time.sleep(2)
+                # captcha에서 에러가 나도 fetch는 계속 시도
+
+            
         # 2-2) fetch: 경량 → 보강
         try:
-            if attempt <= 3:
-                # ➊ 경량 재조회(콜백만, 대문자 키)
-                fetch_body = {"CALLBACKID": cbid, "CALLBACKTYPE": cbtp}
-                rsp2 = DATAHUB.medical_checkup_simple(fetch_body)
-                kind = "light"
-            else:
-                # ➋ 보강 재조회(콜백 + 본인정보, JUMIN 암호화는 client에서 처리)
-                rsp2 = DATAHUB.medical_checkup_simple_with_identity(
-                    callback_id=cbid,
-                    callback_type=cbtp,
-                    login_option=loginOption,
-                    user_name=userName,
-                    hp_number=hpNumber,
-                    jumin_or_birth=juminVal,     # 8자리 YYYYMMDD
-                    telecom_gubun=telecomGubun   # PASS(3)일 때만 "1"~"6"
-                )
-                kind = "full"
+            # 항상 경량 재조회(콜백만)
+            fetch_body = {"CALLBACKID": cbid, "CALLBACKTYPE": cbtp}
+            rsp2 = DATAHUB.medical_checkup_simple(fetch_body)
+            kind = "light"
+
         except Exception as e:
             print("[DH-COMPLETE][ERR][fetch]", repr(e))
             time.sleep(2)
@@ -2015,12 +2013,12 @@ async def dh_simple_complete(
             request.session["nhis_latest"] = picked if isinstance(picked, dict) else {}
             return JSONResponse({"ok": True, "errCode": "0000", "message": "OK", "data": picked}, status_code=200)
 
-            # ★★★ NHIS결과 DB 저장
-            try:
-                picked_one = pick_latest_general(rsp2, mode="latest")
-                _save_nhis_to_db(session, request, picked_one, rsp2)
-            except Exception as e:
-                print("[NHIS][DB][WARN][fetch-save]", repr(e))
+        # ★★★ NHIS결과 DB 저장
+        try:
+            picked_one = pick_latest_general(rsp2, mode="latest")
+            _save_nhis_to_db(session, request, picked_one, rsp2)
+        except Exception as e:
+            print("[NHIS][DB][WARN][fetch-save]", repr(e))
 
         time.sleep(2)
 
