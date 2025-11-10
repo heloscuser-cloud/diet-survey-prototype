@@ -1334,18 +1334,75 @@ def survey_finish(
             status_code=401,
         )
 
-    # === NHIS 임시 보관분이 있으면, 지금 rid로 확정 저장 ===
+    # === NHIS 최종 반영: 세션에 있는 '작은 값' + nhis_audit 원문을 합쳐 surveyresponse에 저장 ===
     try:
+        import json
+        from sqlalchemy import text as sa_text
+
+        # 1) 세션의 작은 결과(없으면 빈 dict)
         picked_tmp = (request.session or {}).get("nhis_latest") or {}
-        raw_tmp    = (request.session or {}).get("nhis_raw") or {}
-        if picked_tmp or raw_tmp:
-            _save_nhis_to_db_with_id(session, respondent_id, picked_tmp, raw_tmp)
-            # 원하면 임시 세션 비우기
-            request.session.pop("nhis_latest", None)
-            request.session.pop("nhis_raw", None)
-            logging.info("[NHIS][FINISH] persisted from session for rid=%s", respondent_id)
+
+        # 2) 원문은 nhis_audit에서 끌어온다.
+        #    기준1: 가장 최근 callback_id의 응답
+        cbid = (request.session or {}).get("nhis_callback_id")
+        raw_from_audit = None
+
+        if cbid:
+            stmt = sa_text("""
+                SELECT response_json
+                FROM nhis_audit
+                WHERE callback_id = :cbid
+                ORDER BY id DESC
+                LIMIT 1
+            """).bindparams(cbid=cbid)
+            row = session.exec(stmt).first()
+            if row:
+                raw_from_audit = row[0]
+
+        # 기준2(보강): respondent_id가 이미 채워진 감사로그 중 최근 1건
+        if raw_from_audit is None:
+            stmt2 = sa_text("""
+                SELECT response_json
+                FROM nhis_audit
+                WHERE respondent_id = :rid
+                ORDER BY id DESC
+                LIMIT 1
+            """).bindparams(rid=respondent_id)
+            row2 = session.exec(stmt2).first()
+            if row2:
+                raw_from_audit = row2[0]
+
+        # 3) DB에 최종 저장
+        #    - nhis_json: '최근 1건' 표준화 결과가 들어가야 export가 붙음
+        #    - nhis_raw : 전체 원문 (감사/추후 분석용)
+        if picked_tmp or raw_from_audit:
+            # 표준값이 세션에 없다면, raw_from_audit로 계산해서 만들어준다.
+            if not picked_tmp and raw_from_audit:
+                try:
+                    picked_tmp = pick_latest_general(raw_from_audit, mode="latest")
+                except Exception:
+                    picked_tmp = {}
+
+            stmt_up = sa_text("""
+                UPDATE surveyresponse
+                SET nhis_json = :js,
+                    nhis_raw  = :raw
+                WHERE respondent_id = :rid
+            """).bindparams(
+                rid=respondent_id,
+                js=json.dumps(picked_tmp or {}, ensure_ascii=False),
+                raw=json.dumps(raw_from_audit or {}, ensure_ascii=False),
+            )
+            session.exec(stmt_up)
+            session.commit()
+            logging.info("[NHIS][FINISH] persisted rid=%s (json=%s, raw=%s)",
+                        respondent_id, bool(picked_tmp), bool(raw_from_audit))
+        else:
+            logging.info("[NHIS][FINISH] nothing to persist (rid=%s)", respondent_id)
+
     except Exception as e:
         logging.error("[NHIS][FINISH][ERR] %r", e)
+
 
         
     # NHIS(국가검진) 최신 결과 세션에서 꺼내기
@@ -1879,6 +1936,15 @@ async def dh_simple_complete(
         cbtp,
     )
 
+    # 해당 시점 rtoken 유무 확인 로그
+    try:
+        rtok = (request.query_params.get("rtoken") or request.cookies.get("rtoken") or "")
+        rid_dbg = verify_token(rtok) if rtok else None
+        logging.info("[RTOKEN][DBG][complete] raw=%s | rid=%s", ("yes" if rtok else "no"), (rid_dbg if rid_dbg else "None"))
+    except Exception as e:
+        logging.info("[RTOKEN][DBG][complete][ERR] %r", e)
+
+
     # 0-1) 최소 검증 (DataHub 호출 낭비 방지)
     if not cbid or not cbtp:
         logging.warning("[DH-COMPLETE][VALIDATION] missing=%s", [k for k, v in {"callbackId": cbid, "callbackType": cbtp}.items() if not v])
@@ -1942,7 +2008,7 @@ async def dh_simple_complete(
                 _save_nhis_to_db(session, request, picked_one, step2_res)
                 # 저장이 스킵될 수도 있으니 세션에도 임시 보관
                 request.session["nhis_latest"] = picked_one or {}
-                request.session["nhis_raw"]    = step2_res or {}
+                #request.session["nhis_raw"]    = step2_res or {}  #쿠키 터짐 저장하지 않음
             except Exception as e:
                 print("[NHIS][DB][WARN][captcha-save]", repr(e))
 
@@ -2007,7 +2073,7 @@ async def dh_simple_complete(
                 _save_nhis_to_db(session, request, picked_one, rsp2)
                 # 저장이 스킵될 수도 있으니 세션에도 임시 보관
                 request.session["nhis_latest"] = picked_one or {}
-                request.session["nhis_raw"]    = rsp2 or {}
+                #request.session["nhis_raw"]    = step2_res or {}  #쿠키 터짐 저장하지 않음
             except Exception as e:
                 print("[NHIS][DB][WARN][fetch-save]", repr(e))
 
