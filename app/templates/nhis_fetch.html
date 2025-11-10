@@ -222,7 +222,8 @@ btnStart.addEventListener('click', async () => {
       body: JSON.stringify(
         callbackId ? { callbackId, gender: preGender } : { gender: preGender }
       )
-    });
+    })
+  };
 
     const data = await rsp.json();
     console.log('[DH][start]', rsp.status, data);
