@@ -629,41 +629,9 @@ def home(request: Request):
     # 기존 사용자용 홈 유지
     return templates.TemplateResponse("index.html", {"request": request})
 
-#사용자 로그인 화면 렌더
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
-
-#로그인 코드 검증, 진행
-@app.post("/login/verify")
-def login_verify(request: Request, phone: str = Form(...), session: Session = Depends(get_session)):
-    """user_admin.phone에 등록된 번호(=로그인 코드)인지 확인 후 /nhis로 이동"""
-    raw = "".join([c for c in (phone or "") if c.isdigit()])
-    if not raw or len(raw) < 10:
-        return templates.TemplateResponse("login.html", {"request": request, "error": "번호 형식이 올바르지 않습니다."}, status_code=400)
-
-    try:
-        stmt = sa_text("""
-            SELECT id, name, phone, is_active
-            FROM user_admin
-            WHERE phone = :p AND is_active = TRUE
-            LIMIT 1
-        """).bindparams(p=raw)
-        row = session.exec(stmt).first()
-    except Exception as e:
-        return templates.TemplateResponse("login.html", {"request": request, "error": "로그인 처리 중 오류가 발생했습니다."}, status_code=500)
-
-    if not row:
-        return templates.TemplateResponse("login.html", {"request": request, "error": "등록되지 않은 코드입니다."}, status_code=401)
-
-    # === 로그인 세션 마크만 남기고 기존 흐름 유지 ===
-    request.session["admin_phone"] = raw  # 나중 감사용/필요시 사용
-
-    # 바로 간편인증 플로우로
-    resp = RedirectResponse(url="/nhis", status_code=302)
-    resp.set_cookie("login_ok", "1", max_age=60*60*24*7, httponly=True, samesite="Lax")
-    return resp
-
 
 @app.post("/login/send")
 def login_send(request: Request, phone: str = Form(...), session: Session = Depends(get_session)):

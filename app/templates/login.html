@@ -3,17 +3,26 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>로그인</title>
+  <title>로그인 코드 입력</title>
   <link rel="stylesheet" href="/static/css/styles.css">
 </head>
 <body>
   <div class="container">
-    <h1>로그인 (프로토타입)</h1>
-    <p>휴대폰 번호를 입력하면 6자리 코드가 <em>서버 로그</em>에 출력됩니다. (실서비스: SMS 전송)</p>
-    <form method="post" action="/login/send">
-      <label>휴대폰 번호 <input name="phone" required placeholder="01012345678" pattern="\d{10,11}"></label>
-      <button type="submit">로그인 코드 받기</button>
+    <h1>로그인 코드 입력</h1>
+    <p>담당자에게 전달받은 <strong>코드(휴대폰 번호)</strong>를 입력해주세요.</p>
+
+    {% if error %}
+      <p style="color:#b91c1c; font-weight:600;">{{ error }}</p>
+    {% endif %}
+
+    <form method="post" action="/login/verify">
+      <label>
+        로그인 코드(휴대폰 번호)
+        <input name="phone" required placeholder="01012345678" pattern="\d{10,11}">
+      </label>
+      <button type="submit">확인</button>
     </form>
+
     <p class="hint"><a href="/">처음으로</a></p>
   </div>
 </body>
