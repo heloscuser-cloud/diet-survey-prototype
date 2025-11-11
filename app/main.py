@@ -794,19 +794,24 @@ admin_router = APIRouter(
 def admin_login_form(request: Request):
     return templates.TemplateResponse("admin/login.html", {"request": request, "error": None})
 
+
 @app.post("/admin/login")
 def admin_login(request: Request, user: str = Form(...), pw: str = Form(...)):
     # 여러 계정 지원
     users = [u.strip() for u in (os.getenv("ADMIN_USERS") or "").split(",") if u.strip()]
-    pwds  = [p.strip() for p in (os.getenv("ADMIN_PASSWORDS") or "").split(",") if p.strip()]
+    pwds  = [p.strip() for p in (os.getenv("ADMIN_PASS") or "").split(",") if p.strip()]
 
     # 1:1 매칭 (인덱스 기준)
     valid = any(u == user and i < len(pwds) and pw == pwds[i] for i, u in enumerate(users))
     if not valid:
         return templates.TemplateResponse("error.html", {"request": request, "message": "인증 실패"}, status_code=401)
 
-    # 성공 시 세션 쿠키 등 기존 로직 그대로
-    request.session["is_admin"] = True
+
+    # --- 세션 발급 ---
+    request.session.clear()
+    request.session["admin"] = True
+    request.session["_iat"] = int(datetime.now(timezone.utc).timestamp())
+
     return RedirectResponse(url="/admin/responses", status_code=303)
 
 
