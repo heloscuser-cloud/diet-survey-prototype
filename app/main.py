@@ -798,7 +798,7 @@ def admin_login_form(request: Request):
 @app.post("/admin/login")
 def admin_login(request: Request, user: str = Form(...), pw: str = Form(...)):
     # 여러 계정 지원
-    users = [u.strip() for u in (os.getenv("ADMIN_USERS") or "").split(",") if u.strip()]
+    users = [u.strip() for u in (os.getenv("ADMIN_USER") or "").split(",") if u.strip()]
     pwds  = [p.strip() for p in (os.getenv("ADMIN_PASS") or "").split(",") if p.strip()]
 
     # 1:1 매칭 (인덱스 기준)
