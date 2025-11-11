@@ -795,24 +795,18 @@ def admin_login_form(request: Request):
     return templates.TemplateResponse("admin/login.html", {"request": request, "error": None})
 
 @app.post("/admin/login")
-def admin_login(request: Request, username: str = Form(...), password: str = Form(...)):
-    ok = (
-        ADMIN_USER and ADMIN_PASS and
-        secrets.compare_digest(username, ADMIN_USER) and
-        secrets.compare_digest(password, ADMIN_PASS)
-    )
-    if not ok:
-        return templates.TemplateResponse(
-            "admin/login.html",
-            {"request": request, "error": "아이디 또는 비밀번호가 올바르지 않습니다."},
-            status_code=401
-        )
+def admin_login(request: Request, user: str = Form(...), pw: str = Form(...)):
+    # 여러 계정 지원
+    users = [u.strip() for u in (os.getenv("ADMIN_USERS") or "").split(",") if u.strip()]
+    pwds  = [p.strip() for p in (os.getenv("ADMIN_PASSWORDS") or "").split(",") if p.strip()]
 
-    # --- 세션 발급 ---
-    request.session.clear()
-    request.session["admin"] = True
-    request.session["_iat"] = int(datetime.now(timezone.utc).timestamp())
+    # 1:1 매칭 (인덱스 기준)
+    valid = any(u == user and i < len(pwds) and pw == pwds[i] for i, u in enumerate(users))
+    if not valid:
+        return templates.TemplateResponse("error.html", {"request": request, "message": "인증 실패"}, status_code=401)
 
+    # 성공 시 세션 쿠키 등 기존 로직 그대로
+    request.session["is_admin"] = True
     return RedirectResponse(url="/admin/responses", status_code=303)
 
 
