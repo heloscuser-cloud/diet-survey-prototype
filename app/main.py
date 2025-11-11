@@ -802,7 +802,7 @@ def admin_login(request: Request, username: str = Form(...), password: str = For
     password  = [p.strip() for p in (os.getenv("ADMIN_PASS") or "").split(",") if p.strip()]
 
     # 1:1 매칭 (인덱스 기준)
-    valid = any(u == username and i < len(password) and password == password[i] for i, u in enumerate(users))
+    valid = any(u == username and i < len(password) and password == password[i] for i, u in enumerate(username))
     if not valid:
         return templates.TemplateResponse("error.html", {"request": request, "message": "인증 실패"}, status_code=401)
 
