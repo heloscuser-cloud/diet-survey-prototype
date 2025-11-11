@@ -28,7 +28,10 @@
     #status strong { font-size: 1.05rem; color:#111; }
     #status .warn { color:#b91c1c; font-weight:600; }
     #status .ok { color:#16a34a; font-weight:600; }
-    .gender-wrap label { font-size: 11pt; margin-right:14px; }
+    /* 라디오 + 텍스트 수평/수직 정렬 */
+    .gender-wrap { display:flex; align-items:center; gap:20px; }
+    .gender-wrap label { display:inline-flex; align-items:center; gap:6px; font-size:11pt; margin:0; }
+    .gender-wrap input[type="radio"] { margin:0; }
   </style>
 </head>
 <body>
