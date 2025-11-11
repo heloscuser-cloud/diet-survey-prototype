@@ -783,6 +783,11 @@ def admin_required(request: Request):
         pass
     raise HTTPException(status_code=401)
 
+@app.get("/admin/login", response_class=HTMLResponse)
+def admin_login_form(request: Request):
+    # 에러 메시지 표시용 기본값 포함
+    return templates.TemplateResponse("admin/login.html", {"request": request, "error": None})
+
 
 # 관리자 전용 라우터
 admin_router = APIRouter(
