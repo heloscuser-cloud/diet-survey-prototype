@@ -794,15 +794,15 @@ admin_router = APIRouter(
 def admin_login_form(request: Request):
     return templates.TemplateResponse("admin/login.html", {"request": request, "error": None})
 
-
 @app.post("/admin/login")
-def admin_login(request: Request, user: str = Form(...), pw: str = Form(...)):
+def admin_login(request: Request, username: str = Form(...), password: str = Form(...)):
+   
     # 여러 계정 지원
-    users = [u.strip() for u in (os.getenv("ADMIN_USER") or "").split(",") if u.strip()]
-    pwds  = [p.strip() for p in (os.getenv("ADMIN_PASS") or "").split(",") if p.strip()]
+    username = [u.strip() for u in (os.getenv("ADMIN_USER") or "").split(",") if u.strip()]
+    password  = [p.strip() for p in (os.getenv("ADMIN_PASS") or "").split(",") if p.strip()]
 
     # 1:1 매칭 (인덱스 기준)
-    valid = any(u == user and i < len(pwds) and pw == pwds[i] for i, u in enumerate(users))
+    valid = any(u == username and i < len(password) and password == password[i] for i, u in enumerate(users))
     if not valid:
         return templates.TemplateResponse("error.html", {"request": request, "message": "인증 실패"}, status_code=401)
 
