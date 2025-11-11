@@ -790,24 +790,34 @@ admin_router = APIRouter(
     dependencies=[Depends(admin_required)]
 )
 
-@app.get("/admin/login", response_class=HTMLResponse)
-def admin_login_form(request: Request):
-    return templates.TemplateResponse("admin/login.html", {"request": request, "error": None})
-
 @app.post("/admin/login")
-def admin_login(request: Request, username: str = Form(...), password: str = Form(...)):
-   
-    # 여러 계정 지원
-    username = [u.strip() for u in (os.getenv("ADMIN_USER") or "").split(",") if u.strip()]
-    password  = [p.strip() for p in (os.getenv("ADMIN_PASS") or "").split(",") if p.strip()]
+async def admin_login(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+):
 
-    # 1:1 매칭 (인덱스 기준)
-    valid = any(u == username and i < len(password) and password == password[i] for i, u in enumerate(username))
+    # 1) ENV에서 계정 목록 읽기 (콤마 지원)
+    #    예: ADMIN_USER="admin1,admin2"  ADMIN_PASS="pass1,pass2"
+    env_users = [u.strip() for u in (os.getenv("ADMIN_USER") or "").replace("\n", "").split(",") if u.strip()]
+    env_pwds  = [p.strip() for p in (os.getenv("ADMIN_PASS") or "").replace("\n", "").split(",") if p.strip()]
+
+    # 2) 방어: 개수 불일치 시 뒤쪽 잘라내기
+    n = min(len(env_users), len(env_pwds))
+    env_users = env_users[:n]
+    env_pwds  = env_pwds[:n]
+
+    # 3) 1:1 인덱스 매칭으로 검증
+    valid = any((username == env_users[i] and password == env_pwds[i]) for i in range(n))
+
     if not valid:
-        return templates.TemplateResponse("error.html", {"request": request, "message": "인증 실패"}, status_code=401)
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": "인증 실패"},
+            status_code=401,
+        )
 
-
-    # --- 세션 발급 ---
+    # 4) 세션 발급 (기존 키 그대로)
     request.session.clear()
     request.session["admin"] = True
     request.session["_iat"] = int(datetime.now(timezone.utc).timestamp())
