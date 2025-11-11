@@ -524,18 +524,24 @@ def _host(request: Request) -> str:
 
 ADMIN_HOST = "admin.gaonnsurvey.store"
 
-@app.get("/info")
-def info_redirect():
-    return RedirectResponse(url="/survey", status_code=302)
+@app.get("/info", response_class=HTMLResponse)
+def info_form(request: Request, auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME)):
+    user_id = verify_user(auth) if auth else -1
+    if user_id < 0:
+        return RedirectResponse(url="/login", status_code=302)
+    return templates.TemplateResponse("info.html", {"request": request})
 
 # -----------------------------------------------
-# NHIS 건강검진 조회 페이지 (info/Survey 전 단계)
+# NHIS 건강검진 조회 페이지 (info 전 단계)
 # -----------------------------------------------
 
 @app.get("/nhis")
 def nhis_page(request: Request):
     auth_base = os.getenv("DATAHUB_API_BASE", "https://datahub-dev.scraping.co.kr").rstrip("/")
-    return templates.TemplateResponse("nhis_fetch.html", {"request": request, "next_url": "/info", "datahub_auth_base": auth_base})
+    return templates.TemplateResponse(
+        "nhis_fetch.html",
+        {"request": request, "next_url": "/survey", "datahub_auth_base": auth_base}
+    )
 
     
 @app.get("/healthz")
@@ -1457,48 +1463,6 @@ def survey_finish(
     height = (getattr(resp, "height_cm", None) if resp else None) or (getattr(user, "height_cm", None) if user else None)
     weight = (getattr(resp, "weight_kg", None) if resp else None) or (getattr(user, "weight_kg", None) if user else None)
 
-    # === 기존 /info페이지 대체 저장: 간편인증에서 받은 기본정보 + NHIS에서 키/몸무게 ===
-    try:
-        SP = (request.session or {}).get("nhis_start_payload") or {}
-        pre_name  = str(SP.get("USERNAME") or "").strip()
-        pre_birth = str(SP.get("JUMIN") or SP.get("JUMINNUM") or "").strip()   # 8자리 YYYYMMDD
-        pre_hp    = str(SP.get("HPNUMBER") or "").strip()
-        pre_gender = str((request.session or {}).get("pre_gender") or "").strip()  # '남'/'여'
-
-        # NHIS에서 키/몸무게 후보 뽑기(표준값)
-        nhis_latest = nhis_latest if isinstance(nhis_latest, dict) else {}
-        nhis_h = nhis_latest.get("HEIGHT") or nhis_latest.get("height")
-        nhis_w = nhis_latest.get("WEIGHT") or nhis_latest.get("weight")
-
-        # Respondent 필드에 주입 (존재하는 필드만)
-        if resp:
-            # 이름
-            if pre_name and (not getattr(resp, "applicant_name", None)):
-                resp.applicant_name = pre_name
-
-            # 생년월일
-            if pre_birth and len(pre_birth) == 8 and (not getattr(resp, "birth_date", None)):
-                try:
-                    bd_iso = f"{pre_birth[:4]}-{pre_birth[4:6]}-{pre_birth[6:]}"
-                    resp.birth_date = date.fromisoformat(bd_iso)
-                except Exception:
-                    pass
-
-            # 성별
-            if pre_gender in ("남", "여") and (not getattr(resp, "gender", None)):
-                resp.gender = pre_gender
-
-            # 휴대폰번호: Respondent에 해당 필드가 있다면 주입 (없으면 무시)
-            if hasattr(resp, "phone") and pre_hp and (not getattr(resp, "phone", None)):
-                resp.phone = pre_hp
-
-            session.add(resp)
-            session.commit()
-            session.refresh(resp)
-    except Exception as e:
-        logging.warning("[INFO-REPLACE][WARN] %r", e)
-
-
     # SurveyResponse 생성 (이번 제출 레코드에 NHIS를 '직접' 저장)
     sr = SurveyResponse(
         respondent_id=respondent_id,
@@ -1567,6 +1531,8 @@ def survey_finish(
     return response
 
 
+
+
 @app.post("/admin/responses/export.xlsx")
 async def admin_export_xlsx(
     request: Request,
@@ -1604,8 +1570,10 @@ async def admin_export_xlsx(
                 return ""
             for k in ("EXAMYEAR", "GUNYEAR", "YEAR", "YY"):
                 v = d.get(k)
-                if isinstance(v, int): return str(v)
-                if isinstance(v, str) and v.isdigit(): return v
+                if isinstance(v, int):
+                    return str(v)
+                if isinstance(v, str) and v.isdigit():
+                    return v
             for k in ("EXAMDATE", "EXAM_DATE", "검진일자", "exam_date", "GUNDATE"):
                 v = d.get(k)
                 if isinstance(v, str) and len(v) >= 4 and v[:4].isdigit():
@@ -1631,11 +1599,13 @@ async def admin_export_xlsx(
         def pick(*keys: str) -> str:
             for k in keys:
                 v = nj.get(k)
-                if v not in (None, "", []): return str(v)
+                if v not in (None, "", []):
+                    return str(v)
             if raw_item:
                 for k in keys:
                     v = raw_item.get(k)
-                    if v not in (None, "", []): return str(v)
+                    if v not in (None, "", []):
+                        return str(v)
             return ""
 
         exam_year = _year_of(nj) or _year_of(raw_item or {})
@@ -1649,7 +1619,7 @@ async def admin_export_xlsx(
             "vision":         pick("SIGHT"),
             "hearing":        pick("HEARING"),
             "hemoglobin":     pick("HEMOGLOBIN"),
-            "fbs":            pick("BLOODSUGAR"),
+            "fbs":            pick("BLOODSUGAR"),   # 공복혈당
             "tc":             pick("TOTCHOLESTEROL"),
             "hdl":            pick("HDLCHOLESTEROL", "HDL_CHOLESTEROL"),
             "ldl":            pick("LDLCHOLESTEROL", "LDL_CHOLESTEROL"),
@@ -1744,9 +1714,7 @@ async def admin_export_xlsx(
 
     today = now_kst().date()
 
-    # ✅ info용 "신장","체중"을 제거한 고정 헤더
     fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별"]
-
     nhis_headers  = [
         "검진년도","신장(NHIS)","체중(NHIS)","BMI",
         "혈압","시력","청력","혈색소","공복혈당",
@@ -1767,11 +1735,14 @@ async def admin_export_xlsx(
         resp = session.get(Respondent, sr.respondent_id) if sr.respondent_id else None
         user = session.get(User, resp.user_id) if resp and resp.user_id else None
 
-        # 인적사항 (finish에서 간편인증 값으로 보정됨)
+        # 인적사항
         name = (resp.applicant_name if resp and resp.applicant_name else (user.name_enc if user and user.name_enc else "")) or ""
         bd = resp.birth_date if (resp and resp.birth_date) else (getattr(user, "birth_date", None) if user else None)
         age = calc_age(bd, today) if bd else ""
         gender = (resp.gender if resp and resp.gender else (user.gender if user and user.gender else "")) or ""
+        height = (getattr(resp, "height_cm", None) if resp else None) or (getattr(user, "height_cm", None) if user else None)
+        weight = (getattr(resp, "weight_kg", None) if resp else None) or (getattr(user, "weight_kg", None) if user else None)
+        serial_no = resp.serial_no if (resp and resp.serial_no is not None) else ""
 
         # 답 추출
         try:
@@ -1781,22 +1752,21 @@ async def admin_export_xlsx(
             payload = {}
         answers = extract_answers(payload, questions_sorted)
 
-        # NHIS 표준+백업 추출
+        # NHIS 표준+백업 추출 (표준: nhis_json, 원본: nhis_raw)
         nhis_std = nhis_extract_all(
             get_nhis_dict(sr.nhis_json),
             get_nhis_dict(sr.nhis_raw),
         )
 
-        # ✅ info-기반 신장/체중 칼럼은 삭제. NHIS 쪽만 유지/기재.
         row = [
             idx,
-            (resp.serial_no if (resp and resp.serial_no is not None) else ""),
+            serial_no,
             name,
             (bd.isoformat() if bd else ""),
             age,
             gender,
 
-            # NHIS 열들
+            # NHIS 열들 (검진년도만, 기관 없음)
             nhis_std.get("exam_year", ""),
             nhis_std.get("height", ""),
             nhis_std.get("weight", ""),
@@ -1863,15 +1833,7 @@ async def dh_simple_start(
     session: Session = Depends(get_session),   # ★ 추가: 감사로그에 씁니다
 ):
     payload = await request.json()
-    
-    # 사용자가 간편인증 화면에서 선택한 성별(인증에는 미사용)을 세션 보관
-    try:
-        pre_gender = str(payload.get("gender") or "").strip()
-        if pre_gender in ("남", "여"):
-            request.session["pre_gender"] = pre_gender
-    except Exception:
-        pass
-    
+
     loginOption  = str(payload.get("loginOption", "")).strip()
     telecom      = str(payload.get("telecom", "")).strip()
     userName     = str(payload.get("userName", "")).strip()
@@ -1885,10 +1847,7 @@ async def dh_simple_start(
     # ✅ LOGINOPTION 허용값: 0~7
     allowed = {"0","1","2","3","4","5","6","7"}
 
-    # 새 트랜잭션 시작: 낡은 콜백/상태 제거
-    for k in ("nhis_callback_id", "nhis_callback_type", "dh_callback"):
-        request.session.pop(k, None)
-
+    #필수 입력값 점검
     missing = []
     if not loginOption or loginOption not in allowed:  missing.append("loginOption(0~7)")
     if not userName:                                   missing.append("userName")
@@ -1902,6 +1861,10 @@ async def dh_simple_start(
         logging.warning("[DH-START][VALIDATION] missing=%s", missing)
         return JSONResponse({"result":"FAIL","message":"필수 입력 누락","missing":missing}, status_code=400)
 
+    # 새 트랜잭션 시작: 낡은 콜백/상태 제거  ← ★ 이 줄부터 추가
+    for k in ("nhis_callback_id", "nhis_callback_type", "dh_callback"):
+        request.session.pop(k, None)
+    
     # hpNumber: 숫자만, 하이픈 없음
     hpNumber = re.sub(r'[^0-9]', '', hpNumber or '')
 
@@ -1918,7 +1881,12 @@ async def dh_simple_start(
     # (선택) 민감값 마스킹 로그
     _safe = {**dh_body, "HPNUMBER": _mask_phone(dh_body.get("HPNUMBER","")), "JUMIN": _mask_birth(dh_body.get("JUMIN",""))}
     logging.debug("[DH-START][BODY]%s", _safe)
- 
+    
+    #성별 세션 보관
+    gender = str(payload.get("gender","")).strip() 
+    request.session["nhis_gender"] = gender if gender in ("남","여") else ""
+    
+    #인적정보 세션 보관
     request.session["nhis_start_payload"] = dh_body
 
     # 1) 시작 호출
@@ -2075,7 +2043,33 @@ async def dh_simple_complete(
             except Exception as e:
                 print("[NHIS][DB][WARN][captcha-save]", repr(e))
 
+
+            # --- 성공 직전 User 인적정보 업데이트(이름/성별/생년월일) ---
+            try:
+                from datetime import date
+                auth_cookie = request.cookies.get(AUTH_COOKIE_NAME)
+                user_id = verify_user(auth_cookie) if auth_cookie else -1
+                if user_id and user_id > 0:
+                    user = session.get(User, user_id)
+                    if user:
+                        sp = (request.session or {}).get("nhis_start_payload") or {}
+                        nm = str(sp.get("USERNAME") or "").strip()
+                        bd8 = str(sp.get("JUMIN") or "").strip()
+                        gd = (request.session or {}).get("nhis_gender") or ""
+                        # 생년월일 파싱(YYYYMMDD)
+                        bd_date = None
+                        if len(bd8) == 8 and bd8.isdigit():
+                            bd_date = date(int(bd8[0:4]), int(bd8[4:6]), int(bd8[6:8]))
+                        # 저장(있을 때만 덮어씀)
+                        if nm: user.name_enc = nm
+                        if gd in ("남","여"): user.gender = gd
+                        if bd_date: user.birth_date = bd_date; user.birth_year = bd_date.year
+                        session.add(user); session.commit()
+            except Exception as _e:
+                logging.debug("[NHIS][USER-SNAPSHOT][WARN] %r", _e)
+
             return JSONResponse({"ok": True, "errCode": "0000", "message": "OK", "data": picked}, status_code=200)
+  
     except Exception as e:
         print("[DH-COMPLETE][WARN][captcha-pick]", repr(e))
 
@@ -2158,6 +2152,31 @@ async def dh_simple_complete(
                 request.session["nhis_latest"] = picked_one or {}
             except Exception as e:
                 logging.warning("[NHIS][DB][WARN][fetch-save] %r", e)
+                
+            # --- 성공 직전 User 인적정보 업데이트(이름/성별/생년월일) ---
+            try:
+                from datetime import date
+                auth_cookie = request.cookies.get(AUTH_COOKIE_NAME)
+                user_id = verify_user(auth_cookie) if auth_cookie else -1
+                if user_id and user_id > 0:
+                    user = session.get(User, user_id)
+                    if user:
+                        sp = (request.session or {}).get("nhis_start_payload") or {}
+                        nm = str(sp.get("USERNAME") or "").strip()
+                        bd8 = str(sp.get("JUMIN") or "").strip()
+                        gd = (request.session or {}).get("nhis_gender") or ""
+                        # 생년월일 파싱(YYYYMMDD)
+                        bd_date = None
+                        if len(bd8) == 8 and bd8.isdigit():
+                            bd_date = date(int(bd8[0:4]), int(bd8[4:6]), int(bd8[6:8]))
+                        # 저장(있을 때만 덮어씀)
+                        if nm: user.name_enc = nm
+                        if gd in ("남","여"): user.gender = gd
+                        if bd_date: user.birth_date = bd_date; user.birth_year = bd_date.year
+                        session.add(user); session.commit()
+            except Exception as _e:
+                logging.debug("[NHIS][USER-SNAPSHOT][WARN] %r", _e)
+            
             return JSONResponse({"ok": True, "errCode": "0000", "message": "OK", "data": picked}, status_code=200)
 
         time.sleep(NHIS_FETCH_INTERVAL)

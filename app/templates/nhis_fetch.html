@@ -1,244 +1,257 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="utf-8" />
-  <title>국가검진 간편인증</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"/>
+  <title>국가건강검진 데이터 조회</title>
   <style>
-    body { font-family: system-ui, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; margin: 20px; }
-    .row { display:block; margin: 10px 0; }
-    .row-inline { display:flex; align-items:center; gap:10px; margin:10px 0; flex-wrap:wrap; }
-    label { min-width: 88px; display:inline-block; }
-    input[type="text"], select { padding:8px; border:1px solid #ccc; border-radius:6px; min-width: 220px; }
-    button { padding:10px 14px; border:0; border-radius:8px; background:#111827; color:white; cursor:pointer; }
-    button:disabled { opacity:.45; cursor:not-allowed; }
-    #status { margin-top: 8px; font-size: 12px; }
-    #status.ok { color: #047857; }
-    #status.warn { color: #b45309; }
-    #status.err { color: #b91c1c; }
-    .hint { font-size: 12px; color:#6b7280; margin-left: 6px; }
-    .gender-label { font-weight:600; margin-right:8px; }
-    .gender-wrap { display:flex; align-items:center; gap:14px; }
-    .gender-wrap label { display:inline-flex; align-items:center; gap:6px; }
-    .gender-wrap span { font-size: 11pt; } /* ★ 남/여 11pt */
+    :root { --bg:#f6f7fb; --card:#fff; --text:#0f172a; --muted:#64748b; --pri:#2563eb; --ok:#10b981; --err:#ef4444;}
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family: system-ui,-apple-system,Segoe UI,Roboto,Apple SD Gothic Neo,Noto Sans KR,sans-serif;}
+    .container{max-width:720px;margin:0 auto;padding:20px;}
+    h1{font-size:20px;margin:6px 0 12px;}
+    p.muted{color:var(--muted);font-size:14px;margin:4px 0 16px;}
+    .card{background:var(--card);border-radius:14px;box-shadow:0 6px 20px rgba(2,6,23,.05);padding:16px;margin-bottom:14px}
+    .row{display:flex;flex-direction:column;gap:10px;}
+    .row-inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    label{font-size:14px;color:#1f2937;}
+    input,select{width:100%;padding:12px;border:1px solid #e5e7eb;border-radius:10px;font-size:16px;box-sizing:border-box}
+    input::placeholder{color:#9ca3af}
+    .btn{appearance:none;border:0;border-radius:12px;padding:12px 16px;font-weight:600;font-size:16px;cursor:pointer;user-select:none}
+    .btn:disabled{opacity:.45;cursor:not-allowed}
+    .btn-primary{background:var(--pri);color:#fff}
+    .btn-secondary{background:#eef2ff;color:#1e293b;border:1px solid #e5e7eb}
+    .stack{display:flex;gap:10px;flex-wrap:wrap}
+    .stack .btn{flex:1}
+    .preview{background:#eef2ff;border-radius:12px;padding:10px;margin-top:8px}
+    .status{font-size:14px;margin-top:8px}
+    .status.ok{color:var(--ok)} .status.err{color:var(--err)}
+    #status strong { font-size: 1.05rem; color:#111; }
+    #status .warn { color:#b91c1c; font-weight:600; }
+    #status .ok { color:#16a34a; font-weight:600; }
+    .gender-wrap label { font-size: 11pt; margin-right:14px; }
   </style>
 </head>
 <body>
-  <h2>국가검진 간편인증</h2>
+  <div class="container">
+    <h1>국가건강검진 데이터 조회</h1>
+    <p class="muted">간편인증을 완료한 뒤 “인증완료”를 누르면, 최근 10년 중 <b>가장 최근 일반검진 1건</b>을 연결합니다.</p>
 
-  <div class="row-inline">
-    <label for="loginSel">인증수단</label>
-    <select id="loginSel">
-      <option value="0">카카오톡</option>
-      <option value="1">삼성패스</option>
-      <option value="2">페이코</option>
-      <option value="3">통신사 PASS</option>
-      <option value="4">KB 모바일</option>
-      <option value="5">네이버 인증서</option>
-      <option value="6">신한 인증서</option>
-      <option value="7">토스 인증서</option>
-    </select>
-
-    <label for="telecomSel">통신사</label>
-    <select id="telecomSel" disabled>
-      <option value="">(선택)</option>
-      <option value="1">KT</option>
-      <option value="2">SKT</option>
-      <option value="3">LG U+</option>
-      <option value="4">KT 알뜰폰</option>
-      <option value="5">SKT 알뜰폰</option>
-      <option value="6">LG 알뜰폰</option>
-    </select>
-    <span class="hint">※ 통신사 PASS 선택 시 필수</span>
-  </div>
-
-  <div class="row-inline">
-    <label for="nameEl">이름</label>
-    <input id="nameEl" type="text" placeholder="홍길동" />
-  </div>
-
-  <div class="row-inline">
-    <label for="birthEl">생년월일</label>
-    <input id="birthEl" type="text" inputmode="numeric" maxlength="8" placeholder="YYYYMMDD (8자리)" />
-  </div>
-
-  <!-- ★ 성별 (라벨 포함, 남/여 11pt) -->
-  <div class="row-inline">
-    <span class="gender-label">성별</span>
-    <div class="gender-wrap">
-      <label><input type="radio" name="pre_gender" value="남" /> <span>남</span></label>
-      <label><input type="radio" name="pre_gender" value="여" /> <span>여</span></label>
+    <div class="card">
+      <div class="row">
+        <div>
+          <label>간편인증 수단</label>
+          <select id="loginOption">
+            <option value="" selected>-- 선택 --</option>
+            <option value="0">카카오톡</option>
+            <option value="1">삼성패스</option>
+            <option value="2">페이코</option>
+            <option value="3">통신사 PASS인증서</option>
+            <option value="4">KB모바일인증서</option>
+            <option value="5">네이버인증서</option>
+            <option value="6">신한인증서</option>
+            <option value="7">토스인증서</option>
+          </select>
+        </div>
+        <div id="telecomRow" style="display:none">
+          <label>통신사(PASS 선택 시)</label>
+          <select id="telecom" class="mt-1 w-full border rounded px-3 py-2" disabled>
+            <option value="" selected>-- 통신사 선택 --</option>
+            <option value="1">KT</option>
+            <option value="2">SKT</option>
+            <option value="3">LG</option>
+            <option value="4">KT알뜰폰</option>
+            <option value="5">SKT알뜰폰</option>
+            <option value="6">LG알뜰폰</option>
+          </select>
+        </div>
+        <div>
+          <label for="name">이름</label>
+          <input id="name" type="text" placeholder="홍길동" value="{{ user_name or '' }}">
+        </div>
+        <div>
+          <label for="phone">휴대폰 번호</label>
+          <input id="phone" type="tel" inputmode="numeric" placeholder="01012345678" value="{{ user_phone or '' }}">
+        </div>
+        <div>
+          <label for="birth" id="jLabel" class="block text-sm font-medium">생년월일(8자리, YYYYMMDD)</label>
+          <input id="birth" type="text" inputmode="numeric" placeholder="YYYYMMDD" class="mt-1 w-full border rounded px-3 py-2" maxlength="8"/>
+        </div>
+        <div>
+          <label class="block text-sm font-medium">성별</label>
+          <div class="gender-wrap" id="genderGroup" role="radiogroup" aria-label="성별">
+            <label><input type="radio" name="gender" value="남"> 남</label>
+            <label><input type="radio" name="gender" value="여"> 여</label>
+          </div>
+        </div>
+      </div>
     </div>
-  </div>
 
-  <div class="row-inline">
-    <label for="phoneEl">휴대폰</label>
-    <input id="phoneEl" type="text" inputmode="tel" placeholder="010-1234-5678" />
-    <span class="hint">하이픈(-) 포함/미포함 모두 가능</span>
-  </div>
+    <input type="hidden" id="nextUrl" value="{{ next_url or '/info' }}">
 
-  <div class="row-inline" style="gap:10px">
-    <button id="btnStart">간편인증 시작</button>
-    <button id="btnComplete" disabled>인증완료</button>
-  </div>
+    <div class="card">
+      <div class="mt-4 flex items-center gap-3">
+        <button id="btnStart" type="button" class="px-4 py-2 rounded bg-black text-white">
+          간편인증 시작
+        </button>
+        <button id="btnComplete" type="button" class="px-4 py-2 rounded border" disabled>
+          인증완료
+        </button>
+      </div>
+      <div id="status" class="status"></div>
+      <div id="preview" class="preview" style="display:none"></div>
+    </div>
 
-  <div id="status"></div>
+<script>
+(function(){
+  const $ = (s)=>document.querySelector(s);
 
-  <script>
-    // ====== 요소 참조 ======
-    const loginSel   = document.querySelector('#loginSel');
-    const telecomSel = document.querySelector('#telecomSel');
-    const nameEl     = document.querySelector('#nameEl');
-    const birthEl    = document.querySelector('#birthEl');
-    const phoneEl    = document.querySelector('#phoneEl');
-    const btnStart   = document.querySelector('#btnStart');
-    const btnComplete= document.querySelector('#btnComplete');
-    const statusEl   = document.querySelector('#status');
+  // 요소들
+  const loginSel   = $('#loginOption');
+  const telecomRow = $('#telecomRow');
+  const telecomSel = $('#telecom');
+  const nameEl     = $('#name');
+  const phoneEl    = $('#phone');
+  const birthEl    = $('#birth');
+  const genderRadios = document.getElementsByName('gender');
 
-    // ====== 상태 ======
-    let callbackId = "";
-    let gStartDone = false;
+  const btnStart     = document.getElementById('btnStart');
+  const btnComplete  = document.getElementById('btnComplete');
+  const statusEl     = document.getElementById('status');
+  const nextUrlEl    = document.getElementById('nextUrl');
 
-    // ====== 유틸 ======
-    function setStatus(msg, cls) {
-      statusEl.className = ""; 
-      if (cls) statusEl.classList.add(cls);
-      statusEl.textContent = msg || "";
+  let gStartDone  = false;
+  let callbackId  = '';
+
+  function setStatus(text, cls) {
+    statusEl.className = 'status' + (cls ? ' ' + cls : '');
+    statusEl.textContent = text || '';
+  }
+  const onlyDigits = v => (v||'').replace(/[^0-9]/g, '');
+
+  function selectedGender(){
+    for (const r of genderRadios){ if (r.checked) return r.value; }
+    return '';
+  }
+
+  function applyInputRule(){
+    const isPASS = (loginSel.value === '3');
+    telecomRow.style.display = isPASS ? 'block' : 'none';
+    if (telecomSel) {
+      if (isPASS) telecomSel.disabled = false;
+      else { telecomSel.value = ''; telecomSel.disabled = true; }
     }
-    function resetAuthState() {
-      callbackId = "";
-      gStartDone = false;
-      if (btnComplete) btnComplete.disabled = true;
-    }
-    function normalizePhone(v) {
-      if (!v) return "";
-      const d = (v+"").replace(/[^0-9]/g, "");
-      if (d.length === 10) return d.replace(/(\d{3})(\d{3})(\d{4})/, "$1-$2-$3");
-      if (d.length === 11) return d.replace(/(\d{3})(\d{4})(\d{4})/, "$1-$2-$3");
-      return d;
-    }
-    function validateBirth8(v) {
-      return /^[0-9]{8}$/.test(v);
-    }
+    validateStartEnabled();
+  }
 
-    // 통신사 PASS 선택 시 통신사 콤보 활성/비활성
-    loginSel.addEventListener('change', () => {
-      telecomSel.disabled = (loginSel.value !== '3');
-    });
+  function validateStartEnabled(){
+    const opt     = loginSel?.value || '';
+    const isPASS  = (opt === '3');
+    const nameOk  = !!(nameEl?.value || '').trim();
+    const phoneOk = onlyDigits(phoneEl?.value).length >= 9;
+    const birthOk = onlyDigits(birthEl?.value).length === 8;
+    const genderOk= !!selectedGender();
+    const telOk   = !isPASS || !!(telecomSel?.value || '');
+    btnStart.disabled = !(opt && nameOk && phoneOk && birthOk && genderOk && telOk);
+  }
 
-    // 입력 보조
-    birthEl.addEventListener('input', () => {
-      birthEl.value = birthEl.value.replace(/[^0-9]/g, '').slice(0, 8);
-    });
-    phoneEl.addEventListener('blur', () => {
-      phoneEl.value = normalizePhone(phoneEl.value.trim());
-    });
+  loginSel?.addEventListener('change', applyInputRule);
+  telecomSel?.addEventListener('change', validateStartEnabled);
+  nameEl?.addEventListener('input', validateStartEnabled);
+  phoneEl?.addEventListener('input', (e)=>{ e.target.value = onlyDigits(e.target.value).slice(0,11); validateStartEnabled(); });
+  birthEl?.addEventListener('input', ()=>{ validateStartEnabled(); });
+  for (const r of genderRadios){ r.addEventListener('change', validateStartEnabled); }
+  applyInputRule();
 
-    // ====== 시작 버튼 ======
-    btnStart.addEventListener('click', async () => {
-      // 성별 필수
-      const gEl = document.querySelector('input[name="pre_gender"]:checked');
-      if (!gEl) {
-        alert('성별을 입력해주세요');
-        return;
-      }
-      const preGender = gEl.value; // '남' or '여'
+  // 간편인증 시작
+  btnStart.addEventListener('click', async () => {
+    if (gStartDone) return;
 
-      // 폼 값
-      const loginOption  = loginSel.value;                   // 0..7
-      const telecom      = (loginOption === '3') ? telecomSel.value : '';
-      const userName     = nameEl.value.trim();
-      const hpNumber     = normalizePhone(phoneEl.value.trim());
-      const juminOrBirth = birthEl.value.trim();
+    const loginOption = loginSel.value.trim();
+    const telecomRaw  = (telecomSel?.value || '').trim();
+    const telecom     = (loginOption === '3') ? telecomRaw : '';
+    const name        = nameEl.value.trim();
+    const phone       = onlyDigits(phoneEl.value).slice(0,11);
+    const birth       = onlyDigits(birthEl.value).slice(0,8);
+    const gender      = selectedGender();
 
-      // 기본 검증
-      if (!userName) { alert('이름을 입력해주세요'); return; }
-      if (!validateBirth8(juminOrBirth)) { alert('생년월일을 8자리(YYYYMMDD)로 입력해주세요'); return; }
-      if (!hpNumber) { alert('휴대폰번호를 입력해주세요'); return; }
-      if (loginOption === '3' && !telecom) { alert('통신사를 선택해주세요'); return; }
+    if (!gender){ alert('성별을 입력해주세요.'); return; }
 
-      // 새 트랜잭션 시작 → 상태 초기화
-      resetAuthState();
+    setStatus('간편인증 요청 전송 중...');
+    btnStart.disabled = true;
 
-      setStatus('인증 요청 중...');
-
-      // 시작 요청 (세션 유지 중요!)
-      const body = { loginOption, telecom, userName, hpNumber, juminOrBirth, gender: preGender };
+    try {
       const rsp = await fetch('/api/dh/simple/start', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ loginOption, telecom, userName: name, hpNumber: phone, birth, gender })
       });
+      const data = await rsp.json();
+      console.log('[DH][start]', rsp.status, data);
 
-      const data = await rsp.json().catch(() => ({}));
-      console.log('[START][rsp]', rsp.status, data);
-
-      // 기대 플로우: errCode=0001 + callbackId
-      if (rsp.status === 200 && data && data.errCode === '0001' && data.data && data.data.callbackId) {
+      if (rsp.ok && data.errCode === "0001" && data.data?.callbackId) {
         callbackId = data.data.callbackId;
         gStartDone = true;
+        setStatus('간편인증 요청 전송 성공. 스마트폰에서 인증 완료 후 "인증완료"를 누르세요.', 'ok');
         btnComplete.disabled = false;
-        setStatus('휴대폰에서 인증을 완료한 뒤 "인증완료"를 눌러주세요.', 'ok');
         return;
       }
+      btnStart.disabled = false;
+      gStartDone = false;
+      alert('간편인증 시작 실패: ' + (data.message || data.errCode || '오류'));
+      setStatus('간편인증 시작 실패', 'err');
+    } catch (e) {
+      console.error(e);
+      btnStart.disabled = false;
+      gStartDone = false;
+      setStatus('간편인증 시작 실패(네트워크)', 'err');
+    }
+  });
 
-      // 에러
-      alert((data && (data.message || data.errMsg)) || '간편인증 시작에 실패했습니다.');
-      setStatus('인증 시작 실패', 'err');
-    });
+  // 인증완료(수동)
+  btnComplete.addEventListener('click', async () => {
+    if (!gStartDone) { alert('먼저 "간편인증 시작"을 진행해주세요.'); return; }
+    setStatus('인증 완료 확인 중...');
+    btnComplete.disabled = true;
 
-    // ====== 인증완료 버튼 ======
-    btnComplete.addEventListener('click', async () => {
-      if (!gStartDone || !callbackId) {
-        alert('먼저 "간편인증 시작"을 진행해주세요.');
-        return;
+    async function tryCompleteOnce() {
+      const rsp = await fetch('/api/dh/simple/complete?all=1', {
+        method:'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(callbackId ? { callbackId } : {}),
+        credentials: 'include'
+      });
+      const data = await rsp.json().catch(()=> ({}));
+      console.log('[COMPLETE][rsp]', rsp.status, data);
+
+      if (rsp.status === 200 && data && data.ok) {
+        setStatus('인증 및 데이터 수집 완료! 다음 단계로 이동합니다.', 'ok');
+        window.location.href = (nextUrlEl.value || '/info');
+        return true;
       }
-
-      const gEl = document.querySelector('input[name="pre_gender"]:checked');
-      const preGender = gEl ? gEl.value : "";
-
-      setStatus('인증 완료 확인 중...');
-      btnComplete.disabled = true;
-
-      async function tryCompleteOnce() {
-        const rsp = await fetch('/api/dh/simple/complete?all=1', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ callbackId, gender: preGender }),
-        });
-        const data = await rsp.json().catch(() => ({}));
-        console.log('[COMPLETE][rsp]', rsp.status, data);
-
-        if (rsp.status === 200 && data && data.ok) {
-          setStatus('인증 및 데이터 수집 완료! 문진으로 이동합니다.', 'ok');
-          // 바로 문진으로 이동
-          window.location.href = '/survey';
-          return true;
-        }
-        if (rsp.status === 202) {
-          setStatus('인증완료 확인 중... 잠시만 기다려주세요.');
-          return false; // 재시도
-        }
-        alert((data && (data.message || data.errMsg)) || '인증 확인 중 오류가 발생했습니다.');
-        setStatus('오류가 발생했습니다. 다시 시도해 주세요.', 'err');
-        return null; // 중단
+      if (rsp.status === 202) {
+        setStatus('인증완료 확인 중... 잠시만 기다려주세요.');
+        return false;
       }
+      alert(data && data.msg ? data.msg : '인증 확인 중 오류가 발생했습니다.');
+      setStatus('오류가 발생했습니다. 다시 시도해 주세요.', 'err');
+      return null;
+    }
 
-      // 폴링 루프
-      const deadline = Date.now() + 60000; // 최대 60초
-      while (Date.now() < deadline) {
-        const r = await tryCompleteOnce();
-        if (r === true) return;
-        if (r === null) break;
-        await new Promise(res => setTimeout(res, 2000));
-      }
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      const r = await tryCompleteOnce();
+      if (r === true) return;
+      if (r === null) break;
+      await new Promise(res => setTimeout(res, 2000));
+    }
 
-      alert('아직 인증이 완료되지 않았습니다. 휴대폰에서 인증을 완료한 뒤 다시 "인증완료"를 눌러주세요.');
-      setStatus('인증 대기 상태입니다. 인증 완료 후 다시 "인증완료"를 눌러주세요.', 'warn');
-      btnComplete.disabled = false;
-    });
-  </script>
+    alert('아직 인증이 완료되지 않았습니다. 휴대폰에서 인증을 완료한 뒤 다시 "인증완료"를 눌러주세요.');
+    setStatus('인증 대기 상태입니다. 인증 완료 후 다시 "인증완료"를 눌러주세요.', 'warn');
+    btnComplete.disabled = false;
+  });
+
+  validateStartEnabled();
+})();
+</script>
 </body>
 </html>
