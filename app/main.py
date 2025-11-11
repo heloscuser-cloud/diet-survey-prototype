@@ -634,121 +634,86 @@ def home(request: Request):
 def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request})
 
+
 #로그인 코드 검증, 진행
 @app.post("/login/verify")
-def login_verify(request: Request, phone: str = Form(...), session: Session = Depends(get_session)):
-    """user_admin.phone에 등록된 번호(=로그인 코드)인지 확인 후 /nhis로 이동"""
-    raw = "".join([c for c in (phone or "") if c.isdigit()])
-    if not raw or len(raw) < 10:
-        return templates.TemplateResponse("login.html", {"request": request, "error": "번호 형식이 올바르지 않습니다."}, status_code=400)
+def login_verify_phone(
+    request: Request,
+    phone: str = Form(...),
+    session: Session = Depends(get_session),
+):
+    # 1) 폰번호 정규화
+    phone_digits = "".join(c for c in (phone or "") if c.isdigit())
+    if len(phone_digits) < 10 or len(phone_digits) > 11:
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": "번호 형식이 올바르지 않습니다."},
+            status_code=400,
+        )
 
-    try:
-        stmt = sa_text("""
+    # 2) user_admin에서 코드(=phone) 존재/활성 확인
+    row = session.exec(
+        sa_text("""
             SELECT id, name, phone, is_active
             FROM user_admin
             WHERE phone = :p AND is_active = TRUE
             LIMIT 1
-        """).bindparams(p=raw)
-        row = session.exec(stmt).first()
-    except Exception as e:
-        return templates.TemplateResponse("login.html", {"request": request, "error": "로그인 처리 중 오류가 발생했습니다."}, status_code=500)
-
+        """).bindparams(p=phone_digits)
+    ).first()
     if not row:
-        return templates.TemplateResponse("login.html", {"request": request, "error": "등록되지 않은 코드입니다."}, status_code=401)
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": "등록되지 않은 코드입니다."},
+            status_code=401,
+        )
 
-    # === 로그인 세션 마크만 남기고 기존 흐름 유지 ===
-    request.session["admin_phone"] = raw  # 나중 감사용/필요시 사용
-
-    # === 여기부터 추가: Respondent 생성 + rtoken 쿠키 세팅 ===
-    new_rid = None
-    try:
-        # 1) Respondent 한 명 생성 (필드 최소)
-        #    테이블 스키마에 맞춰 status/created_at 정도만 세팅
-        stmt_ins = sa_text("""
-            INSERT INTO respondent (status, created_at)
-            VALUES (:st, now())
-            RETURNING id
-        """).bindparams(st="started")
-        row = session.exec(stmt_ins).first()
-        if row:
-            new_rid = row[0]
-
-        # 2) rtoken 만들기 (기존 유틸 사용)
-        tok = None
-        try:
-            tok = verify_token(new_rid)
-        except Exception:
-            tok = str(new_rid)
-
-        # 3) 쿠키와 세션에 rtoken 심기
-        request.session["rtoken"] = tok  # 서버 세션에도 넣어두면 finish에서 편함
-        
-        # 바로 간편인증 플로우로
-        resp = RedirectResponse(url="/nhis", status_code=302)
-        resp.set_cookie("login_ok", "1", max_age=60*60*24*7, httponly=True, samesite="Lax")
-        resp.set_cookie("rtoken", tok,    max_age=60*60*2,    httponly=True, samesite="Lax")  # 설문 2시간 유효 등
-        return resp
-
-    except Exception as e:
-        # 실패 시 기존처럼 로그인 화면으로 에러 반환
-        return templates.TemplateResponse("login.html", {"request": request, "error": "로그인 처리 중 오류가 발생했습니다."}, status_code=500)
-
-
-
-@app.post("/login/send")
-def login_send(request: Request, phone: str = Form(...), session: Session = Depends(get_session)):
-    phone_digits = "".join([c for c in phone if c.isdigit()])
-    if len(phone_digits) < 10 or len(phone_digits) > 11:
-        return templates.TemplateResponse("error.html", {"request": request, "message": "휴대폰 번호를 올바르게 입력해주세요."}, status_code=400)
-    issue_otp(session, phone_digits)
-    tmp = signer.sign(f"otp:{phone_digits}").decode("utf-8")
-    return RedirectResponse(url=f"/login/verify?t={tmp}", status_code=303)
-
-def read_tmp_phone(t: str) -> str | None:
-    try:
-        raw = signer.unsign(t, max_age=300).decode("utf-8")
-        if raw.startswith("otp:"):
-            return raw.split(":")[1]
-    except Exception:
-        return None
-    return None
-
-@app.get("/login/verify", response_class=HTMLResponse)
-def login_verify_page(request: Request, t: str):
-    phone = read_tmp_phone(t)
-    if not phone:
-        return templates.TemplateResponse("error.html", {"request": request, "message": "인증이 만료되었습니다. 다시 시도해주세요."}, status_code=400)
-    return templates.TemplateResponse("verify.html", {"request": request, "t": t})
-
-@app.post("/login/verify")
-def login_verify(request: Request, t: str = Form(...), code: str = Form(...), session: Session = Depends(get_session)):
-    phone = read_tmp_phone(t)
-    if not phone:
-        return templates.TemplateResponse("error.html", {"request": request, "message": "인증이 만료되었습니다. 다시 시도해주세요."}, status_code=400)
-    if not verify_otp(session, phone, code):
-        return templates.TemplateResponse("error.html", {"request": request, "message": "인증 코드가 올바르지 않습니다."}, status_code=400)
-
-    ph = hash_phone(phone)
+    # 3) User 조회/생성 (기존 방식 유지: phone_hash 기반)
+    ph = hash_phone(phone_digits)
     user = session.exec(select(User).where(User.phone_hash == ph)).first()
     if not user:
         user = User(phone_hash=ph)
         session.add(user)
         session.commit()
         session.refresh(user)
-   
-    resp = RedirectResponse(url="/nhis", status_code=303)  # 로그인 → NHIS 조회 → info
+
+    # 4) AUTH 쿠키 발급 (기존 방식 그대로)
     SECURE_COOKIE = bool(int(os.getenv("SECURE_COOKIE", "1")))
+    resp = RedirectResponse(url="/nhis", status_code=303)
     resp.set_cookie(
         AUTH_COOKIE_NAME,
         sign_user(user.id),
         httponly=True,
         secure=SECURE_COOKIE,
         samesite="lax",
-        max_age=AUTH_MAX_AGE
+        max_age=AUTH_MAX_AGE,
     )
-    # 혹시 남아있을 수도 있는 완료 쿠키 제거(새 설문 시작을 방해하지 않도록)
+    # 혹시 남아있을 수도 있는 완료 쿠키 제거(새 설문 방해 방지)
     resp.delete_cookie("survey_completed")
+
+    # 5) Respondent 생성 + rtoken 쿠키(설문 접근/후속 저장에 필요)
+    try:
+        rid = session.exec(
+            sa_text("INSERT INTO respondent (status, created_at) VALUES ('started', now()) RETURNING id")
+        ).first()[0]
+
+        # 프로젝트에 이미 있는 signer를 재사용해 rtoken 생성 (verify_token과 호환)
+        try:
+            tok = signer.sign(f"rid:{rid}").decode("utf-8")
+        except Exception:
+            tok = str(rid)  # 임시(가능하면 signer 사용 권장)
+
+        request.session["rtoken"] = tok
+        resp.set_cookie("rtoken", tok, max_age=60*60*2, httponly=True, samesite="Lax", secure=SECURE_COOKIE)
+    except Exception as e:
+        # rtoken 발급 실패해도 로그인은 진행되지만, /survey 접근 가드에서 막힐 수 있음
+        # 문제 시 로그만 남기고 그대로 진행
+        logging.debug("[LOGIN][RTOKEN][WARN] %r", e)
+
+    # 6) 감사용 세션 마크(선택)
+    request.session["admin_phone"] = phone_digits
+
     return resp
+
 
 @app.get("/logout")
 def logout():
@@ -756,30 +721,6 @@ def logout():
     resp.delete_cookie(AUTH_COOKIE_NAME)
     return resp
 
-#---- 기존 테스트용 문진 ----#
-
-@app.get("/survey_legacy", response_class=HTMLResponse)
-def survey(request: Request, session: Session = Depends(get_session), auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME)):
-    user_id = verify_user(auth) if auth else -1
-    if user_id < 0:
-        return RedirectResponse(url="/login", status_code=302)
-
-    # create respondent draft if not exists (simple one per visit)
-    user = session.get(User, user_id)
-    resp = Respondent(user_id=user.id, campaign_id="demo", status="draft")
-    session.add(resp)
-    session.commit()
-    session.refresh(resp)
-
-    # prefill (masked)
-    prefill = {
-        "name_masked": f"{(user.name_enc or '사용자')[0]}*",
-        "birth_year": user.birth_year or "",
-        "gender": user.gender or "",
-        "phone_masked": "****-****"
-    }
-    token = signer.sign(str(resp.id)).decode("utf-8")
-    return templates.TemplateResponse("survey.html", {"request": request, "prefill": prefill, "token": token})
 
 def verify_token(token: str) -> int:
     try:
@@ -788,66 +729,6 @@ def verify_token(token: str) -> int:
     except (BadSignature, SignatureExpired):
         return -1
 
-
-class SurveyIn(BaseModel):
-    meals_per_day: int
-    late_snack_per_week: int
-    veggies_servings_per_day: int
-    sugary_drink_per_week: int
-    alcohol_days_per_week: int
-
-def score_survey(data: SurveyIn) -> int:
-    score = 0
-    score += max(0, min(20, data.veggies_servings_per_day * 4))
-    score += max(0, 10 - min(10, data.late_snack_per_week))
-    score += max(0, 10 - min(10, data.sugary_drink_per_week))
-    score += max(0, 10 - min(7, data.alcohol_days_per_week))
-    score += max(0, min(10, data.meals_per_day * 2))
-    return int(score)
-
-@app.post("/survey/submit_legacy")
-async def survey_submit(request: Request,
-                        token: str = Form(...),
-                        meals_per_day: int = Form(...),
-                        late_snack_per_week: int = Form(...),
-                        veggies_servings_per_day: int = Form(...),
-                        sugary_drink_per_week: int = Form(...),
-                        alcohol_days_per_week: int = Form(...),
-                        session: Session = Depends(get_session)):
-    respondent_id = verify_token(token)
-    if respondent_id < 0:
-        return templates.TemplateResponse("error.html", {"request": request, "message": "세션이 만료되었어요. 다시 시작해주세요."}, status_code=401)
-
-    resp_obj = SurveyIn(meals_per_day=meals_per_day,
-                        late_snack_per_week=late_snack_per_week,
-                        veggies_servings_per_day=veggies_servings_per_day,
-                        sugary_drink_per_week=sugary_drink_per_week,
-                        alcohol_days_per_week=alcohol_days_per_week)
-    score = score_survey(resp_obj)
-
-    import json as pyjson
-    sr = SurveyResponse(respondent_id=respondent_id, answers_json=pyjson.dumps(resp_obj.dict(), ensure_ascii=False), score=score)
-    session.add(sr)
-    resp = session.get(Respondent, respondent_id)
-    resp.status = "submitted"
-    session.add(resp)
-    nhis_latest = request.session.get("nhis_latest")
-    nhis_raw    = request.session.get("nhis_raw")
-    if nhis_latest is not None:
-        try:
-            sr.nhis_json = nhis_latest
-        except Exception:
-            pass
-    if nhis_raw is not None:
-        try:
-            sr.nhis_raw = nhis_raw
-        except Exception:
-            pass
-    session.commit()
-    session.refresh(sr)
-
-    rtoken = signer.sign(f"{sr.id}").decode("utf-8")
-    return RedirectResponse(url=f"/report/ready?rtoken={rtoken}", status_code=303)
 
 @app.get("/report/ready", response_class=HTMLResponse)
 def report_ready(request: Request, rtoken: str):
