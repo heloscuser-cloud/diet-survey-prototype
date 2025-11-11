@@ -659,10 +659,40 @@ def login_verify(request: Request, phone: str = Form(...), session: Session = De
     # === 로그인 세션 마크만 남기고 기존 흐름 유지 ===
     request.session["admin_phone"] = raw  # 나중 감사용/필요시 사용
 
-    # 바로 간편인증 플로우로
-    resp = RedirectResponse(url="/nhis", status_code=302)
-    resp.set_cookie("login_ok", "1", max_age=60*60*24*7, httponly=True, samesite="Lax")
-    return resp
+    # === 여기부터 추가: Respondent 생성 + rtoken 쿠키 세팅 ===
+    new_rid = None
+    try:
+        # 1) Respondent 한 명 생성 (필드 최소)
+        #    테이블 스키마에 맞춰 status/created_at 정도만 세팅
+        stmt_ins = sa_text("""
+            INSERT INTO respondent (status, created_at)
+            VALUES (:st, now())
+            RETURNING id
+        """).bindparams(st="started")
+        row = session.exec(stmt_ins).first()
+        if row:
+            new_rid = row[0]
+
+        # 2) rtoken 만들기 (기존 유틸 사용)
+        tok = None
+        try:
+            tok = verify_token(new_rid)
+        except Exception:
+            tok = str(new_rid)
+
+        # 3) 쿠키와 세션에 rtoken 심기
+        request.session["rtoken"] = tok  # 서버 세션에도 넣어두면 finish에서 편함
+        
+        # 바로 간편인증 플로우로
+        resp = RedirectResponse(url="/nhis", status_code=302)
+        resp.set_cookie("login_ok", "1", max_age=60*60*24*7, httponly=True, samesite="Lax")
+        resp.set_cookie("rtoken", tok,    max_age=60*60*2,    httponly=True, samesite="Lax")  # 설문 2시간 유효 등
+        return resp
+
+    except Exception as e:
+        # 실패 시 기존처럼 로그인 화면으로 에러 반환
+        return templates.TemplateResponse("login.html", {"request": request, "error": "로그인 처리 중 오류가 발생했습니다."}, status_code=500)
+
 
 
 @app.post("/login/send")
