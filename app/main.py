@@ -1261,7 +1261,8 @@ def survey_step_get(request: Request, step: int, rtoken: str, acc: str | None = 
         return RedirectResponse(url="/survey/step/1", status_code=303)
 
     start_id, end_id = ranges[step]
-    questions = [q for q in get_questions_for_step if start_id <= q["id"] <= end_id]
+    all_questions = get_questions_for_step()
+    questions = [q for q in all_questions if start_id <= q["id"] <= end_id]
     
 
     questions = get_questions_for_step(step)
