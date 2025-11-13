@@ -42,7 +42,7 @@
     <div class="card">
       <div class="row">
         <div>
-          <label>간편인증 수단</label>
+          <label style="font-size:12pt; font-weight:700;">간편인증 수단</label>
           <select id="loginOption">
             <option value="" selected>-- 선택 --</option>
             <option value="0">카카오톡</option>
@@ -56,7 +56,7 @@
           </select>
         </div>
         <div id="telecomRow" style="display:none">
-          <label>통신사(PASS 선택 시)</label>
+          <label style="font-size:12pt; font-weight:700;">통신사(PASS 선택 시)</label>
           <select id="telecom" class="mt-1 w-full border rounded px-3 py-2" disabled>
             <option value="" selected>-- 통신사 선택 --</option>
             <option value="1">KT</option>
@@ -68,15 +68,20 @@
           </select>
         </div>
         <div>
-          <label for="name">이름</label>
+           <label for="name" style="font-size:12pt; font-weight:700;">이름</label>
           <input id="name" type="text" placeholder="홍길동" value="{{ user_name or '' }}">
         </div>
         <div>
-          <label for="phone">휴대폰 번호</label>
+          <label for="phone" style="font-size:12pt; font-weight:700;">휴대폰 번호</label>
           <input id="phone" type="tel" inputmode="numeric" placeholder="01012345678" value="{{ user_phone or '' }}">
         </div>
         <div>
-          <label for="birth" id="jLabel" class="block text-sm font-medium">생년월일(8자리, YYYYMMDD)</label>
+          <label for="birth"
+                id="jLabel"
+                class="block text-sm font-medium"
+                style="font-size:12pt; font-weight:700;">
+            생년월일(8자리)
+          </label>
           <input id="birth" type="text" inputmode="numeric" placeholder="YYYYMMDD" class="mt-1 w-full border rounded px-3 py-2" maxlength="8"/>
         </div>
           <div class="row-inline" style="align-items:center; gap:16px;">
@@ -93,14 +98,20 @@
 
     <div class="card">
       <div class="mt-4 flex items-center gap-3">
-        <button id="btnStart" type="button" class="px-4 py-2 rounded bg-black text-white">
+        <button id="btnStart" type="button"
+                class="px-5 py-3 rounded-full bg-black text-white text-base font-bold">
           간편인증 시작
         </button>
-        <button id="btnComplete" type="button" class="px-4 py-2 rounded border" disabled>
+        <button id="btnComplete" type="button"
+                class="px-5 py-3 rounded-full border text-base font-bold"
+                disabled>
           인증완료
         </button>
       </div>
-      <div id="status" class="status"></div>
+      <div id="status"
+          class="status"
+          style="margin-top:12px; font-size:12pt; font-weight:700;">
+      </div>
       <div id="preview" class="preview" style="display:none"></div>
     </div>
 
