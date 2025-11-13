@@ -120,7 +120,7 @@ with QUESTIONS_PATH.open("r", encoding="utf-8") as f:
     ALL_QUESTIONS = json.load(f)
 
 # 페이지 그룹: (start_id, end_id)
-SURVEY_STEPS = [(1, 8), (9, 16), (17, 23)]
+SURVEY_STEPS = [(1, 8), (9, 15), (16, 23)]
 
 
 def get_questions_for_step(step: int):
@@ -1244,37 +1244,37 @@ def survey_root(auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 
 
 @app.get("/survey/step/{step}", response_class=HTMLResponse)
-def survey_step_get(request: Request, step: int, rtoken: str, acc: str | None = None,  _guard: None = Depends(ensure_not_completed)):
+def survey_step_get(
+    request: Request,
+    step: int,
+    rtoken: str,
+    acc: str | None = None,
+    _guard: None = Depends(ensure_not_completed),
+):
     if step < 1 or step > 3:
         return RedirectResponse(url="/survey/step/1", status_code=303)
+
     respondent_id = verify_token(rtoken)
     if respondent_id < 0:
         return RedirectResponse(url="/login", status_code=302)
 
-    ranges = {
-    1: (1, 8),
-    2: (9, 15),
-    3: (16, 23),
-    }
-    if step not in ranges:
-        # 범위 밖 step이면 1페이지로 보내거나 에러 처리
-        return RedirectResponse(url="/survey/step/1", status_code=303)
-
-    start_id, end_id = ranges[step]
-    all_questions = get_questions_for_step()
-    questions = [q for q in all_questions if start_id <= q["id"] <= end_id]
-    
-
+    # 여기서 step별 문항은 헬퍼 함수에서 처리
     questions = get_questions_for_step(step)
-    return templates.TemplateResponse("survey_page.html", {
-        "request": request,
-        "step": step,
-        "questions": questions,
-        "acc": acc or "{}",
-        "rtoken": rtoken,
-        "is_last": step == 3,
-        "is_first": step == 1
-    })
+
+    return templates.TemplateResponse(
+        "survey_page.html",
+        {
+            "request": request,
+            "step": step,
+            "questions": questions,
+            "acc": acc or "{}",
+            "rtoken": rtoken,
+            "is_last": step == 3,
+            "is_first": step == 1,
+        },
+    )
+
+
         
 @app.post("/survey/step/{step}")
 async def survey_step_post(request: Request, step: int,
