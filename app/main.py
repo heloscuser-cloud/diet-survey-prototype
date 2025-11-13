@@ -703,7 +703,7 @@ def login_verify_phone(
             tok = str(rid)  # 임시(가능하면 signer 사용 권장)
 
         request.session["rtoken"] = tok
-        resp.set_cookie("rtoken", tok, max_age=60*60*2, httponly=True, samesite="Lax", secure=SECURE_COOKIE)
+        resp.set_cookie("rtoken", tok, max_age=1800, httponly=True, samesite="Lax", secure=SECURE_COOKIE)
     except Exception as e:
         # rtoken 발급 실패해도 로그인은 진행되지만, /survey 접근 가드에서 막힐 수 있음
         # 문제 시 로그만 남기고 그대로 진행
@@ -724,7 +724,7 @@ def logout():
 
 def verify_token(token: str) -> int:
     try:
-        raw = signer.unsign(token, max_age=3600*3)
+        raw = signer.unsign(token, max_age=1800*3)
         return int(raw.decode("utf-8"))
     except (BadSignature, SignatureExpired):
         return -1
@@ -1250,6 +1250,7 @@ def survey_step_get(
     rtoken: str,
     acc: str | None = None,
     _guard: None = Depends(ensure_not_completed),
+    session: Session = Depends(get_session),
 ):
     if step < 1 or step > 3:
         return RedirectResponse(url="/survey/step/1", status_code=303)
@@ -1257,6 +1258,11 @@ def survey_step_get(
     respondent_id = verify_token(rtoken)
     if respondent_id < 0:
         return RedirectResponse(url="/login", status_code=302)
+    
+    # ★ 이미 제출된 respondent면 접근 막기 (다른 브라우저/기기에서도)
+    resp = session.get(Respondent, respondent_id)
+    if not resp or resp.status == "submitted":
+        return RedirectResponse(url="/", status_code=302)
 
     # 여기서 step별 문항은 헬퍼 함수에서 처리
     questions = get_questions_for_step(step)
