@@ -1251,6 +1251,19 @@ def survey_step_get(request: Request, step: int, rtoken: str, acc: str | None = 
     if respondent_id < 0:
         return RedirectResponse(url="/login", status_code=302)
 
+    ranges = {
+    1: (1, 8),
+    2: (9, 15),
+    3: (16, 23),
+    }
+    if step not in ranges:
+        # 범위 밖 step이면 1페이지로 보내거나 에러 처리
+        return RedirectResponse(url="/survey/step/1", status_code=303)
+
+    start_id, end_id = ranges[step]
+    questions = [q for q in get_questions_for_step if start_id <= q["id"] <= end_id]
+    
+
     questions = get_questions_for_step(step)
     return templates.TemplateResponse("survey_page.html", {
         "request": request,
@@ -1261,8 +1274,7 @@ def survey_step_get(request: Request, step: int, rtoken: str, acc: str | None = 
         "is_last": step == 3,
         "is_first": step == 1
     })
-
-
+        
 @app.post("/survey/step/{step}")
 async def survey_step_post(request: Request, step: int,
                            acc: str = Form("{}"),

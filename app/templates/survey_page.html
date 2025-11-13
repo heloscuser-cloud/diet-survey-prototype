@@ -14,24 +14,38 @@
     label.opt { display:block; padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px; margin:6px 0; }
     input[type="radio"], input[type="checkbox"] { margin-right:8px; }
     .nav { display:flex; gap:8px; margin-top:12px; }
-.btn {
-  flex: 1;
-  padding: 14px;
-  border-radius: 12px;
-  border: 0;
-  font-weight: 600;
-  font-size: 16px;       /* ← 버튼/링크 모두 동일 폰트 크기 */
-  font-family: inherit;  /* ← 시스템 폰트 상속으로 통일 */
-}
-a.btn {
-  text-decoration: none;   /* ← 링크 밑줄 제거 */
-  display: inline-block;   /* ← 버튼과 레이아웃 일치 */
-  text-align: center;      /* ← 가운데 정렬 보장 */
-}
-    .btn.prev { background:#111827; color:#fff; }
-    .btn.next { background:#111827; color:#fff; opacity:.5; }
-    .btn.next.enabled { opacity:1; }
-    .progress { font-size:13px; color:#6b7280; margin-bottom:10px; }
+  .btn {
+    flex: 1;
+    padding: 14px;
+    border-radius: 12px;
+    border: 0;
+    font-weight: 600;
+    font-size: 16px;       /* ← 버튼/링크 모두 동일 폰트 크기 */
+    font-family: inherit;  /* ← 시스템 폰트 상속으로 통일 */
+  }
+  a.btn {
+    text-decoration: none;   /* ← 링크 밑줄 제거 */
+    display: inline-block;   /* ← 버튼과 레이아웃 일치 */
+    text-align: center;      /* ← 가운데 정렬 보장 */
+  }
+  .btn.prev { background:#111827; color:#fff; }
+  .btn.next { background:#111827; color:#fff; opacity:.5; }
+  .btn.next.enabled { opacity:1; }
+  .progress { font-size:13px; color:#6b7280; margin-bottom:10px; }
+  
+  .info-box {
+  background:#fdf3e3;
+  border-radius:10px;
+  padding:10px 12px;
+  margin:10px 0 6px;
+  font-size:13px;
+  line-height:1.5;
+  color:#374151;
+  }
+  .info-box b { font-weight:700; }
+  .info-box .hl-red { color:#b91c1c; font-weight:700; }
+
+  
   </style>
 </head>
 <body>
@@ -43,24 +57,58 @@ a.btn {
       <input type="hidden" name="rtoken" value='{{ rtoken|e }}'>
 
       {% for q in questions %}
+
+        {# 1~23 범위별 설명 박스 #}
+        {% if q.id == 1 %}
+          <div class="info-box">
+            <b>1번 문항 ~ 4번 문항까지는 <span class="hl-red">"균형성"</span> 평가항목에 대한 설문입니다.</b><br>
+            <b>균형성은 <span class="hl-red">단백질을 제외한 식품군</span>을 얼마나 균형있게 섭취하고 있는지에 대해 평가하는 항목입니다.</b>
+          </div>
+        {% elif q.id == 5 %}
+          <div class="info-box">
+            <b>5번 문항 ~ 8번 문항까지는 <span class="hl-red">"적절성"</span> 평가항목에 대한 설문입니다.</b><br>
+            <b>적절성은 <span class="hl-red">다양한 단백질 급원</span>들을 골고루 알맞게 먹고 있는지에 대해 평가하는 항목입니다.</b>
+          </div>
+        {% elif q.id == 9 %}
+          <div class="info-box">
+            <b>9번 문항 ~ 10번 문항까지는 <span class="hl-red">"다양성"</span> 평가항목에 대한 설문입니다.</b><br>
+            <b>다양성은 <span class="hl-red">하루 식사에서 식품군의 종류</span>를 얼마나 다양하게 섭취하는가에 대해 평가하는 항목입니다.</b>
+          </div>
+        {% elif q.id == 11 %}
+          <div class="info-box">
+            <b>11번 문항 ~ 15번 문항까지는 <span class="hl-red">"절제성"</span> 평가항목에 대한 설문입니다.</b><br>
+            <b>절제성은 <span class="hl-red">건강에 해로운 식단을 조절하여 제한하는가</span>를 평가하는 항목입니다.</b>
+          </div>
+        {% elif q.id == 16 %}
+          <div class="info-box">
+            <b>16번 문항 ~ 20번 문항까지는 <span class="hl-red">"실천성"</span> 평가항목에 대한 설문입니다.</b><br>
+            <b>실천성은 <span class="hl-red">식습관과 관련하여 알고있는 바를 얼마나 실천하고 있는지</span>를 평가하는 항목입니다.</b>
+          </div>
+        {% elif q.id == 21 %}
+          <div class="info-box">
+            <b>21번 문항 ~ 23번 문항은 참고용 문항입니다.</b><br>
+            <b>* 참고용 문항이란? N SCORE 평가문항에 포함되지 않으나, 영양 컨설팅 시 참고 할 수 있는 문항입니다.</b>
+          </div>
+        {% endif %}
+
         <div class="q" data-qid="{{ q.id }}">
           <div class="q-title">{{ q.id }}. {{ q.title or q.text or q.label or q.question }}</div>
 
-{% if q.type == "radio" %}
-  {% for opt in q.options %}
-    <label class="opt">
-      <input type="radio" name="q{{ q.id }}" value="{{ loop.index }}" required />
-      <span>{{ opt }}</span>
-    </label>
-  {% endfor %}
-{% elif q.type == "checkbox" %}
-  {% for opt in q.options %}
-    <label class="opt">
-      <input type="checkbox" name="q{{ q.id }}" value="{{ loop.index }}" />
-      <span>{{ opt }}</span>
-    </label>
-  {% endfor %}
-{% endif %}
+          {% if q.type == "radio" %}
+            {% for opt in q.options %}
+              <label class="opt">
+                <input type="radio" name="q{{ q.id }}" value="{{ loop.index }}" required />
+                <span>{{ opt }}</span>
+              </label>
+            {% endfor %}
+          {% elif q.type == "checkbox" %}
+            {% for opt in q.options %}
+              <label class="opt">
+                <input type="checkbox" name="q{{ q.id }}" value="{{ loop.index }}" />
+                <span>{{ opt }}</span>
+              </label>
+            {% endfor %}
+          {% endif %}
         </div>
       {% endfor %}
 
@@ -115,6 +163,63 @@ a.btn {
       nextBtn.disabled = !ok;
       nextBtn.classList.toggle('enabled', ok);
     }
+
+    // 23번 문항: "없음" 단독 선택 규칙
+    function setupQ23NoneRule() {
+      const q23 = form.querySelector('.q[data-qid="23"]');
+      if (!q23) return;
+
+      const boxes = q23.querySelectorAll('input[type="checkbox"][name="q23"]');
+      if (!boxes.length) return;
+
+      // 마지막 옵션이 "없음"이라는 가정 (survey_questions.json 기준)
+      const noneBox = boxes[boxes.length - 1];
+
+      function applyRule(changed) {
+        const others = Array.from(boxes).filter(b => b !== noneBox);
+
+        if (changed === noneBox) {
+          if (noneBox.checked) {
+            // "없음"을 체크하면 나머지 전부 해제 + 비활성화
+            others.forEach(b => {
+              b.checked = false;
+              b.disabled = true;
+            });
+          } else {
+            // "없음" 해제 시 다시 활성화
+            others.forEach(b => { b.disabled = false; });
+          }
+        } else {
+          // 다른 옵션들을 체크하면 "없음"은 자동 해제 + 나머지는 활성화 유지
+          const anyOtherChecked = others.some(b => b.checked);
+          if (anyOtherChecked) {
+            noneBox.checked = false;
+            noneBox.disabled = false;
+          }
+        }
+      }
+
+      boxes.forEach(box => {
+        box.addEventListener('change', () => {
+          applyRule(box);
+          validate();   // 상태 바뀌면 다음 버튼 활성화 여부 다시 계산
+        });
+      });
+
+      // 초기 복원된 선택에도 규칙 1회 적용 (acc에서 복원된 상태용)
+      applyRule(noneBox);
+    }
+
+    // 초기화 시 Q23 규칙 적용
+    (function restoreSelections(){
+      let data = {};
+      try { data = JSON.parse(accEl.value || "{}"); } catch(e) {}
+      ...
+    })();
+
+    // ↓ 여기 추가
+    setupQ23NoneRule();
+
 
     form.addEventListener('change', validate);
     window.addEventListener('load', validate);
