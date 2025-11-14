@@ -210,13 +210,6 @@
       applyRule(noneBox);
     }
 
-    // 초기화 시 Q23 규칙 적용
-    (function restoreSelections(){
-      let data = {};
-      try { data = JSON.parse(accEl.value || "{}"); } catch(e) {}
-      ...
-    })();
-
     // ↓ 여기 추가
     setupQ23NoneRule();
 
