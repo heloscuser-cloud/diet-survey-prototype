@@ -1,0 +1,53 @@
+{% extends "admin/base_admin.html" %}
+{% block title %}가온앤 영양분석 서비스{% endblock %}
+
+{% block content %}
+  <div style="max-width:420px; margin:40px auto; text-align:center; display:flex; flex-direction:column; gap:28px;">
+    <!-- 메인 제목 -->
+    <div>
+      <h1 style="font-size:24px; font-weight:800; margin-bottom:8px;">
+        가온앤 영양분석 서비스
+      </h1>
+      <p style="font-size:14px; color:#6b7280; margin:0;">
+        로그인 유형을 선택해 주세요.
+      </p>
+    </div>
+
+    <!-- 버튼 두 개: 위 = 파트너 로그인, 아래 = 가온앤 로그인 -->
+    <div style="display:flex; flex-direction:column; gap:12px;">
+      <!-- 파트너 로그인 버튼 -->
+      <a href="/partner/login"
+         style="
+           display:block;
+           padding:18px 16px;
+           border-radius:9999px;
+           border:1px solid #2563eb;
+           background:#eff6ff;
+           color:#1d4ed8;
+           font-weight:700;
+           font-size:16px;
+           text-decoration:none;
+           white-space:pre-line;
+         ">
+        파트너<br>로그인
+      </a>
+
+      <!-- 가온앤 로그인 버튼 (기존 admin 로그인 화면으로 이동) -->
+      <a href="/admin/login"
+         style="
+           display:block;
+           padding:18px 16px;
+           border-radius:9999px;
+           border:1px solid #111827;
+           background:#111827;
+           color:#ffffff;
+           font-weight:700;
+           font-size:16px;
+           text-decoration:none;
+           white-space:pre-line;
+         ">
+        가온앤<br>로그인
+      </a>
+    </div>
+  </div>
+{% endblock %}

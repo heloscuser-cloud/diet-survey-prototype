@@ -625,9 +625,14 @@ async def rolling_session_middleware(request: Request, call_next):
 def home(request: Request):
     if _host(request) == ADMIN_HOST:
         # 관리자 서브도메인으로 들어오면 관리자 로그인으로 보냄
-        return RedirectResponse(url="/admin/login", status_code=302)
+        return RedirectResponse(url="/admin-portal", status_code=302)
     # 기존 사용자용 홈 유지
     return templates.TemplateResponse("index.html", {"request": request})
+
+#portal_home 렌더
+@app.get("/admin-portal", response_class=HTMLResponse)
+def admin_portal_home(request: Request):
+    return templates.TemplateResponse("admin/portal_home.html", {"request": request})
 
 #사용자 로그인 화면 렌더
 @app.get("/login", response_class=HTMLResponse)
