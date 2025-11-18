@@ -602,12 +602,13 @@ def try_auto_map_partner_for_respondent(
     respondent: Respondent,
 ):
     """
-    respondent에 담긴 고객/담당자 정보를 기준으로
+    respondent에 담긴 고객 정보를 기준으로
     최근 1개월 내 등록된 partner_client_mapping 중에서
     아직 매핑되지 않은(is_mapped = false) 레코드를 찾아
-    양쪽 is_mapped를 True로 변경한다.
+    respondent.partner_id 를 채우고, 양쪽 is_mapped를 True로 변경한다.
     """
-    if not respondent or not respondent.partner_id:
+
+    if not respondent:
         return
 
     client_name = (respondent.applicant_name or "").strip()
@@ -615,14 +616,20 @@ def try_auto_map_partner_for_respondent(
     client_phone_digits = re.sub(r"[^0-9]", "", client_phone)
 
     if not client_name or not client_phone_digits:
+        logging.info(
+            "[AUTO-MAP] skip: insufficient client info (id=%s name=%s phone=%s)",
+            getattr(respondent, "id", None),
+            client_name,
+            client_phone,
+        )
         return
 
     one_month_ago = datetime.utcnow() - timedelta(days=31)
 
+    # partner_id가 비어 있어도, 매핑 테이블에서 찾을 수 있음
     mapping = session.exec(
         select(PartnerClientMapping)
         .where(
-            PartnerClientMapping.partner_id == respondent.partner_id,
             PartnerClientMapping.client_name == client_name,
             PartnerClientMapping.client_phone == client_phone_digits,
             PartnerClientMapping.is_mapped == False,  # noqa
@@ -631,18 +638,22 @@ def try_auto_map_partner_for_respondent(
         .order_by(PartnerClientMapping.created_at.desc())
     ).first()
 
-    # 매핑 로그
     logging.info(
-    "[AUTO-MAP] resp_id=%s partner_id=%s name=%s phone=%s",
-    respondent.id,
-    respondent.partner_id,
-    respondent.applicant_name,
-    respondent.client_phone,
-)
+        "[AUTO-MAP] try: resp_id=%s partner_id=%s name=%s phone=%s, mapping_found=%s",
+        getattr(respondent, "id", None),
+        getattr(respondent, "partner_id", None),
+        client_name,
+        client_phone_digits,
+        bool(mapping),
+    )
 
     if not mapping:
         return
-    
+
+    # 매핑 테이블의 partner_id를 respondent에도 반영
+    if not respondent.partner_id:
+        respondent.partner_id = mapping.partner_id
+
     respondent.is_mapped = True
     mapping.is_mapped = True
 
@@ -650,6 +661,12 @@ def try_auto_map_partner_for_respondent(
     session.add(mapping)
     session.commit()
 
+    logging.info(
+        "[AUTO-MAP] done: resp_id=%s partner_id=%s mapping_id=%s",
+        respondent.id,
+        respondent.partner_id,
+        mapping.id,
+    )
 
 # ---- OTP helpers ----
 def issue_otp(session: Session, phone: str) -> str:
@@ -1268,6 +1285,10 @@ def login_verify_phone(
                 RETURNING id
             """).bindparams(pid=admin_id)
         ).first()[0]
+        
+        #임시로그
+        logging.info("[RESP][CREATE] rid=%s partner_id=%s", rid, admin_id)
+        request.session["partner_id"] = admin_id
 
         # 프로젝트에 이미 있는 signer를 재사용해 rtoken 생성 (verify_token과 호환)
         try:
@@ -2002,6 +2023,20 @@ def survey_finish(
     # NHIS 세션 정보 → Respondent에 반영 (고객 이름/휴대폰)
     if resp:
         sync_respondent_contact_from_nhis(request, session, resp)
+
+
+    # 로그인 시점에 세션에 넣어둔 partner_id로 보정
+    if resp and not resp.partner_id:
+        pid_from_session = request.session.get("partner_id")
+        if pid_from_session:
+            resp.partner_id = pid_from_session
+            session.add(resp)
+            session.commit()
+            logging.info(
+                "[RESP][FIX-PID] resp_id=%s partner_id=%s (from session)",
+                resp.id,
+                resp.partner_id,
+            )
 
     def calc_age(bd, ref_date):
         if not bd:
