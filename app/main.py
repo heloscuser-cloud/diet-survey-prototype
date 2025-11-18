@@ -246,7 +246,7 @@ class User(SQLModel, table=True):
     name_enc: Optional[str] = None
     birth_year: Optional[int] = None
     gender: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now_kst)
     birth_date: Optional[date] = None
     height_cm: Optional[float] = None
     weight_kg: Optional[float] = None
@@ -278,7 +278,7 @@ class Respondent(SQLModel, table=True):
     user_id: int = Field(index=True)
     campaign_id: str = Field(default="default")
     status: str = Field(default="draft")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now_kst)
 
     # 인적정보 스냅샷
     applicant_name: str | None = None
@@ -307,7 +307,7 @@ class ReportFile(SQLModel, table=True):
     survey_response_id: int = Field(index=True)
     filename: str
     content: bytes = Field(sa_column=Column(LargeBinary))
-    uploaded_at: datetime = Field(default_factory=datetime.utcnow)
+    uploaded_at: datetime = Field(default_factory=now_kst)
 
 
 class UserAdmin(SQLModel, table=True):
@@ -340,7 +340,7 @@ class PartnerClientMapping(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
 
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now_kst)
 
     partner_id: int                              # user_admin.id
     partner_name: Optional[str] = None
