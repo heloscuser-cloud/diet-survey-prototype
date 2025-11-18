@@ -1,0 +1,69 @@
+{% extends "admin/base_admin.html" %}
+{% block title %}고객 매핑{% endblock %}
+
+{% block content %}
+<div style="max-width:480px; margin:0 auto; padding:24px 0;">
+  <h2 style="font-size:20px; font-weight:700; margin-bottom:16px; text-align:center;">
+    고객 정보 매핑
+  </h2>
+
+  <p style="font-size:13px; color:#6b7280; margin-bottom:16px; text-align:center;">
+    고객이 입력한 정보와 담당자가 입력한 정보가 모두 일치하는 경우에만 매핑됩니다.
+  </p>
+
+  {% if error %}
+    <p style="color:#b91c1c; font-size:14px; margin-bottom:8px; text-align:center;">
+      {{ error }}
+    </p>
+  {% endif %}
+  {% if message %}
+    <p style="color:#15803d; font-size:14px; margin-bottom:8px; text-align:center;">
+      {{ message }}
+    </p>
+  {% endif %}
+
+  <form method="post" action="/partner/mapping" style="display:flex; flex-direction:column; gap:10px;">
+
+    <!-- 고객 이름 -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      고객 이름
+      <input type="text" name="client_name" required
+             placeholder="홍길동"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
+    <!-- 고객 휴대폰번호 -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      고객 휴대폰번호
+      <input type="tel" name="client_phone" required
+             inputmode="numeric"
+             placeholder="01012345678"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+      <small style="font-size:12px; color:#6b7280; margin-top:2px;">
+        하이픈(-) 없이 숫자만 입력해주세요.
+      </small>
+    </label>
+
+    <!-- 담당자 본인 전화번호 (readonly, 로그인한 계정 기준) -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      담당자 본인 전화번호
+      <input type="tel" name="partner_phone" value="{{ partner_phone or '' }}" readonly
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px; background:#f9fafb;">
+    </label>
+
+    <button type="submit"
+            style="margin-top:16px; padding:10px 0; border-radius:999px; border:none;
+                   background:#1d4ed8; color:white; font-weight:700; font-size:15px; width:100%;">
+      매핑 시도
+    </button>
+
+    <div style="margin-top:10px; text-align:center;">
+      <a href="/partner/dashboard" style="font-size:13px; color:#2563eb; text-decoration:none;">
+        대시보드로 돌아가기
+      </a>
+    </div>
+
+  </form>
+
+</div>
+{% endblock %}

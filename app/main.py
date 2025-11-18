@@ -305,7 +305,31 @@ class ReportFile(SQLModel, table=True):
     filename: str
     content: bytes = Field(sa_column=Column(LargeBinary))
     uploaded_at: datetime = Field(default_factory=datetime.utcnow)
-  
+
+
+class UserAdmin(SQLModel, table=True):
+    __tablename__ = "user_admin"
+    __table_args__ = {"extend_existing": True}
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    division: Optional[str] = None          # varchar(120)
+    department: Optional[str] = None        # varchar(120)
+    co_num: Optional[str] = None            # varchar(120) - 사번
+    name: Optional[str] = None              # varchar(120)
+
+    phone: str                              # varchar(20), NOT NULL, UNIQUE
+    mail: Optional[str] = None              # varchar(200)
+
+    is_active: bool = True                  # boolean, default true
+
+    created_at: Optional[datetime] = None   # DB에서 now()로 채움
+    updated_at: Optional[datetime] = None   # DB에서 now()로 채움
+
+    # 새로 추가한 비밀번호 해시 컬럼 (DB에 password_p 로 생성해 둔 상태)
+    password_p: Optional[str] = None
+
+
 class Otp(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     phone: str = Field(index=True)
@@ -409,6 +433,25 @@ def hash_phone(phone: str) -> str:
 def get_session():
     with Session(engine) as session:
         yield session
+
+# -- admin페이지 partner 비밀번호 검증 헬퍼 -- #
+def verify_partner_password(raw_password: str, stored_hash: str | None) -> bool:
+    """
+    파트너 비밀번호 검증 헬퍼.
+    raw_password : 로그인 폼에서 입력한 비밀번호 (평문 숫자 4~6자리)
+    stored_hash  : DB(user_admin.password_p)에 저장된 해시 문자열
+    """
+    if not raw_password or not stored_hash:
+        return False
+
+    import hashlib
+
+    SALT = "partner_salt_v1"   # ❗ 서비스 운영 시 환경변수로 분리 권장
+    hashed = hashlib.sha256((SALT + raw_password).encode("utf-8")).hexdigest()
+
+    return hashed == stored_hash
+
+
 
 #---- 이메일 접수 알림 헬퍼 ----
 def mask_second_char(name: str | None) -> str:
@@ -633,6 +676,428 @@ def home(request: Request):
 @app.get("/admin-portal", response_class=HTMLResponse)
 def admin_portal_home(request: Request):
     return templates.TemplateResponse("admin/portal_home.html", {"request": request})
+
+# ---------------------------
+# 파트너 로그인 (GET)
+# ---------------------------
+@app.get("/partner/login", response_class=HTMLResponse)
+def partner_login_get(request: Request):
+    return templates.TemplateResponse("partner/login.html", {
+        "request": request,
+        "error": None
+    })
+
+@app.get("/partner/signup", response_class=HTMLResponse)
+def partner_signup_form(request: Request):
+    # 단순 렌더링 (에러/메시지는 기본 None)
+    return templates.TemplateResponse(
+        "partner/signup.html",
+        {
+            "request": request,
+            "error": None,
+            "message": None,
+        },
+    )
+
+# -- 파트너 회원가입 라우트 POST -- #
+@app.post("/partner/signup", response_class=HTMLResponse)
+async def partner_signup_submit(
+    request: Request,
+    emp_no: str = Form(...),          # 사번 -> user_admin.co_num
+    name: str = Form(...),
+    phone: str = Form(...),
+    email: str = Form(...),
+    division: str = Form(""),
+    department: str = Form(""),
+    password: str = Form(...),
+    password_confirm: str = Form(...),
+    session: Session = Depends(get_session),
+):
+    # 1) 기본 검증
+    emp_no = (emp_no or "").strip()
+    name = (name or "").strip()
+    phone_raw = "".join(c for c in (phone or "") if c.isdigit())
+    email = (email or "").strip()
+    division = (division or "").strip()
+    department = (department or "").strip()
+    password = (password or "").strip()
+    password_confirm = (password_confirm or "").strip()
+
+    error = None
+
+    # 필수값 체크
+    if not emp_no or not name or not phone_raw or not email or not password or not password_confirm:
+        error = "필수 항목을 모두 입력해주세요."
+    elif password != password_confirm:
+        error = "비밀번호와 비밀번호 재확인이 일치하지 않습니다."
+    elif len(password) < 4 or len(password) > 6 or not password.isdigit():
+        error = "비밀번호는 숫자 4~6자리만 가능합니다."
+    elif len(phone_raw) < 10 or len(phone_raw) > 11:
+        error = "전화번호는 숫자 10~11자리로 입력해주세요."
+
+    if error:
+        # 입력값 유지하면서 다시 렌더
+        return templates.TemplateResponse(
+            "partner/signup.html",
+            {
+                "request": request,
+                "error": error,
+                "message": None,
+            },
+        )
+
+    # 2) 중복 전화번호 체크 (user_admin.phone UNIQUE)
+    from sqlalchemy import text as sa_text
+
+    row = session.exec(
+        sa_text(
+            """
+            SELECT id
+              FROM user_admin
+             WHERE phone = :p
+             LIMIT 1
+            """
+        ).bindparams(p=phone_raw)
+    ).first()
+
+    if row:
+        return templates.TemplateResponse(
+            "partner/signup.html",
+            {
+                "request": request,
+                "error": "이미 등록된 전화번호입니다. 로그인을 시도해 주세요.",
+                "message": None,
+            },
+        )
+
+    # 3) 비밀번호 해시 생성 (verify_partner_password에서 쓴 방식과 동일하게)
+    SALT = "partner_salt_v1"
+    password_p = hashlib.sha256((SALT + password).encode("utf-8")).hexdigest()
+
+    session.exec(
+        sa_text(
+            """
+            INSERT INTO user_admin
+                (division, department, co_num, name, phone, mail, is_active, password_p)
+            VALUES
+                (:division, :department, :co_num, :name, :phone, :mail, TRUE, :password_p)
+            """
+        ).bindparams(
+            division=division,
+            department=department,
+            co_num=emp_no,
+            name=name,
+            phone=phone_raw,
+            mail=email,
+            password_p=password_p,
+        )
+    )
+    session.commit()
+
+    # 5) 가입 성공 → 로그인 화면으로 안내
+    #   - 여기서는 단순 Redirect + 쿼리스트링으로 메시지를 넘겨도 되고,
+    #   - 바로 로그인 폼을 렌더해도 됨. (이 예시는 redirect 사용)
+    return RedirectResponse(
+        url="/partner/login?msg=signup_ok",
+        status_code=303,
+    )
+
+
+
+# ---------------------------
+# 파트너 로그인 (POST)
+# ---------------------------
+@app.post("/partner/login", response_class=HTMLResponse)
+def partner_login_post(
+    request: Request,
+    phone: str = Form(...),
+    password: str = Form(...),
+    session: Session = Depends(get_session)
+):
+    # 업체 담당자 DB: user_admin
+    user = session.exec(
+        select(UserAdmin).where(UserAdmin.phone == phone, UserAdmin.is_active == True)
+    ).first()
+
+    if not user or not verify_partner_password(password, user.password_p):
+        return templates.TemplateResponse("partner/login.html", {
+            "request": request,
+            "error": "전화번호 또는 비밀번호가 올바르지 않습니다."
+        })
+
+    # 세션 값 등록 (관리자 세션과 충돌 방지)
+    request.session.clear()
+    request.session["partner_id"] = user.id
+
+    # 로그인 성공 → 파트너 대시보드로
+    return RedirectResponse(url="/partner/dashboard", status_code=302)
+
+
+#파트너 대시보드 진입점 추가
+@app.get("/partner/dashboard", response_class=HTMLResponse)
+def partner_dashboard(request: Request):
+    if not request.session.get("partner_id"):
+        return RedirectResponse(url="/partner/login", status_code=302)
+
+    return templates.TemplateResponse("partner/dashboard.html", {
+        "request": request
+    })
+
+
+# -- 파트너 회원정보 수정 라우트 --#
+@app.get("/partner/profile", response_class=HTMLResponse)
+def partner_profile_get(
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=302)
+
+    user = session.get(UserAdmin, partner_id)
+    if not user:
+        # 세션은 있는데 DB에 없으면 로그인부터 다시
+        request.session.clear()
+        return RedirectResponse(url="/partner/login", status_code=302)
+
+    return templates.TemplateResponse(
+        "partner/profile.html",
+        {
+            "request": request,
+            "user": user,
+            "error": None,
+            "message": None,
+        },
+    )
+
+#-- 파트너 회원정보 수정 POST --#
+@app.post("/partner/profile", response_class=HTMLResponse)
+async def partner_profile_post(
+    request: Request,
+    emp_no: str = Form(""),
+    phone: str = Form(""),
+    email: str = Form(""),
+    division: str = Form(""),
+    department: str = Form(""),
+    current_password: str = Form(""),
+    new_password: str = Form(""),
+    new_password_confirm: str = Form(""),
+    session: Session = Depends(get_session),
+):
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=302)
+
+    user = session.get(UserAdmin, partner_id)
+    if not user:
+        request.session.clear()
+        return RedirectResponse(url="/partner/login", status_code=302)
+
+    # 공통 처리: 양쪽 공백/포맷 정리
+    emp_no = (emp_no or "").strip()
+    phone_raw = "".join(c for c in (phone or "") if c.isdigit())
+    email = (email or "").strip()
+    division = (division or "").strip()
+    department = (department or "").strip()
+    current_password = (current_password or "").strip()
+    new_password = (new_password or "").strip()
+    new_password_confirm = (new_password_confirm or "").strip()
+
+    error = None
+
+    # ---------------------------
+    # 1) 비밀번호 변경 의도가 있는지 확인
+    # ---------------------------
+    wants_pw_change = bool(current_password or new_password or new_password_confirm)
+
+    if wants_pw_change:
+        # 1-1) 세 필드 모두 채워져 있어야 함
+        if not current_password or not new_password or not new_password_confirm:
+            error = "비밀번호 변경 시 현재 비밀번호, 새 비밀번호, 새 비밀번호 확인을 모두 입력해주세요."
+        # 1-2) 현재 비밀번호 확인
+        elif not verify_partner_password(current_password, user.password_p):
+            error = "현재 비밀번호가 올바르지 않습니다."
+        # 1-3) 새 비밀번호 규칙 체크
+        elif not new_password.isdigit() or not (4 <= len(new_password) <= 6):
+            error = "새 비밀번호는 숫자 4~6자리만 가능합니다."
+        # 1-4) 새 비밀번호 일치 확인
+        elif new_password != new_password_confirm:
+            error = "새 비밀번호와 새 비밀번호 확인이 일치하지 않습니다."
+
+    # 전화번호 형식 간단 체크 (필수는 아님)
+    if not error and phone_raw and (len(phone_raw) < 10 or len(phone_raw) > 11):
+        error = "전화번호는 숫자 10~11자리로 입력해주세요."
+
+    if error:
+        return templates.TemplateResponse(
+            "partner/profile.html",
+            {
+                "request": request,
+                "user": user,
+                "error": error,
+                "message": None,
+            },
+        )
+
+    # ---------------------------
+    # 2) 여기까지 왔다면: 비밀번호 조건 OK (또는 변경 안 함)
+    #    → 일반 정보 먼저 업데이트
+    # ---------------------------
+    user.co_num = emp_no or user.co_num
+    if phone_raw:
+        user.phone = phone_raw
+    user.mail = email or user.mail
+    user.division = division
+    user.department = department
+
+    # ---------------------------
+    # 3) 비밀번호 변경 의도가 있고 검증도 통과한 경우에만 password_p 변경
+    # ---------------------------
+    if wants_pw_change:
+        import hashlib
+        SALT = "partner_salt_v1"
+        user.password_p = hashlib.sha256(
+            (SALT + new_password).encode("utf-8")
+        ).hexdigest()
+
+    session.add(user)
+    session.commit()
+
+    # 저장 후 대시보드로 이동
+    return RedirectResponse(url="/partner/dashboard", status_code=303)
+
+#-- 고객 담당자와 매핑하기 (고객 서비스 신청하기) --#
+@app.get("/partner/mapping", response_class=HTMLResponse)
+def partner_mapping_get(
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=302)
+
+    user = session.get(UserAdmin, partner_id)
+    if not user:
+        request.session.clear()
+        return RedirectResponse(url="/partner/login", status_code=302)
+
+    return templates.TemplateResponse(
+        "partner/mapping.html",
+        {
+            "request": request,
+            "partner_phone": user.phone,
+            "error": None,
+            "message": None,
+        },
+    )
+
+# -- 고객과 담당자 매핑하기 POST --#
+@app.post("/partner/mapping", response_class=HTMLResponse)
+async def partner_mapping_post(
+    request: Request,
+    client_name: str = Form(...),
+    client_phone: str = Form(...),
+    session: Session = Depends(get_session),
+):
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=302)
+
+    user = session.get(UserAdmin, partner_id)
+    if not user:
+        request.session.clear()
+        return RedirectResponse(url="/partner/login", status_code=302)
+
+    client_name = (client_name or "").strip()
+    client_phone_raw = "".join(c for c in (client_phone or "") if c.isdigit())
+    partner_phone = user.phone
+
+    error = None
+    message = None
+
+    if not client_name or not client_phone_raw:
+        error = "고객 이름과 휴대폰번호를 모두 입력해주세요."
+    elif len(client_phone_raw) < 10 or len(client_phone_raw) > 11:
+        error = "고객 휴대폰번호는 숫자 10~11자리로 입력해주세요."
+
+    if error:
+        return templates.TemplateResponse(
+            "partner/mapping.html",
+            {
+                "request": request,
+                "partner_phone": partner_phone,
+                "error": error,
+                "message": None,
+            },
+        )
+
+    # ⚠ 여기부터는 'respondent' 테이블 컬럼명을 이렇게 가정한 예시입니다.
+    #  - client_name, client_phone, admin_phone, partner_id, is_mapped
+    from sqlalchemy import text as sa_text
+
+    # 1) 아직 매핑 안 된 레코드 중에서 정보가 모두 일치하는 것 찾기
+    rows = session.exec(
+        sa_text(
+            """
+            SELECT id
+              FROM respondent
+             WHERE client_name = :client_name
+               AND client_phone = :client_phone
+               AND admin_phone  = :admin_phone
+               AND (is_mapped IS NULL OR is_mapped = FALSE)
+             ORDER BY id DESC
+             LIMIT 1
+            """
+        ).bindparams(
+            client_name=client_name,
+            client_phone=client_phone_raw,
+            admin_phone=partner_phone,
+        )
+    ).all()
+
+    if not rows:
+        error = "일치하는 고객 문진 정보를 찾지 못했습니다. 입력 정보를 다시 확인해주세요."
+        return templates.TemplateResponse(
+            "partner/mapping.html",
+            {
+                "request": request,
+                "partner_phone": partner_phone,
+                "error": error,
+                "message": None,
+            },
+        )
+
+    # 2) 가장 최근 1건 기준으로 매핑 처리
+    target_id = rows[0][0] if isinstance(rows[0], tuple) else rows[0]
+
+    session.exec(
+        sa_text(
+            """
+            UPDATE respondent
+               SET partner_id = :partner_id,
+                   is_mapped  = TRUE
+             WHERE id = :rid
+            """
+        ).bindparams(
+            partner_id=partner_id,
+            rid=target_id,
+        )
+    )
+    session.commit()
+
+    message = "담당자 매핑을 완료했습니다."
+
+    return templates.TemplateResponse(
+        "partner/mapping.html",
+        {
+            "request": request,
+            "partner_phone": partner_phone,
+            "error": None,
+            "message": message,
+        },
+    )
+
+
 
 #사용자 로그인 화면 렌더
 @app.get("/login", response_class=HTMLResponse)

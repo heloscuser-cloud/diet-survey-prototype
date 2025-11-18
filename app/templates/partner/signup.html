@@ -1,0 +1,110 @@
+{% extends "admin/base_admin.html" %}
+{% block title %}파트너 회원가입{% endblock %}
+
+{% block content %}
+<div style="max-width:420px; margin:0 auto; padding:24px 0;">
+  <h2 style="font-size:20px; font-weight:700; margin-bottom:16px; text-align:center;">
+    파트너 회원가입
+  </h2>
+
+  {% if error %}
+    <p style="color:#b91c1c; font-size:14px; margin-bottom:8px; text-align:center;">
+      {{ error }}
+    </p>
+  {% endif %}
+  {% if message %}
+    <p style="color:#15803d; font-size:14px; margin-bottom:8px; text-align:center;">
+      {{ message }}
+    </p>
+  {% endif %}
+
+  <form method="post" action="/partner/signup" style="display:flex; flex-direction:column; gap:10px;">
+
+    <!-- 사번(필수, 숫자만) -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      사번<span style="color:#ef4444; margin-left:4px;">*</span>
+      <input type="text" name="emp_no" required
+             inputmode="numeric"
+             pattern="[0-9]+"
+             placeholder="숫자만 입력"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
+    <!-- 이름(필수) -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      이름<span style="color:#ef4444; margin-left:4px;">*</span>
+      <input type="text" name="name" required
+             placeholder="홍길동"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
+    <!-- 전화번호(필수) -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      전화번호<span style="color:#ef4444; margin-left:4px;">*</span>
+      <input type="tel" name="phone" required
+             inputmode="numeric"
+             pattern="[0-9]{10,11}"
+             placeholder="01012345678"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+      <small style="font-size:12px; color:#6b7280; margin-top:2px;">
+        하이픈(-) 없이 숫자만 입력해주세요.
+      </small>
+    </label>
+
+    <!-- 이메일(필수) -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      이메일 주소<span style="color:#ef4444; margin-left:4px;">*</span>
+      <input type="email" name="email" required
+             placeholder="user@example.com"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
+    <!-- 소속(선택) -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      소속(회사명 등)
+      <input type="text" name="division"
+             placeholder="예: ㈜가온앤"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
+    <!-- 부서(선택) -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      부서
+      <input type="text" name="department"
+             placeholder="예: 영업팀"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
+    <!-- 비밀번호(필수, 숫자 4~6자리) -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      비밀번호(숫자 4~6자리)<span style="color:#ef4444; margin-left:4px;">*</span>
+      <input type="password" name="password" required
+             inputmode="numeric"
+             pattern="[0-9]{4,6}"
+             minlength="4" maxlength="6"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
+    <!-- 비밀번호 재확인 -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      비밀번호 재확인<span style="color:#ef4444; margin-left:4px;">*</span>
+      <input type="password" name="password_confirm" required
+             inputmode="numeric"
+             minlength="4" maxlength="6"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
+    <button type="submit"
+            class="btn primary"
+            style="margin-top:16px; width:100%; border-radius:999px; padding:10px 0;">
+      회원가입
+    </button>
+
+    <div style="margin-top:8px; text-align:center;">
+      <a href="/partner/login" style="font-size:13px; color:#2563eb; text-decoration:none;">
+        이미 계정이 있으신가요? 로그인 하러가기
+      </a>
+    </div>
+  </form>
+</div>
+{% endblock %}

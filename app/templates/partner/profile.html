@@ -1,0 +1,123 @@
+{% extends "admin/base_admin.html" %}
+{% block title %}파트너 회원정보 수정{% endblock %}
+
+{% block content %}
+<div style="max-width:420px; margin:0 auto; padding:24px 0;">
+  <h2 style="font-size:20px; font-weight:700; margin-bottom:16px; text-align:center;">
+    회원정보 수정
+  </h2>
+
+  {% if error %}
+    <p style="color:#b91c1c; font-size:14px; margin-bottom:8px; text-align:center;">
+      {{ error }}
+    </p>
+  {% endif %}
+  {% if message %}
+    <p style="color:#15803d; font-size:14px; margin-bottom:8px; text-align:center;">
+      {{ message }}
+    </p>
+  {% endif %}
+
+  <form method="post" action="/partner/profile" style="display:flex; flex-direction:column; gap:10px;">
+
+    <!-- 사번 (수정 가능) -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      사번
+      <input type="text" name="emp_no"
+             value="{{ user.co_num or '' }}"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
+    <!-- 이름 (수정 불가) -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      이름 (변경 불가)
+      <input type="text" name="name"
+             value="{{ user.name or '' }}"
+             readonly
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px; background:#f9fafb;">
+    </label>
+
+    <!-- 전화번호 -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      전화번호
+      <input type="tel" name="phone"
+             value="{{ user.phone or '' }}"
+             inputmode="numeric"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+      <small style="font-size:12px; color:#6b7280; margin-top:2px;">
+        하이픈(-) 없이 숫자만 입력해주세요.
+      </small>
+    </label>
+
+    <!-- 이메일 -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      이메일 주소
+      <input type="email" name="email"
+             value="{{ user.mail or '' }}"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
+    <!-- 소속 -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      소속(회사명 등)
+      <input type="text" name="division"
+             value="{{ user.division or '' }}"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
+    <!-- 부서 -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      부서
+      <input type="text" name="department"
+             value="{{ user.department or '' }}"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
+    <!-- 비밀번호 안내 문구 -->
+    <p style="margin-top:12px; font-size:13px; color:#6b7280;">
+      비밀번호 입력란은 비밀번호 변경 시에만 입력합니다.
+    </p>
+
+    <!-- 현재 비밀번호 -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      현재 비밀번호
+      <input type="password" name="current_password"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
+    <!-- 새 비밀번호 -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      새 비밀번호 (숫자 4~6자리)
+      <input type="password" name="new_password"
+             inputmode="numeric"
+             minlength="4" maxlength="6"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
+    <!-- 새 비밀번호 확인 -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      새 비밀번호 확인
+      <input type="password" name="new_password_confirm"
+             inputmode="numeric"
+             minlength="4" maxlength="6"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
+    <!-- 버튼들 -->
+    <div style="display:flex; gap:10px; margin-top:16px;">
+      <button type="submit"
+              style="flex:1; padding:10px 0; border-radius:999px; border:none;
+                     background:#1d4ed8; color:white; font-weight:700; font-size:15px;">
+        변경정보 저장
+      </button>
+      <button type="button"
+              onclick="window.location.href='/partner/dashboard';"
+              style="flex:1; padding:10px 0; border-radius:999px; border:1px solid #9ca3af;
+                     background:white; color:#4b5563; font-weight:600; font-size:15px;">
+        취소
+      </button>
+    </div>
+
+  </form>
+</div>
+{% endblock %}
