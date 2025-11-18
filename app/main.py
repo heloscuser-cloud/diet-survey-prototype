@@ -633,7 +633,15 @@ def try_auto_map_partner_for_respondent(
 
     if not mapping:
         return
-
+    
+    # 매핑 로그
+    logging.info(
+    "[AUTO-MAP] resp_id=%s partner_id=%s name=%s phone=%s",
+    respondent.id,
+    respondent.partner_id,
+    respondent.applicant_name,
+    respondent.client_phone,
+)
     respondent.is_mapped = True
     mapping.is_mapped = True
 
@@ -1249,6 +1257,7 @@ def login_verify_phone(
 
     # 5) Respondent 생성 + rtoken 쿠키(설문 접근/후속 저장에 필요)
     try:
+        # user_admin에서 조회한 담당자 id (위에서 SELECT 했던 row)
         admin_id = row[0]  # user_admin.id
 
         rid = session.exec(
