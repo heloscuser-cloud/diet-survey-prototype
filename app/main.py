@@ -631,9 +631,6 @@ def try_auto_map_partner_for_respondent(
         .order_by(PartnerClientMapping.created_at.desc())
     ).first()
 
-    if not mapping:
-        return
-    
     # 매핑 로그
     logging.info(
     "[AUTO-MAP] resp_id=%s partner_id=%s name=%s phone=%s",
@@ -642,6 +639,10 @@ def try_auto_map_partner_for_respondent(
     respondent.applicant_name,
     respondent.client_phone,
 )
+
+    if not mapping:
+        return
+    
     respondent.is_mapped = True
     mapping.is_mapped = True
 
