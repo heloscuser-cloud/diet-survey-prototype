@@ -298,6 +298,9 @@ class Respondent(SQLModel, table=True):
         ),
     )
 
+    client_phone: str | None = None
+    partner_id: int | None = None
+    is_mapped: bool = Field(default=False)
 
 class ReportFile(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -328,6 +331,25 @@ class UserAdmin(SQLModel, table=True):
 
     # 새로 추가한 비밀번호 해시 컬럼 (DB에 password_p 로 생성해 둔 상태)
     password_p: Optional[str] = None
+
+
+#-- 업체담당자, 고객 매핑 테이블 --#
+class PartnerClientMapping(SQLModel, table=True):
+    __tablename__ = "partner_client_mapping"
+    __table_args__ = {"extend_existing": True}
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    partner_id: int                              # user_admin.id
+    partner_name: Optional[str] = None
+    partner_phone: Optional[str] = None
+
+    client_name: Optional[str] = None
+    client_phone: Optional[str] = None
+
+    is_mapped: bool = Field(default=False)
 
 
 class Otp(SQLModel, table=True):
@@ -452,6 +474,40 @@ def verify_partner_password(raw_password: str, stored_hash: str | None) -> bool:
     return hashed == stored_hash
 
 
+#-- NHIS 인증간 고객 정보 저장 헬퍼(업체담당자, 고객 매핑 시 활용) --#
+def sync_respondent_contact_from_nhis(
+    request: Request,
+    session: Session,
+    respondent: Respondent,
+):
+    """
+    NHIS 간편인증 시작 시 세션에 보관한
+    nhis_start_payload(고객 이름/휴대폰)를 Respondent에 반영한다.
+    """
+    try:
+        payload = (request.session or {}).get("nhis_start_payload") or {}
+        uname = (payload.get("USERNAME") or "").strip()
+        uphone = payload.get("HPNUMBER") or ""
+        uphone_digits = re.sub(r"[^0-9]", "", uphone)
+
+        changed = False
+
+        # 이름: 응답자 이름이 비어있으면 NHIS 이름으로 채움
+        if uname and not (respondent.applicant_name or "").strip():
+            respondent.applicant_name = uname
+            changed = True
+
+        # 고객 휴대폰
+        if uphone_digits:
+            respondent.client_phone = uphone_digits
+            changed = True
+
+        if changed:
+            session.add(respondent)
+            session.commit()
+    except Exception as e:
+        logging.warning("[RESP][SYNC-NHIS] %r", e)
+
 
 #---- 이메일 접수 알림 헬퍼 ----
 def mask_second_char(name: str | None) -> str:
@@ -538,6 +594,52 @@ def send_submission_email(serial_no: int, applicant_name: str, created_at_kst_st
         traceback.print_exc()
 
     print("[EMAIL] send failed: both 587 and 465 attempts failed")
+
+
+#-- 업체담당자, 고객 매핑 헬퍼 --#
+def try_auto_map_partner_for_respondent(
+    session: Session,
+    respondent: Respondent,
+):
+    """
+    respondent에 담긴 고객/담당자 정보를 기준으로
+    최근 1개월 내 등록된 partner_client_mapping 중에서
+    아직 매핑되지 않은(is_mapped = false) 레코드를 찾아
+    양쪽 is_mapped를 True로 변경한다.
+    """
+    if not respondent or not respondent.partner_id:
+        return
+
+    client_name = (respondent.applicant_name or "").strip()
+    client_phone = (respondent.client_phone or "").strip()
+    client_phone_digits = re.sub(r"[^0-9]", "", client_phone)
+
+    if not client_name or not client_phone_digits:
+        return
+
+    one_month_ago = datetime.utcnow() - timedelta(days=31)
+
+    mapping = session.exec(
+        select(PartnerClientMapping)
+        .where(
+            PartnerClientMapping.partner_id == respondent.partner_id,
+            PartnerClientMapping.client_name == client_name,
+            PartnerClientMapping.client_phone == client_phone_digits,
+            PartnerClientMapping.is_mapped == False,  # noqa
+            PartnerClientMapping.created_at >= one_month_ago,
+        )
+        .order_by(PartnerClientMapping.created_at.desc())
+    ).first()
+
+    if not mapping:
+        return
+
+    respondent.is_mapped = True
+    mapping.is_mapped = True
+
+    session.add(respondent)
+    session.add(mapping)
+    session.commit()
 
 
 # ---- OTP helpers ----
@@ -1031,61 +1133,46 @@ async def partner_mapping_post(
             },
         )
 
-    # ⚠ 여기부터는 'respondent' 테이블 컬럼명을 이렇게 가정한 예시입니다.
-    #  - client_name, client_phone, admin_phone, partner_id, is_mapped
+    # 최근 1개월 내 같은 담당자+고객으로 이미 등록된 요청이 있는지 체크 (선택)
     from sqlalchemy import text as sa_text
+    one_month_ago = datetime.utcnow() - timedelta(days=31)
 
-    # 1) 아직 매핑 안 된 레코드 중에서 정보가 모두 일치하는 것 찾기
-    rows = session.exec(
+    dup = session.exec(
         sa_text(
             """
             SELECT id
-              FROM respondent
-             WHERE client_name = :client_name
-               AND client_phone = :client_phone
-               AND admin_phone  = :admin_phone
-               AND (is_mapped IS NULL OR is_mapped = FALSE)
-             ORDER BY id DESC
+              FROM partner_client_mapping
+             WHERE partner_id   = :pid
+               AND client_name  = :cname
+               AND client_phone = :cphone
+               AND created_at  >= :from_dt
+             ORDER BY created_at DESC
              LIMIT 1
             """
         ).bindparams(
+            pid=partner_id,
+            cname=client_name,
+            cphone=client_phone_raw,
+            from_dt=one_month_ago,
+        )
+    ).first()
+
+    if dup:
+        # 중복 요청이 있으면 새로 안 만들고 안내만
+        message = "이미 최근에 등록된 고객 매핑 요청이 있습니다."
+    else:
+        # 새 매핑 요청 INSERT
+        mapping = PartnerClientMapping(
+            partner_id=partner_id,
+            partner_name=user.name,
+            partner_phone=partner_phone,
             client_name=client_name,
             client_phone=client_phone_raw,
-            admin_phone=partner_phone,
+            is_mapped=False,
         )
-    ).all()
-
-    if not rows:
-        error = "일치하는 고객 문진 정보를 찾지 못했습니다. 입력 정보를 다시 확인해주세요."
-        return templates.TemplateResponse(
-            "partner/mapping.html",
-            {
-                "request": request,
-                "partner_phone": partner_phone,
-                "error": error,
-                "message": None,
-            },
-        )
-
-    # 2) 가장 최근 1건 기준으로 매핑 처리
-    target_id = rows[0][0] if isinstance(rows[0], tuple) else rows[0]
-
-    session.exec(
-        sa_text(
-            """
-            UPDATE respondent
-               SET partner_id = :partner_id,
-                   is_mapped  = TRUE
-             WHERE id = :rid
-            """
-        ).bindparams(
-            partner_id=partner_id,
-            rid=target_id,
-        )
-    )
-    session.commit()
-
-    message = "담당자 매핑을 완료했습니다."
+        session.add(mapping)
+        session.commit()
+        message = "고객 매핑 요청을 등록했습니다."
 
     return templates.TemplateResponse(
         "partner/mapping.html",
@@ -1162,8 +1249,14 @@ def login_verify_phone(
 
     # 5) Respondent 생성 + rtoken 쿠키(설문 접근/후속 저장에 필요)
     try:
+        admin_id = row[0]  # user_admin.id
+
         rid = session.exec(
-            sa_text("INSERT INTO respondent (status, created_at) VALUES ('started', now()) RETURNING id")
+            sa_text("""
+                INSERT INTO respondent (status, created_at, partner_id)
+                VALUES ('started', now(), :pid)
+                RETURNING id
+            """).bindparams(pid=admin_id)
         ).first()[0]
 
         # 프로젝트에 이미 있는 signer를 재사용해 rtoken 생성 (verify_token과 호환)
@@ -1895,6 +1988,10 @@ def survey_finish(
     # 응답자/사용자 조회 (인적사항)
     resp = session.get(Respondent, respondent_id)
     user = session.get(User, resp.user_id) if resp and resp.user_id else None
+    
+    # NHIS 세션 정보 → Respondent에 반영 (고객 이름/휴대폰)
+    if resp:
+        sync_respondent_contact_from_nhis(request, session, resp)
 
     def calc_age(bd, ref_date):
         if not bd:
@@ -1941,6 +2038,9 @@ def survey_finish(
     ey = (nhis_latest.get("EXAMYEAR") or nhis_latest.get("GUNYEAR") or nhis_latest.get("exam_year"))
     print("[NHIS][SAVE] exam_year=", ey, "| has_latest:", bool(nhis_latest))
 
+    # 자동 담당자 매핑 시도
+    if resp:
+        try_auto_map_partner_for_respondent(session, resp)
 
     # ── 알림메일 비동기 발송 ───────────────────────────────
     try:
@@ -1966,6 +2066,7 @@ def survey_finish(
     request.session.pop("nhis_latest", None)
     request.session.pop("nhis_raw", None)
 
+    #리다이렉트
     response = RedirectResponse(url="/portal", status_code=302)
     response.set_cookie(
         "survey_completed", "1",
