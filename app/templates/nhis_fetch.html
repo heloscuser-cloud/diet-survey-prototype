@@ -227,23 +227,40 @@
       const data = await rsp.json();
       console.log('[DH][start]', rsp.status, data);
 
+      // ✅ 정상: callbackId 받은 경우
       if (rsp.ok && data.errCode === "0001" && data.data?.callbackId) {
         callbackId = data.data.callbackId;
         gStartDone = true;
-        setStatus('간편인증 요청 전송 성공. 스마트폰에서 인증 완료 후 "인증완료"를 누르세요.', 'ok');
+        setStatus('휴대폰으로 간편인증 요청을 전송하였습니다.\n휴대폰에서 인증 완료 후 "인증완료"를 누르세요.', 'ok');
         btnComplete.disabled = false;
         return;
       }
+
+      // 여기부터는 실패 케이스
       btnStart.disabled = false;
       gStartDone = false;
-      alert('간편인증 시작 실패: ' + (data.message || data.errCode || '오류'));
-      setStatus('간편인증 시작 실패', 'err');
+
+      // ✅ 백엔드에서 재시도 3회 후 타임아웃일 때
+      if (data && data.errCode === "NETWORK_TIMEOUT") {
+        const msg = data.message || "현재 국가건강검진 조회 서비스 연결이 불안정하여 연결에 실패하였습니다.\n잠시 후 다시 시도해주세요.";
+        alert(msg);
+        setStatus(msg, 'err');
+      } else {
+        // 그 외 일반 실패
+        const msg = '간편인증 시작 실패: ' + (data.message || data.errCode || '오류');
+        alert(msg);
+        setStatus('간편인증 시작 실패', 'err');
+      }
     } catch (e) {
       console.error(e);
       btnStart.disabled = false;
       gStartDone = false;
-      setStatus('간편인증 시작 실패(네트워크)', 'err');
+      // 진짜 네트워크/JS 예외 발생 시
+      const msg = "국가건강검진 조회 서비스 연결에 실패하였습니다. 잠시 후 다시 시도해주세요.";
+      alert(msg);
+      setStatus(msg, 'err');
     }
+
   });
 
   // 인증완료(수동)

@@ -596,7 +596,7 @@ def send_submission_email(serial_no: int, applicant_name: str, created_at_kst_st
     print("[EMAIL] send failed: both 587 and 465 attempts failed")
 
 
-#-- 업체담당자, 고객 매핑 헬퍼 --#
+#-- 업체담당자, 고객 매핑 헬퍼 1(업체 담당자가 고객 등록 후 문진 작성 시) --#
 def try_auto_map_partner_for_respondent(
     session: Session,
     respondent: Respondent,
@@ -667,6 +667,77 @@ def try_auto_map_partner_for_respondent(
         respondent.partner_id,
         mapping.id,
     )
+
+# -- 업체 담당자, 고객 매핑 헬퍼 2 (문진 먼저 하고 나중에 담당자가 고객 등록 시) --#
+def try_auto_map_respondent_for_mapping(
+    session: Session,
+    mapping: PartnerClientMapping,
+):
+    """
+    partner_client_mapping 한 건을 기준으로
+    최근 1개월 내 생성된 respondent 중에서
+    이름/전화가 일치하고 아직 매핑 안 된(is_mapped = false) 건이 있으면
+    respondent.partner_id / is_mapped 를 채우고, mapping.is_mapped 도 True 로 변경.
+    """
+    if not mapping:
+        return
+
+    client_name = (mapping.client_name or "").strip()
+    client_phone = (mapping.client_phone or "").strip()
+    client_phone_digits = re.sub(r"[^0-9]", "", client_phone)
+
+    if not client_name or not client_phone_digits:
+        logging.info(
+            "[AUTO-MAP2] skip: insufficient mapping client info (mapping_id=%s name=%s phone=%s)",
+            getattr(mapping, "id", None),
+            client_name,
+            client_phone,
+        )
+        return
+
+    one_month_ago = datetime.utcnow() - timedelta(days=31)
+
+    resp = session.exec(
+        select(Respondent)
+        .where(
+            Respondent.applicant_name == client_name,
+            Respondent.client_phone == client_phone_digits,
+            Respondent.is_mapped == False,  # noqa
+            Respondent.created_at >= one_month_ago,
+        )
+        .order_by(Respondent.created_at.desc())
+    ).first()
+
+    logging.info(
+        "[AUTO-MAP2] try: mapping_id=%s partner_id=%s client_name=%s client_phone=%s, resp_found=%s",
+        getattr(mapping, "id", None),
+        getattr(mapping, "partner_id", None),
+        client_name,
+        client_phone_digits,
+        bool(resp),
+    )
+
+    if not resp:
+        return
+
+    # respondent 쪽에 partner_id 없으면 채워줌
+    if not resp.partner_id:
+        resp.partner_id = mapping.partner_id
+
+    resp.is_mapped = True
+    mapping.is_mapped = True
+
+    session.add(resp)
+    session.add(mapping)
+    session.commit()
+
+    logging.info(
+        "[AUTO-MAP2] done: resp_id=%s partner_id=%s mapping_id=%s",
+        resp.id,
+        resp.partner_id,
+        mapping.id,
+    )
+
 
 # ---- OTP helpers ----
 def issue_otp(session: Session, phone: str) -> str:
@@ -1159,11 +1230,11 @@ async def partner_mapping_post(
             },
         )
 
-    # 최근 1개월 내 같은 담당자+고객으로 이미 등록된 요청이 있는지 체크 (선택)
     from sqlalchemy import text as sa_text
     one_month_ago = datetime.utcnow() - timedelta(days=31)
 
-    dup = session.exec(
+    # 최근 1개월 내 중복 요청 여부 확인
+    dup_row = session.exec(
         sa_text(
             """
             SELECT id
@@ -1183,8 +1254,9 @@ async def partner_mapping_post(
         )
     ).first()
 
-    if dup:
-        # 중복 요청이 있으면 새로 안 만들고 안내만
+    if dup_row:
+        # 이미 등록된 요청이 있으면 그 레코드를 가져와서 재사용
+        mapping = session.get(PartnerClientMapping, dup_row[0])
         message = "이미 최근에 등록된 고객 매핑 요청이 있습니다."
     else:
         # 새 매핑 요청 INSERT
@@ -1198,7 +1270,15 @@ async def partner_mapping_post(
         )
         session.add(mapping)
         session.commit()
+        session.refresh(mapping)
         message = "고객 매핑 요청을 등록했습니다."
+
+    # 👉 이 시점에, 이미 존재하는 respondent와 자동 매핑 시도
+    try_auto_map_respondent_for_mapping(session, mapping)
+
+    # 매핑 성공 여부에 따라 메시지 보완 (선택)
+    if mapping.is_mapped:
+        message = "고객 매핑 요청을 등록했고, 기존 문진과 자동으로 매칭되었습니다."
 
     return templates.TemplateResponse(
         "partner/mapping.html",
@@ -1209,6 +1289,7 @@ async def partner_mapping_post(
             "message": message,
         },
     )
+
 
 
 
@@ -2481,14 +2562,55 @@ async def dh_simple_start(
     #인적정보 세션 보관
     request.session["nhis_start_payload"] = dh_body
 
-    # 1) 시작 호출
-    rsp = DATAHUB.simple_auth_start(
-        login_option=dh_body["LOGINOPTION"],      # "0"~"7"
-        user_name=dh_body["USERNAME"],
-        hp_number=dh_body["HPNUMBER"],
-        jumin_or_birth=dh_body["JUMIN"],
-        telecom_gubun=dh_body.get("TELECOMGUBUN"),
-    )
+    # ===============================================
+    # 1) DataHub.simple_auth_start 재시도(최대 3회)
+    # ===============================================
+    rsp = None
+    last_error = None
+
+    for attempt in range(1, 4):
+        try:
+            logging.info(
+                "[DH][START][TRY] attempt=%s LOGINOPTION=%s name=%s phone=%s",
+                attempt,
+                dh_body.get("LOGINOPTION"),
+                dh_body.get("USERNAME"),
+                dh_body.get("HPNUMBER"),
+            )
+
+            rsp = DATAHUB.simple_auth_start(
+                login_option=dh_body["LOGINOPTION"],
+                user_name=dh_body["USERNAME"],
+                hp_number=dh_body["HPNUMBER"],
+                jumin_or_birth=dh_body["JUMIN"],
+                telecom_gubun=dh_body.get("TELECOMGUBUN"),
+            )
+
+            # 정상 응답 → 재시도 중단
+            break
+
+        except DatahubError as e:
+            last_error = e
+            logging.warning(
+                "[DH][START][RETRY] attempt=%s error=%r",
+                attempt, e
+            )
+
+            if attempt >= 3:
+                msg = "현재 국가건강검진 조회 서비스 연결이 불안정하여 연결에 실패하였습니다.\n잠시 후 다시 시도해주세요."
+                logging.error(
+                    "[DH][START][TIMEOUT] attempts=3 last_error=%r",
+                    last_error,
+                )
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "errCode": "NETWORK_TIMEOUT",
+                        "message": msg,
+                        "data": None
+                    }
+                )
+            time.sleep(0.3)
 
 
     try:
@@ -2519,6 +2641,7 @@ async def dh_simple_start(
     # ★ 여기서부터는 전부 실패로 처리 (0000이라도 콜백 없으면 실패)
     msg = (rsp.get("errMsg") or "간편인증 시작 실패").strip()
     return JSONResponse({"errCode": err or "9999", "message": msg, "data": data}, status_code=200)
+
 
 
 # ===========================================
@@ -2785,7 +2908,7 @@ def pick_latest_one(data: dict) -> dict:
     data.INCOMELIST[] 중 가장 최근(연/월/일) 1건만 골라 요약해 리턴.
     형식은 가이드의 필드명을 그대로 사용.
     """
-    items = (data or {}).get("INCOMELIST") or []
+    items = (data or {}).get("502INCOMELIST") or []
     best = None
     best_key = None
     for it in items:
