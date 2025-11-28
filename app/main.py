@@ -301,6 +301,11 @@ class Respondent(SQLModel, table=True):
     client_phone: str | None = None
     partner_id: int | None = None
     is_mapped: bool = Field(default=False)
+    updated_at: datetime | None = None
+    
+    #동의서 관련 필드
+    agreement_all: bool = Field(default=False)
+    agreement_at: datetime | None = None
 
 class ReportFile(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -503,6 +508,7 @@ def sync_respondent_contact_from_nhis(
             changed = True
 
         if changed:
+            respondent.updated_at = now_kst()
             session.add(respondent)
             session.commit()
     except Exception as e:
@@ -656,6 +662,9 @@ def try_auto_map_partner_for_respondent(
 
     respondent.is_mapped = True
     mapping.is_mapped = True
+    
+    # ✅ 매핑이 실제로 일어난 시점 기록
+    respondent.updated_at = now_kst()
 
     session.add(respondent)
     session.add(mapping)
@@ -1361,8 +1370,8 @@ def login_verify_phone(
 
         rid = session.exec(
             sa_text("""
-                INSERT INTO respondent (status, created_at, partner_id)
-                VALUES ('started', now(), :pid)
+                INSERT INTO respondent (status, partner_id, updated_at)
+                VALUES ('started', :pid, (now() AT TIME ZONE 'Asia/Seoul'))
                 RETURNING id
             """).bindparams(pid=admin_id)
         ).first()[0]
@@ -2144,6 +2153,7 @@ def survey_finish(
     session.add(sr)
     if resp:
         resp.status = "submitted"
+        resp.updated_at = now_kst()
         session.add(resp)
     session.commit()
     session.refresh(sr)
@@ -2151,6 +2161,7 @@ def survey_finish(
     # 일련번호 채번
     if resp and resp.serial_no is None:
         next_val = session.exec(sa_text("SELECT nextval('respondent_serial_no_seq')")).one()[0]
+        resp.updated_at = now_kst()
         resp.serial_no = next_val
         session.add(resp)
         session.commit()
@@ -2561,6 +2572,32 @@ async def dh_simple_start(
     
     #인적정보 세션 보관
     request.session["nhis_start_payload"] = dh_body
+    
+        # ─────────────────────────────────────────────
+    # ✅ 간편인증 시작 시점에 동의 여부를 respondent에 저장
+    #    - 프론트에서 4개 모두 체크 안 하면 버튼이 비활성이라,
+    #      여기까지 들어왔다는 것 = 필수 4개 모두 동의한 상태로 간주
+    # ─────────────────────────────────────────────
+    try:
+        # rtoken은 쿠키나 세션에 이미 넣어둔 값 재사용
+        rtoken = request.cookies.get("rtoken") or request.session.get("rtoken")
+        rid = verify_token(rtoken) if rtoken else -1
+
+        if rid > 0:
+            resp_obj = session.get(Respondent, rid)
+            if resp_obj:
+                # 이미 true로 박혀 있으면 다시 바꿀 필요는 없음
+                if not getattr(resp_obj, "agreement_all", False):
+                    resp_obj.agreement_all = True
+                # 아직 동의 시각이 없으면 이번 시점으로 기록
+                if getattr(resp_obj, "agreement_at", None) is None:
+                    resp_obj.agreement_at = now_kst()
+
+                session.add(resp_obj)
+                session.commit()
+    except Exception as e:
+        logging.warning("[CONSENT][WARN] agreement save failed: %r", e)
+    
 
     # ===============================================
     # 1) DataHub.simple_auth_start 재시도(최대 3회)
