@@ -55,7 +55,162 @@
       color: #111827;               /* 진한 회색 */
       border-color: #e5e7eb;        /* 엷은 회색 테두리 */
     }
+  /* 동의 영역 전체 박스 */
+  .consent-box {
+    background-color: #ffffff;
+    border: 1px solid #111111;
+    border-radius: 16px;
+    padding: 12px 16px;
+    font-size: 0.9rem;
+  }
 
+  .consent-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    margin-top: 8px;
+    align-items: center;
+  }
+
+  .consent-row-top {
+    justify-content: flex-start;
+    margin-top: 0;
+    margin-bottom: 4px;
+  }
+
+  .consent-col {
+    flex: 1 1 160px; /* 모바일에서는 1열, 넓은 화면에서는 2열 */
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .consent-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .consent-label-text {
+    font-weight: 600;
+  }
+
+  .consent-required {
+    color: #e11d48; /* Tailwind의 red-500 비슷한 느낌 */
+    font-size: 0.8em;
+    margin-left: 2px;
+  }
+
+  /* 동그란 체크박스 스타일 */
+  .consent-check {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    border: 2px solid #c4c4c4;
+    background-color: #ffffff;
+    display: inline-block;
+    position: relative;
+    cursor: pointer;
+    vertical-align: middle;
+  }
+
+  .consent-check:checked {
+    border-color: #111111;
+    background-color: #111111;
+  }
+
+  .consent-check:checked::after {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 1px;
+    width: 5px;
+    height: 9px;
+    border: 2px solid #ffffff;
+    border-top: none;
+    border-left: none;
+    transform: rotate(45deg);
+  }
+
+  /* 보기 버튼 스타일 (모바일스럽게 둥글게) */
+  .consent-view-btn {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid #d4d4d8;
+    background-color: #f9fafb;
+    font-size: 0.75rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .consent-view-btn:hover {
+    background-color: #e5e7eb;
+  }
+
+  /* 동의서 모달 오버레이 */
+  .consent-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    display: none;        /* 기본은 숨김 */
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+  }
+
+  .consent-modal.show {
+    display: flex;
+  }
+
+  .consent-modal-panel {
+    background: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+    max-width: 520px;
+    width: 100%;
+    margin: 0 16px;
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .consent-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .consent-modal-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
+
+  .consent-modal-close {
+    border: none;
+    background: transparent;
+    font-size: 1.2rem;
+    line-height: 1;
+    cursor: pointer;
+    color: #6b7280;
+  }
+
+  .consent-modal-close:hover {
+    color: #111827;
+  }
+
+  .consent-modal-body {
+    padding: 10px 12px 12px;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-y: auto;
+  }
   </style>
 </head>
 <body>
@@ -118,60 +273,74 @@
       </div>
     </div>
 
-    <!-- 동의 체크박스 영역 -->
-    <div class="mt-6 space-y-2 text-sm">
-      <!-- 1줄: 전체 동의 -->
-      <label class="inline-flex items-center gap-2">
-        <input type="checkbox" id="agree_all" class="h-4 w-4">
-        <span class="font-semibold">전체 동의</span>
+<!-- 동의 영역 시작 -->
+<div class="mt-6">
+  <div class="consent-box">
+    <!-- 1행: 전체 동의 -->
+    <div class="consent-row consent-row-top">
+      <label class="consent-label">
+        <input type="checkbox" id="agree_all" class="consent-check">
+        <span class="consent-label-text">전체 동의</span>
       </label>
+    </div>
 
-      <!-- 2줄: 개인정보 수집/이용 + 제3자 제공 -->
-      <div class="ml-5 flex flex-wrap items-center gap-4">
-        <label class="inline-flex items-center gap-1">
-          <input type="checkbox" id="agree_collect" class="h-4 w-4">
-          <span>개인정보 수집·이용 동의 <span class="text-red-500">(필수)</span></span>
+    <!-- 2행: 수집·이용 / 제3자 제공 -->
+    <div class="consent-row">
+      <div class="consent-col">
+        <label class="consent-label">
+          <input type="checkbox" id="agree_collect" class="consent-check">
+          <span>개인정보 수집·이용 동의 <span class="consent-required">(필수)</span></span>
         </label>
         <button type="button"
-                class="px-2 py-1 text-xs border rounded hover:bg-gray-50"
+                class="consent-view-btn"
                 data-consent="collect">
-          [보기]
-        </button>
-
-        <label class="inline-flex items-center gap-1">
-          <input type="checkbox" id="agree_third" class="h-4 w-4">
-          <span>개인정보 제3자 제공 동의 <span class="text-red-500">(필수)</span></span>
-        </label>
-        <button type="button"
-                class="px-2 py-1 text-xs border rounded hover:bg-gray-50"
-                data-consent="third">
-          [보기]
+          보기
         </button>
       </div>
 
-      <!-- 3줄: 고유식별정보 처리 + 해외 이전 -->
-      <div class="ml-5 flex flex-wrap items-center gap-4">
-        <label class="inline-flex items-center gap-1">
-          <input type="checkbox" id="agree_unique" class="h-4 w-4">
-          <span>고유식별정보 처리 동의 <span class="text-red-500">(필수)</span></span>
+      <div class="consent-col">
+        <label class="consent-label">
+          <input type="checkbox" id="agree_third" class="consent-check">
+          <span>개인정보 제3자 제공 동의 <span class="consent-required">(필수)</span></span>
         </label>
         <button type="button"
-                class="px-2 py-1 text-xs border rounded hover:bg-gray-50"
-                data-consent="unique">
-          [보기]
-        </button>
-
-        <label class="inline-flex items-center gap-1">
-          <input type="checkbox" id="agree_overseas" class="h-4 w-4">
-          <span>개인정보 해외 이전 동의 <span class="text-red-500">(필수)</span></span>
-        </label>
-        <button type="button"
-                class="px-2 py-1 text-xs border rounded hover:bg-gray-50"
-                data-consent="overseas">
-          [보기]
+                class="consent-view-btn"
+                data-consent="third">
+          보기
         </button>
       </div>
     </div>
+
+    <!-- 3행: 고유식별 / 해외 이전 -->
+    <div class="consent-row">
+      <div class="consent-col">
+        <label class="consent-label">
+          <input type="checkbox" id="agree_unique" class="consent-check">
+          <span>고유식별정보 처리 동의 <span class="consent-required">(필수)</span></span>
+        </label>
+        <button type="button"
+                class="consent-view-btn"
+                data-consent="unique">
+          보기
+        </button>
+      </div>
+
+      <div class="consent-col">
+        <label class="consent-label">
+          <input type="checkbox" id="agree_overseas" class="consent-check">
+          <span>개인정보 해외 이전 동의 <span class="consent-required">(필수)</span></span>
+        </label>
+        <button type="button"
+                class="consent-view-btn"
+                data-consent="overseas">
+          보기
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- 동의 영역 끝 -->
+
 
     <input type="hidden" id="nextUrl" value="{{ next_url or '/info' }}">
 
@@ -228,7 +397,6 @@
   const consentModalBody  = document.getElementById('consentModalBody');
   const consentModalClose = document.getElementById('consentModalClose');
 
-  // 4개 개별 동의 모두 체크됐는지
   function allConsentChecked() {
     return (
       agreeCollect?.checked &&
@@ -238,44 +406,88 @@
     );
   }
 
-  // 전체 동의 체크 상태 갱신
   function syncAgreeAll() {
     if (agreeAll) {
       agreeAll.checked = allConsentChecked();
     }
   }
 
-
-  function setStatus(text, cls) {
-    statusEl.className = 'status' + (cls ? ' ' + cls : '');
-    statusEl.textContent = text || '';
-  }
-  const onlyDigits = v => (v||'').replace(/[^0-9]/g, '');
-
-  function selectedGender(){
-    for (const r of genderRadios){ if (r.checked) return r.value; }
-    return '';
-  }
-
-  function applyInputRule(){
-    const isPASS = (loginSel.value === '3');
-    telecomRow.style.display = isPASS ? 'block' : 'none';
-    if (telecomSel) {
-      if (isPASS) telecomSel.disabled = false;
-      else { telecomSel.value = ''; telecomSel.disabled = true; }
+  function openConsentModal(kind) {
+    if (!consentModal) return;
+    const text = CONSENT_TEXTS[kind] || '';
+    const titleMap = {
+      collect:  '개인정보 수집·이용 동의',
+      third:    '개인정보 제3자 제공 및 처리위탁 동의',
+      unique:   '고유식별정보 처리 동의',
+      overseas: '개인정보 해외 이전 동의'
+    };
+    if (consentModalTitle) {
+      consentModalTitle.textContent = titleMap[kind] || '동의서 내용';
     }
-    validateStartEnabled();
+    if (consentModalBody) {
+      consentModalBody.textContent = text;
+    }
+    consentModal.classList.add('show');
   }
+
+  function closeConsentModal() {
+    if (!consentModal) return;
+    consentModal.classList.remove('show');
+  }
+
+  if (consentModalClose) {
+    consentModalClose.addEventListener('click', closeConsentModal);
+  }
+
+  if (consentModal) {
+    consentModal.addEventListener('click', (e) => {
+      if (e.target === consentModal) {
+        closeConsentModal();
+      }
+    });
+  }
+
+  // [보기] 버튼 클릭
+  document.querySelectorAll('.consent-view-btn[data-consent]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const kind = btn.getAttribute('data-consent');
+      openConsentModal(kind);
+    });
+  });
+
+  // 전체 동의 → 4개 모두 on/off
+  if (agreeAll) {
+    agreeAll.addEventListener('change', () => {
+      const checked = agreeAll.checked;
+      [agreeCollect, agreeThird, agreeUnique, agreeOverseas].forEach(el => {
+        if (el) el.checked = checked;
+      });
+      validateStartEnabled();
+    });
+  }
+
+  // 개별 동의 변경 시 전체 동의/버튼 상태 갱신
+  [agreeCollect, agreeThird, agreeUnique, agreeOverseas].forEach(el => {
+    if (!el) return;
+    el.addEventListener('change', () => {
+      syncAgreeAll();
+      validateStartEnabled();
+    });
+  });
 
   function validateStartEnabled(){
+    const opt     = loginSel?.value || '';
+    const isPASS  = (opt === '3');
+    const nameOk  = !!(nameEl?.value || '').trim();
+    const phoneOk = onlyDigits(phoneEl?.value).length >= 9;
+    const birthOk = onlyDigits(birthEl?.value).length === 8;
+    const genderOk= !!selectedGender();
+    const telOk   = !isPASS || !!(telecomSel?.value || '');
 
-  loginSel?.addEventListener('change', applyInputRule);
-  telecomSel?.addEventListener('change', validateStartEnabled);
-  nameEl?.addEventListener('input', validateStartEnabled);
-  phoneEl?.addEventListener('input', (e)=>{ e.target.value = onlyDigits(e.target.value).slice(0,11); validateStartEnabled(); });
-  birthEl?.addEventListener('input', ()=>{ validateStartEnabled(); });
-  for (const r of genderRadios){ r.addEventListener('change', validateStartEnabled); }
-  applyInputRule();
+    const consentOk = allConsentChecked();
+
+    btnStart.disabled = !(opt && nameOk && phoneOk && birthOk && genderOk && telOk && consentOk);
+  }
 
     // 전체 동의 → 개별 동의 모두 체크/해제
   if (agreeAll) {
@@ -581,20 +793,16 @@
 </script>
 
 <!-- 동의서 내용 모달 -->
-<div id="consentModal"
-     class="fixed inset-0 bg-black/40 hidden items-center justify-center z-50">
-  <div class="bg-white rounded-lg shadow-lg max-w-lg w-full mx-4">
-    <div class="flex items-center justify-between border-b px-4 py-2">
-      <h2 id="consentModalTitle" class="font-semibold text-sm"></h2>
-      <button type="button" id="consentModalClose"
-              class="text-gray-500 hover:text-black text-lg leading-none">
-        &times;
-      </button>
+<div id="consentModal" class="consent-modal">
+  <div class="consent-modal-panel">
+    <div class="consent-modal-header">
+      <h2 id="consentModalTitle" class="consent-modal-title"></h2>
+      <button type="button" id="consentModalClose" class="consent-modal-close">&times;</button>
     </div>
-    <div id="consentModalBody"
-         class="p-4 text-xs leading-relaxed whitespace-pre-wrap max-h-[60vh] overflow-y-auto"></div>
+    <div id="consentModalBody" class="consent-modal-body"></div>
   </div>
 </div>
+
 
 
 </body>
