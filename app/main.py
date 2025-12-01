@@ -2720,7 +2720,13 @@ async def dh_simple_complete(
       4) 최대 120초 폴링, 미완료면 202
     """
 
-    payload = await request.json()
+    try:
+        # JSON body가 있으면 파싱, 없으면 그냥 빈 dict
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            payload = {}
+    except Exception:
+        payload = {}
 
     # 0) 세션(or 요청)에서 콜백 값 복구
     cbid = (request.session or {}).get("nhis_callback_id") or str(payload.get("callbackId") or "")
