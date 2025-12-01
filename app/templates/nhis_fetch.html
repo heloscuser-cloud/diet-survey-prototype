@@ -654,12 +654,22 @@
     if (agreeAll) {
       agreeAll.addEventListener('change', () => {
         const checked = agreeAll.checked;
+
+        // 하위 4개 동의 체크박스를 강제로 모두 동일 상태로 맞추기
         [agreeCollect, agreeThird, agreeUnique, agreeOverseas].forEach(el => {
-          if (el) el.checked = checked;
+          if (!el) return;
+          if (el.checked !== checked) {
+            el.checked = checked;
+            // 시각적 갱신 + 다른 리스너(예: validateStartEnabled)도 같이 태우기
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          }
         });
+
+        // 혹시를 위해 한 번 더 검증
         validateStartEnabled();
       });
     }
+
 
     // 개별 동의 변경 시
     [agreeCollect, agreeThird, agreeUnique, agreeOverseas].forEach(el => {
@@ -750,27 +760,66 @@
     });
 
     // ---------- 간편인증 완료 ----------
-    btnComplete?.addEventListener('click', async () => {
-      if (!callbackId) {
-        alert('먼저 간편인증을 시작해주세요.');
+  btnComplete.addEventListener('click', async () => {
+    if (!gStartDone) {
+      alert('먼저 "간편인증 시작"을 진행해주세요.');
+      return;
+    }
+    if (isCompleting) {
+      // 이미 진행 중이면 두 번째 클릭은 무시
+      return;
+    }
+    isCompleting = true;
+
+    setStatus('인증 완료 확인 중...');
+    btnComplete.disabled = true;
+
+    try {
+      const rsp = await fetch('/api/dh/simple/complete?all=1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(callbackId ? { callbackId } : {}),
+        credentials: 'include'
+      });
+
+      const data = await rsp.json().catch(() => ({}));
+      console.log('[COMPLETE][rsp]', rsp.status, data);
+
+      // 1) 서버에서 ok == true → 성공 처리 + 다음 페이지 이동
+      if (rsp.status === 200 && data && data.ok) {
+        setStatus('인증 및 검진 데이터 수집이 완료되었습니다. 다음 단계로 이동합니다.', 'ok');
+        const fallbackNext = nextUrlEl?.value || '/info';
+        const goTo = data.next_url || fallbackNext;
+        if (goTo) {
+          window.location.href = goTo;
+        }
         return;
       }
 
-      if (isCompleting) {
-        // 이미 한 번 진행 중이면 두 번째 클릭은 무시
+      // 2) 서버에서 ok == false + msg 전달 → 알림 + 버튼 재활성화
+      if (rsp.status === 200 && data && data.ok === false) {
+        const msg = data.msg || data.message || '인증 확인 중 문제를 확인했습니다. 다시 시도해주세요.';
+        alert(msg);
+        setStatus(msg, 'err');
+        btnComplete.disabled = false;
+        isCompleting = false;
         return;
       }
-      isCompleting = true;
 
-      setStatus('인증 결과를 확인 중입니다...');
-      btnComplete.disabled = true;
+      // 3) 그 외 (500 등) → 일반 오류 처리
+      alert('인증 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+      setStatus('인증 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.', 'err');
+      btnComplete.disabled = false;
+      isCompleting = false;
+    } catch (e) {
+      console.error(e);
+      alert('인증 확인 중 네트워크 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+      setStatus('인증 확인 중 네트워크 오류가 발생했습니다.', 'err');
+      btnComplete.disabled = false;
+      isCompleting = false;
+    }
+  });
 
-      try {
-        const rsp = await fetch('/api/dh/simple/complete?all=1', {
-          method: 'POST'
-        });
-        const data = await rsp.json();
-        console.log('[DH][complete]', rsp.status, data);
 
 if (rsp.ok && data.result === 'OK') {
   setStatus('인증 및 검진 조회가 완료되었습니다. 잠시 후 다음 단계로 이동합니다.', 'ok');

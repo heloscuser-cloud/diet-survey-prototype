@@ -813,8 +813,6 @@ def nhis_page(
             "datahub_auth_base": auth_base
         }
     )
-
-
     
 @app.get("/healthz")
 def healthz():
@@ -2856,6 +2854,7 @@ async def dh_simple_complete(
     max_wait_sec = NHIS_POLL_MAX_SEC
     deadline = time.time() + max_wait_sec
     attempt = 0
+    max_attempt = 5
 
     # 시작 단계 값 복구
     SP = (request.session or {}).get("nhis_start_payload") or {}
@@ -2920,6 +2919,24 @@ async def dh_simple_complete(
 
         logging.info("[DH-COMPLETE][FETCH] attempt=%s kind=%s err=%s income_len=%s",
                      attempt, kind, err2, (len(income) if isinstance(income, list) else "NA"))
+
+        # errCode 2003(이용횟수 소진)은 더 이상 폴링해도 소용 없으므로 즉시 중단
+        if err2 == "2003":
+            msg = (
+                data2.get("ERRMSG")
+                or (rsp2 or {}).get("errMsg")
+                or "조회 가능 횟수 소진. 관리자에게 문의해주세요."
+            )
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "ok": False,
+                    "errCode": err2,
+                    "msg": msg,        # 프론트 alert에서 우선 사용
+                    "message": msg,    # 혹시 모를 호환용
+                    "data": data2,
+                },
+            )
 
         if err2 == "0000" and isinstance(income, list) and len(income) > 0:
             picked = pick_latest_general(rsp2, mode=("all" if want_all else "latest"))
