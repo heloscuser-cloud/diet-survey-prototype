@@ -104,38 +104,37 @@
     margin-left: 2px;
   }
 
-  /* 동그란 체크박스 스타일 */
-  .consent-check {
-    appearance: none;
-    -webkit-appearance: none;
-    width: 13px;          /* 18px → 13px 정도로 줄임 (약 70%) */
-    height: 13px;
-    border-radius: 999px;
-    border: 2px solid #c4c4c4;
-    background-color: #ffffff;
-    display: inline-block;
-    position: relative;
-    cursor: pointer;
-    vertical-align: middle;
-  }
+/* 동그란 체크박스 스타일 (class 유지: consent-check) */
+.consent-check {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;      /* 원래보다 약 70% 크기 */
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid #c4c4c4;
+  background-color: #fff;
+  display: inline-flex;
+  align-items: center;      /* 중앙 정렬 핵심 */
+  justify-content: center;  /* 중앙 정렬 핵심 */
+  cursor: pointer;
+  vertical-align: middle;
+}
 
-  .consent-check:checked {
-    border-color: #111111;
-    background-color: #111111;
-  }
+/* 체크된 상태 */
+.consent-check:checked {
+  background-color: #111;
+  border-color: #111;
+}
 
-  .consent-check:checked::after {
-    content: '';
-    position: absolute;
-    left: 3px;
-    top: 2px;
-    width: 4px;
-    height: 7px;
-    border: 2px solid #ffffff;
-    border-top: none;
-    border-left: none;
-    transform: rotate(45deg);
-  }
+/* 정중앙 체크 표시 */
+.consent-check:checked::before {
+  content: "✔";
+  font-size: 10px;
+  color: #fff;
+  line-height: 1;
+  transform: translateY(0.5px); /* 필요하면 0~1px 안에서 조절 가능 */
+}
+
 
 
 
@@ -381,369 +380,405 @@
 
 
 <script>
-(function(){
-  const $ = (s)=>document.querySelector(s);
+  (function () {
+    'use strict';
 
-  // 요소들
-  const loginSel   = $('#loginOption');
-  const telecomRow = $('#telecomRow');
-  const telecomSel = $('#telecom');
-  const nameEl     = $('#name');
-  const phoneEl    = $('#phone');
-  const birthEl    = $('#birth');
-  const genderRadios = document.getElementsByName('gender');
+    // ---------- 공통 DOM 참조 ----------
+    const loginSel   = document.getElementById('loginOption');
+    const telecomSel = document.getElementById('telecom');
+    const nameEl     = document.getElementById('userName');
+    const phoneEl    = document.getElementById('hpNumber');
+    const birthEl    = document.getElementById('birth');
+    const genderRadios = document.querySelectorAll('input[name="gender"]');
+    const btnStart   = document.getElementById('btnStart');
+    const btnComplete= document.getElementById('btnComplete');
+    const statusEl   = document.getElementById('statusMsg');
 
-  const btnStart     = document.getElementById('btnStart');
-  const btnComplete  = document.getElementById('btnComplete');
-  const statusEl     = document.getElementById('status');
-  const nextUrlEl    = document.getElementById('nextUrl');
+    // 동의 체크박스
+    const agreeAll      = document.getElementById('agreeAll');
+    const agreeCollect  = document.getElementById('agreeCollect');
+    const agreeThird    = document.getElementById('agreeThird');
+    const agreeUnique   = document.getElementById('agreeUnique');
+    const agreeOverseas = document.getElementById('agreeOverseas');
 
-  let gStartDone  = false;
-  let callbackId  = '';
+    // 동의서 모달
+    const consentModal      = document.getElementById('consentModal');
+    const consentModalTitle = document.getElementById('consentModalTitle');
+    const consentModalBody  = document.getElementById('consentModalBody');
+    const consentModalClose = document.getElementById('consentModalClose');
 
-  // 동의 체크박스 & 모달 요소들
-  const agreeAll      = document.getElementById('agree_all');
-  const agreeCollect  = document.getElementById('agree_collect');
-  const agreeThird    = document.getElementById('agree_third');
-  const agreeUnique   = document.getElementById('agree_unique');
-  const agreeOverseas = document.getElementById('agree_overseas');
+    let callbackId = null;
+    let gStartDone = false;
 
-  const consentModal      = document.getElementById('consentModal');
-  const consentModalTitle = document.getElementById('consentModalTitle');
-  const consentModalBody  = document.getElementById('consentModalBody');
-  const consentModalClose = document.getElementById('consentModalClose');
-
-  function allConsentChecked() {
-    return (
-      agreeCollect?.checked &&
-      agreeThird?.checked &&
-      agreeUnique?.checked &&
-      agreeOverseas?.checked
-    );
-  }
-
-  function syncAgreeAll() {
-    if (agreeAll) {
-      agreeAll.checked = allConsentChecked();
+    // ---------- 유틸 ----------
+    function onlyDigits(v) {
+      return (v || '').replace(/[^0-9]/g, '');
     }
-  }
 
-  function openConsentModal(kind) {
-    if (!consentModal) return;
-    const text = CONSENT_TEXTS[kind] || '';
-    const titleMap = {
-      collect:  '개인정보 수집·이용 동의',
-      third:    '개인정보 제3자 제공 및 처리위탁 동의',
-      unique:   '고유식별정보 처리 동의',
-      overseas: '개인정보 해외 이전 동의'
-    };
-    if (consentModalTitle) {
-      consentModalTitle.textContent = titleMap[kind] || '동의서 내용';
-    }
-    if (consentModalBody) {
-      consentModalBody.textContent = text;
-    }
-    consentModal.classList.add('show');
-  }
-
-  function closeConsentModal() {
-    if (!consentModal) return;
-    consentModal.classList.remove('show');
-  }
-
-  if (consentModalClose) {
-    consentModalClose.addEventListener('click', closeConsentModal);
-  }
-
-  if (consentModal) {
-    consentModal.addEventListener('click', (e) => {
-      if (e.target === consentModal) {
-        closeConsentModal();
+    function selectedGender() {
+      for (const r of genderRadios) {
+        if (r.checked) return r.value;
       }
-    });
-  }
+      return '';
+    }
 
+    function setStatus(msg, type) {
+      if (!statusEl) return;
+      statusEl.textContent = msg || '';
+      statusEl.classList.remove('text-red-500', 'text-green-600');
+      if (type === 'err') statusEl.classList.add('text-red-500');
+      else if (type === 'ok') statusEl.classList.add('text-green-600');
+    }
 
+    // ---------- 입력 상태에 따라 PASS 통신사/버튼 활성 제어 ----------
+    function applyInputRule() {
+      const opt = loginSel?.value || '';
+      const isPASS = (opt === '3');
 
-  // [보기] 버튼 클릭
-  document.querySelectorAll('.consent-view-btn[data-consent]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const kind = btn.getAttribute('data-consent');
-      openConsentModal(kind);
-    });
-  });
+      const telecomRow = document.getElementById('telecomRow');
+      if (telecomRow) {
+        telecomRow.style.display = isPASS ? 'block' : 'none';
+      }
 
-  // 전체 동의 → 4개 모두 on/off
-  if (agreeAll) {
-    agreeAll.addEventListener('change', () => {
-      const checked = agreeAll.checked;
-      [agreeCollect, agreeThird, agreeUnique, agreeOverseas].forEach(el => {
-        if (el) el.checked = checked;
+      if (telecomSel) {
+        if (isPASS) telecomSel.disabled = false;
+        else {
+          telecomSel.value = '';
+          telecomSel.disabled = true;
+        }
+      }
+
+      validateStartEnabled();
+    }
+
+    function allConsentChecked() {
+      return !!(
+        agreeCollect?.checked &&
+        agreeThird?.checked &&
+        agreeUnique?.checked &&
+        agreeOverseas?.checked
+      );
+    }
+
+    function syncAgreeAll() {
+      if (agreeAll) {
+        agreeAll.checked = allConsentChecked();
+      }
+    }
+
+    function validateStartEnabled() {
+      const opt      = loginSel?.value || '';
+      const isPASS   = (opt === '3');
+      const nameOk   = !!(nameEl?.value || '').trim();
+      const phoneOk  = onlyDigits(phoneEl?.value).length >= 9;
+      const birthOk  = onlyDigits(birthEl?.value).length === 8;
+      const genderOk = !!selectedGender();
+      const telOk    = !isPASS || !!(telecomSel?.value || '');
+      const consentOk= allConsentChecked();
+
+      // 모든 필수 입력 + 4개 동의가 모두 만족되어야만 활성화
+      const enabled = !!(opt && nameOk && phoneOk && birthOk && genderOk && telOk && consentOk);
+      if (btnStart) {
+        btnStart.disabled = !enabled;
+      }
+    }
+
+    // ---------- 동의서 전문 텍스트 ----------
+    const CONSENT_TEXTS = {
+      collect: `개인정보 수집·이용 동의서
+
+가온앤 영양분석 서비스 제공을 위해 아래와 같이 개인정보를 수집·이용합니다.
+
+1. 수집하는 개인정보 항목
+ - 성명
+ - 생년월일(YYYYMMDD)
+ - 성별
+ - 휴대전화번호
+ - 건강검진 조회를 위한 본인확인 인증 정보
+ - 서비스 이용 과정에서 생성되는 문진 응답 정보
+
+2. 개인정보 수집·이용 목적
+ - 본인확인 및 국민건강보험공단(NHIS) 건강검진 정보 조회
+ - 문진 기반 식습관 분석 및 영양 리포트 제공
+ - 서비스 품질 향상 및 사용자 문의 대응
+
+3. 개인정보 보유 및 이용 기간
+ - 서비스 제공 목적 달성 후 1년간 보유
+ - 관련 법령에 따라 별도 보존이 필요한 경우 해당 기간까지 보존
+
+4. 동의 거부 권리 및 불이익
+ - 귀하는 개인정보 수집·이용 동의를 거부할 수 있으나,
+   미동의 시 서비스 이용(간편인증·검진조회·문진 서비스)이 제한될 수 있습니다.`,
+
+      third: `개인정보 제3자 제공 및 처리위탁 동의서
+
+가온앤 영양분석 서비스는 서비스 제공 및 고객 지원을 위해 아래와 같이 개인정보를
+제3자에게 제공하거나, 개인정보 처리업무를 외부 전문 업체에 위탁할 수 있습니다.
+
+[1] 개인정보 제3자 제공
+
+1. 제공받는 자
+  1) 국민건강보험공단(NHIS)
+  2) 간편인증 대행기관(PASS, 각 통신사 및 공동인증 관련 기관)
+  3) (주)글로벌금융 – 고객에게 분석 리포트를 전달(전화·문자·카카오톡·이메일·대면)
+
+2. 제공하는 개인정보 항목
+ - 성명, 생년월일, 성별, 휴대전화번호
+ - 간편인증 및 건강검진 조회에 필요한 인증 정보
+ - 문진 응답 및 건강검진 분석 결과(리포트 주요 요약 정보)
+
+3. 제공 목적
+ - 건강검진 결과 조회 및 문진 기반 분석 서비스 제공
+ - 분석 리포트 전달 및 서비스 안내
+
+4. 보유 및 이용 기간
+ - 제공 목적 달성 시까지 또는 관계 법령상 보존 기간까지
+
+[2] 개인정보 처리위탁
+
+1. 수탁업체
+ - (주)헬로
+   · 역할: Render.com 기반 웹서비스 및 DB 서버 개발·관리·배포
+
+2. 위탁 업무 내용
+ - 서비스 운영을 위한 시스템 개발·배포·관리
+ - 서버 운영 및 데이터베이스 관리
+ - 서비스 장애 대응 및 성능 개선
+
+3. 위탁에 따라 제공되는 개인정보 항목
+ - 서비스 운영 과정에서 저장·관리되는 개인정보 전반
+   (단, 법령상 제한되거나 기술적으로 마스킹되는 항목은 제외)
+
+4. 보유 및 이용 기간
+ - 위탁 계약 종료 또는 서비스 종료 시까지`,
+
+      unique: `고유식별정보 처리 동의서
+
+가온앤 영양분석 서비스는 건강검진 조회를 위해 고유식별정보(생년월일)를 처리합니다.
+
+1. 처리하는 고유식별정보
+ - 생년월일(YYYYMMDD)
+ - 건강검진 본인확인 과정에서 필요한 고유 인증 식별값
+
+2. 처리 목적
+ - 국민건강보험공단(NHIS) 건강검진 정보의 정확한 본인확인을 위한 인증
+
+3. 보유 및 이용 기간
+ - 서비스 제공 목적 달성 후 즉시 삭제
+ - 법령에 따라 보존이 필요한 경우 예외적으로 보관
+
+4. 동의 거부 권리 및 불이익
+ - 고유식별정보 처리를 거부할 경우
+   건강검진 연동 기반 서비스 이용이 제한됩니다.`,
+
+      overseas: `개인정보 해외 이전 동의서
+
+가온앤 영양분석 서비스는 해외 클라우드 인프라를 기반으로 운영되며,
+서비스 제공을 위하여 아래와 같이 개인정보가 해외로 이전되어 저장·보관될 수 있습니다.
+
+1. 개인정보를 이전받는 자
+ - Render, Inc. (미국)
+   · 서비스명: Render.com
+   · 소재지: 657 Mission St., Suite 200, San Francisco, CA 94105, USA
+
+2. 이전되는 개인정보 항목
+ - 서비스 이용 로그(IP, User-Agent, 접속일시 등)
+ - 인증 및 오류 처리 과정에서 생성되는 서버 기술 로그
+ - 문진 응답 정보(문항별 선택값 포함)
+ - 건강검진 조회 결과(NHIS 원문 데이터, 표준화 데이터)
+ - 사용자 인적사항(성명, 생년월일, 성별, 휴대전화번호 등)
+ - 리포트 생성에 필요한 모든 분석 데이터
+   ※ 위 정보에는 민감정보(건강정보)가 포함될 수 있습니다.
+
+3. 이전 국가 및 저장 위치
+ - 미국(USA), Oregon Region
+
+4. 이전 방법
+ - 인터넷 네트워크를 통한 실시간 전송 방식 및 클라우드 저장
+
+5. 보유 및 이용 기간
+ - 문진 응답 및 건강검진 데이터는 서비스 제공 목적 달성 후 1개월 보유 후 파기
+ - 서비스 운영 과정에서 발생하는 시스템 로그는 1개월 보관 후 삭제
+ - 관련 법령에 따라 별도 보존이 필요한 경우 해당 기간까지 보관
+
+6. 동의 거부 권리 및 불이익
+ - 귀하는 개인정보 해외 이전에 동의하지 않을 수 있으나,
+   이 경우 서비스 이용(건강검진 조회 및 문진·리포트 제공)이 제한될 수 있습니다.`
+    };
+
+    // ---------- 동의 모달 열기/닫기 ----------
+    function openConsentModal(kind) {
+      if (!consentModal) return;
+      const text = CONSENT_TEXTS[kind] || '';
+      const titleMap = {
+        collect:  '개인정보 수집·이용 동의',
+        third:    '개인정보 제3자 제공 및 처리위탁 동의',
+        unique:   '고유식별정보 처리 동의',
+        overseas: '개인정보 해외 이전 동의'
+      };
+      if (consentModalTitle) {
+        consentModalTitle.textContent = titleMap[kind] || '동의서 내용';
+      }
+      if (consentModalBody) {
+        consentModalBody.textContent = text;
+      }
+      consentModal.classList.add('show');
+    }
+
+    function closeConsentModal() {
+      if (!consentModal) return;
+      consentModal.classList.remove('show');
+    }
+
+    if (consentModalClose) {
+      consentModalClose.addEventListener('click', closeConsentModal);
+    }
+    if (consentModal) {
+      consentModal.addEventListener('click', (e) => {
+        if (e.target === consentModal) closeConsentModal();
       });
+    }
+
+    // [보기] 버튼
+    document.querySelectorAll('.consent-view-btn[data-consent]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const kind = btn.getAttribute('data-consent');
+        openConsentModal(kind);
+      });
+    });
+
+    // 전체 동의
+    if (agreeAll) {
+      agreeAll.addEventListener('change', () => {
+        const checked = agreeAll.checked;
+        [agreeCollect, agreeThird, agreeUnique, agreeOverseas].forEach(el => {
+          if (el) el.checked = checked;
+        });
+        validateStartEnabled();
+      });
+    }
+
+    // 개별 동의 변경 시
+    [agreeCollect, agreeThird, agreeUnique, agreeOverseas].forEach(el => {
+      if (!el) return;
+      el.addEventListener('change', () => {
+        syncAgreeAll();
+        validateStartEnabled();
+      });
+    });
+
+    // ---------- 입력 이벤트 바인딩 ----------
+    loginSel?.addEventListener('change', applyInputRule);
+    telecomSel?.addEventListener('change', validateStartEnabled);
+    nameEl?.addEventListener('input', validateStartEnabled);
+    phoneEl?.addEventListener('input', (e) => {
+      e.target.value = onlyDigits(e.target.value).slice(0, 11);
       validateStartEnabled();
     });
-  }
+    birthEl?.addEventListener('input', validateStartEnabled);
+    genderRadios.forEach(r => r.addEventListener('change', validateStartEnabled));
 
-  // 개별 동의 변경 시 전체 동의/버튼 상태 갱신
-  [agreeCollect, agreeThird, agreeUnique, agreeOverseas].forEach(el => {
-    if (!el) return;
-    el.addEventListener('change', () => {
-      syncAgreeAll();
-      validateStartEnabled();
-    });
-  });
+    // 초기 상태
+    applyInputRule();
+    syncAgreeAll();
+    validateStartEnabled();
 
-  function validateStartEnabled(){
-    const opt     = loginSel?.value || '';
-    const isPASS  = (opt === '3');
-    const nameOk  = !!(nameEl?.value || '').trim();
-    const phoneOk = onlyDigits(phoneEl?.value).length >= 9;
-    const birthOk = onlyDigits(birthEl?.value).length === 8;
-    const genderOk= !!selectedGender();
-    const telOk   = !isPASS || !!(telecomSel?.value || '');
+    // ---------- 간편인증 시작 ----------
+    btnStart?.addEventListener('click', async () => {
+      if (gStartDone || btnStart.disabled) return;
 
-    const consentOk = allConsentChecked();
+      const loginOption = (loginSel.value || '').trim();
+      const telecomRaw  = (telecomSel?.value || '').trim();
+      const telecom     = (loginOption === '3') ? telecomRaw : '';
+      const name        = (nameEl.value || '').trim();
+      const phone       = onlyDigits(phoneEl.value).slice(0, 11);
+      const birth       = onlyDigits(birthEl.value).slice(0, 8);
+      const gender      = selectedGender();
 
-    btnStart.disabled = !(opt && nameOk && phoneOk && birthOk && genderOk && telOk && consentOk);
-  }
-
- 
-  // 동의서 전문 텍스트
-  const CONSENT_TEXTS = {
-    collect: `개인정보 수집·이용 동의서
-
-  본인은 가온앤 영양분석 서비스 제공을 위해 아래와 같이 개인정보를 수집·이용하는 것에 동의합니다.
-
-  1. 수집하는 개인정보 항목
-  - 성명
-  - 생년월일(YYYYMMDD)
-  - 성별
-  - 휴대전화번호
-  - 건강검진 조회를 위한 본인확인 인증 정보
-  - 서비스 이용 과정에서 생성되는 문진 응답 정보
-
-  2. 개인정보 수집·이용 목적
-  - 본인확인 및 건강보험공단(NHIS) 건강검진 정보 조회
-  - 문진 기반 식습관 분석 및 영양 리포트 제공
-  - 서비스 품질 향상 및 사용자 문의 대응
-
-  3. 개인정보 보유 및 이용 기간
-  - 서비스 제공 목적 달성 후 1년간 보유
-  - 법령에 따라 별도 보존이 필요한 경우 해당 기간까지 보존
-
-  4. 동의 거부 권리 및 불이익
-  - 귀하는 개인정보 수집·이용 동의를 거부할 수 있으나,
-    미동의 시 서비스 이용(간편인증·검진조회·문진 서비스)이 제한됩니다.`,
-    third: `개인정보 제3자 제공 및 처리위탁 동의서
-
-  가온앤 영양분석 서비스는 서비스 제공 및 고객 지원을 위해 아래와 같이 개인정보를 제3자에게 제공하거나,
-  개인정보 처리업무를 외부 전문 업체에 위탁할 수 있습니다. 본인은 아래 내용을 충분히 확인하였으며,
-  이에 동의합니다.
-
-  [1] 개인정보 제3자 제공
-
-  1. 제공받는 자
-    1) 국민건강보험공단(NHIS)
-    2) 간편인증 대행기관(PASS, 각 통신사 및 공동인증 관련 기관)
-    3) (주)글로벌금융 – 고객에게 분석 리포트를 전달(전화·문자·카카오톡·이메일·대면)
-
-  2. 제공하는 개인정보 항목
-  - 성명, 생년월일, 성별
-  - 휴대전화번호
-  - 건강검진 정보 조회를 위한 인증 정보
-  - 분석 완료된 리포트 정보(주)글로벌금융에 한함)
-
-  3. 제3자 이용 목적
-  - NHIS 및 인증대행기관: 본인확인 및 건강검진 조회
-  - (주)글로벌금융: 고객에게 분석 리포트 전달
-
-  4. 보유 및 이용 기간
-  - 제공 목적 달성 시까지 보유 후 즉시 파기
-
-  5. 동의 거부 권리 및 불이익
-  - 귀하는 제3자 제공에 동의하지 않을 수 있으나,
-    동의하지 않을 경우 간편인증 기반 건강검진 조회 서비스 및
-    담당자를 통한 리포트 전달 서비스 이용이 제한될 수 있습니다.
-
-  [2] 개인정보 처리업무 위탁
-
-  1. 수탁업체
-  - (주)헬로
-    (역할: Render.com 기반 웹서비스 및 DB 서버의 개발·운영·유지보수·배포)
-
-  2. 위탁하는 업무의 내용
-  - 서비스 운영을 위한 시스템 개발, 배포, 관리
-  - 서버 운영 및 데이터베이스 관리
-  - 서비스 장애 대응 및 성능 개선
-
-  3. 위탁에 따라 제공되는 개인정보 항목
-  - 서비스 운영 과정에서 저장·관리되는 개인정보 전반
-    (단, 법령상 제한되거나 기술적으로 마스킹되는 항목은 제외)
-
-  4. 보유 및 이용 기간
-  - 위탁 계약 종료 또는 서비스 종료 시까지`,
-    unique: `고유식별정보 처리 동의서
-
-  가온앤 영양분석 서비스는 건강검진 조회를 위해 고유식별정보(생년월일)를 처리합니다.
-
-  1. 처리하는 고유식별정보
-  - 생년월일(YYYYMMDD)
-  - 건강검진 본인확인 과정에서 필요한 고유 인증 식별값
-
-  2. 처리 목적
-  - 국민건강보험공단(NHIS) 건강검진 정보의 정확한 본인확인을 위한 인증
-
-  3. 보유 및 이용 기간
-  - 서비스 제공 목적 달성 후 즉시 삭제
-  - 법령에 따라 보존이 필요한 경우 예외적으로 보관
-
-  4. 동의 거부 권리 및 불이익
-  - 고유식별정보 처리를 거부할 경우
-    건강검진 연동 기반 서비스 이용이 제한됩니다.`,
-    overseas: `개인정보 해외 이전 동의서
-
-  가온앤 영양분석 서비스는 해외 클라우드 인프라를 기반으로 운영되며,
-  서비스 제공을 위하여 아래와 같이 개인정보가 해외로 이전되어 저장·보관될 수 있습니다.
-  본인은 다음의 내용을 충분히 이해하였으며 이에 동의합니다.
-
-  1. 개인정보를 이전받는 자
-  - Render, Inc. (미국)
-    · 서비스명: Render.com
-    · 소재지: 657 Mission St., Suite 200, San Francisco, CA 94105, USA
-
-  2. 이전되는 개인정보 항목
-  - 서비스 이용 로그(IP, User-Agent, 접속일시 등)
-  - 인증 및 오류 처리 과정에서 생성되는 서버 기술 로그
-  - 문진 응답 정보(문항별 선택값 포함)
-  - 건강검진 조회 결과(NHIS 원문 데이터, 표준화 데이터)
-  - 사용자 인적사항(성명, 생년월일, 성별, 휴대전화번호 등)
-  - 리포트 생성에 필요한 모든 분석 데이터
-    ※ 위 정보에는 민감정보(건강정보)가 포함될 수 있습니다.
-
-  3. 이전 국가 및 저장 위치
-  - 미국(USA), Oregon Region
-
-  4. 이전 방법
-  - 인터넷 네트워크를 통한 실시간 전송 방식 및 클라우드 저장
-
-  5. 보유 및 이용 기간
-  - 문진 응답 및 건강검진 데이터는 서비스 제공 목적 달성 후 1개월 보유 후 파기
-  - 서비스 운영 과정에서 발생하는 시스템 로그는 1개월 보관 후 삭제
-  - 관련 법령에 따라 별도 보존이 필요한 경우 해당 기간까지 보관
-
-  6. 동의 거부 권리 및 불이익
-  - 귀하는 개인정보 해외 이전에 동의하지 않을 수 있으나,
-    이 경우 서비스 이용(건강검진 조회 및 문진·리포트 제공)이 제한될 수 있습니다.`
-  };
-
-
-  // 간편인증 시작
-  btnStart.addEventListener('click', async () => {
-    if (gStartDone) return;
-
-    const loginOption = loginSel.value.trim();
-    const telecomRaw  = (telecomSel?.value || '').trim();
-    const telecom     = (loginOption === '3') ? telecomRaw : '';
-    const name        = nameEl.value.trim();
-    const phone       = onlyDigits(phoneEl.value).slice(0,11);
-    const birth       = onlyDigits(birthEl.value).slice(0,8);
-    const gender      = selectedGender();
-
-    if (!gender){ alert('성별을 입력해주세요.'); return; }
-
-    setStatus('간편인증 요청 전송 중...');
-    btnStart.disabled = true;
-
-    try {
-      const rsp = await fetch('/api/dh/simple/start', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ loginOption, telecom, userName: name, hpNumber: phone, birth, gender })
-      });
-      const data = await rsp.json();
-      console.log('[DH][start]', rsp.status, data);
-
-      // ✅ 정상: callbackId 받은 경우
-      if (rsp.ok && data.errCode === "0001" && data.data?.callbackId) {
-        callbackId = data.data.callbackId;
-        gStartDone = true;
-        setStatus('휴대폰으로 간편인증 요청을 전송하였습니다.\n휴대폰에서 인증 완료 후 "인증완료"를 누르세요.', 'ok');
-        btnComplete.disabled = false;
+      if (!gender) {
+        alert('성별을 입력해주세요.');
         return;
       }
 
-      // 여기부터는 실패 케이스
-      btnStart.disabled = false;
-      gStartDone = false;
+      setStatus('간편인증 요청 전송 중...');
+      btnStart.disabled = true;
 
-      // ✅ 백엔드에서 재시도 3회 후 타임아웃일 때
-      if (data && data.errCode === "NETWORK_TIMEOUT") {
-        const msg = data.message || "현재 국가건강검진 조회 서비스 연결이 불안정하여 연결에 실패하였습니다.\n잠시 후 다시 시도해주세요.";
-        alert(msg);
-        setStatus(msg, 'err');
-      } else {
-        // 그 외 일반 실패
-        const msg = '간편인증 시작 실패: ' + (data.message || data.errCode || '오류');
-        alert(msg);
-        setStatus('간편인증 시작 실패', 'err');
+      try {
+        const rsp = await fetch('/api/dh/simple/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            loginOption,
+            telecom,
+            userName: name,
+            hpNumber: phone,
+            birth,
+            gender
+          })
+        });
+        const data = await rsp.json();
+        console.log('[DH][start]', rsp.status, data);
+
+        if (rsp.ok && data.errCode === '0001' && data.data?.callbackId) {
+          callbackId = data.data.callbackId;
+          gStartDone = true;
+          setStatus(
+            '휴대폰으로 간편인증 요청을 전송하였습니다.\n휴대폰에서 인증 완료 후 "인증완료"를 누르세요.',
+            'ok'
+          );
+          btnComplete.disabled = false;
+          return;
+        }
+
+        // 실패
+        setStatus(
+          data.message || data.errMsg || '현재 국가건강검진 조회 서비스 연결에 실패하였습니다. 잠시 후 다시 시도해주세요.',
+          'err'
+        );
+        btnStart.disabled = false;
+      } catch (e) {
+        console.error(e);
+        setStatus(
+          '현재 국가건강검진 조회 서비스 연결에 실패하였습니다. 잠시 후 다시 시도해주세요.',
+          'err'
+        );
+        btnStart.disabled = false;
       }
-    } catch (e) {
-      console.error(e);
-      btnStart.disabled = false;
-      gStartDone = false;
-      // 진짜 네트워크/JS 예외 발생 시
-      const msg = "국가건강검진 조회 서비스 연결에 실패하였습니다. 잠시 후 다시 시도해주세요.";
-      alert(msg);
-      setStatus(msg, 'err');
-    }
+    });
 
-  });
-
-  // 인증완료(수동)
-  btnComplete.addEventListener('click', async () => {
-    if (!gStartDone) { alert('먼저 "간편인증 시작"을 진행해주세요.'); return; }
-    setStatus('인증 완료 확인 중...');
-    btnComplete.disabled = true;
-
-    async function tryCompleteOnce() {
-      const rsp = await fetch('/api/dh/simple/complete?all=1', {
-        method:'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(callbackId ? { callbackId } : {}),
-        credentials: 'include'
-      });
-      const data = await rsp.json().catch(()=> ({}));
-      console.log('[COMPLETE][rsp]', rsp.status, data);
-
-      if (rsp.status === 200 && data && data.ok) {
-        setStatus('인증 및 데이터 수집 완료! 다음 단계로 이동합니다.', 'ok');
-        window.location.href = (nextUrlEl.value || '/info');
-        return true;
+    // ---------- 간편인증 완료 ----------
+    btnComplete?.addEventListener('click', async () => {
+      if (!callbackId) {
+        alert('먼저 간편인증을 시작해주세요.');
+        return;
       }
-      if (rsp.status === 202) {
-        setStatus('인증완료 확인 중... 잠시만 기다려주세요.');
-        return false;
+      setStatus('인증 결과를 확인 중입니다...');
+      btnComplete.disabled = true;
+
+      try {
+        const rsp = await fetch('/api/dh/simple/complete?all=1', {
+          method: 'POST'
+        });
+        const data = await rsp.json();
+        console.log('[DH][complete]', rsp.status, data);
+
+        if (rsp.ok && data.result === 'OK') {
+          setStatus('인증 및 검진 조회가 완료되었습니다. 잠시 후 다음 단계로 이동합니다.', 'ok');
+          if (data.next_url) {
+            window.location.href = data.next_url;
+          }
+        } else {
+          setStatus(data.message || '인증 결과 확인에 실패했습니다. 다시 시도해주세요.', 'err');
+          btnComplete.disabled = false;
+        }
+      } catch (e) {
+        console.error(e);
+        setStatus('인증 결과 확인 중 오류가 발생했습니다. 다시 시도해주세요.', 'err');
+        btnComplete.disabled = false;
       }
-      alert(data && data.msg ? data.msg : '인증 확인 중 오류가 발생했습니다.');
-      setStatus('오류가 발생했습니다. 다시 시도해 주세요.', 'err');
-      return null;
-    }
-
-    const deadline = Date.now() + 60000;
-    while (Date.now() < deadline) {
-      const r = await tryCompleteOnce();
-      if (r === true) return;
-      if (r === null) break;
-      await new Promise(res => setTimeout(res, 2000));
-    }
-
-    alert('아직 인증이 완료되지 않았습니다. 휴대폰에서 인증을 완료한 뒤 다시 "인증완료"를 눌러주세요.');
-    setStatus('인증 대기 상태입니다. 인증 완료 후 다시 "인증완료"를 눌러주세요.', 'warn');
-    btnComplete.disabled = false;
-  });
-
-  validateStartEnabled();
-})();
+    });
+  })();
 </script>
+
 </body>
 </html>

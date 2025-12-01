@@ -786,13 +786,34 @@ def info_form(request: Request, auth: str | None = Cookie(default=None, alias=AU
 # NHIS 건강검진 조회 페이지 (info 전 단계)
 # -----------------------------------------------
 
-@app.get("/nhis")
-def nhis_page(request: Request):
+@app.get("/nhis", response_class=HTMLResponse)
+def nhis_page(
+    request: Request,
+    auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+    session: Session = Depends(get_session),
+):
+    # 1) 로그인 검사
+    user_id = verify_user(auth) if auth else -1
+    if user_id < 0:
+        # 유효한 로그인 코드 없이 들어오면 /login 으로 보냄
+        return RedirectResponse(url="/login", status_code=302)
+
+    # (선택) User가 실제로 존재하는지 한 번 더 확인하고 싶으면:
+    user = session.get(User, user_id)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    # 2) 정상일 때만 페이지 렌더
     auth_base = os.getenv("DATAHUB_API_BASE", "https://datahub-dev.scraping.co.kr").rstrip("/")
     return templates.TemplateResponse(
         "nhis_fetch.html",
-        {"request": request, "next_url": "/survey", "datahub_auth_base": auth_base}
+        {
+            "request": request,
+            "next_url": "/survey",
+            "datahub_auth_base": auth_base
+        }
     )
+
 
     
 @app.get("/healthz")
