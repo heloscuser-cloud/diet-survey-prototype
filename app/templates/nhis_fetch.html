@@ -394,6 +394,7 @@
     const btnStart   = document.getElementById('btnStart');
     const btnComplete= document.getElementById('btnComplete');
     const statusEl   = document.getElementById('status');    // ← 상태 영역 id
+    const nextUrlEl  = document.getElementById('nextUrl');
 
     // 동의 체크박스 (HTML id에 맞춰서)
     const agreeAll      = document.getElementById('agree_all');
@@ -409,6 +410,7 @@
     const consentModalClose = document.getElementById('consentModalClose');
 
     let callbackId = null;
+    let isCompleting = false;   // 인증완료 중복 호출 방지 플래그
     let gStartDone = false;
 
     // ---------- 유틸 ----------
@@ -753,6 +755,13 @@
         alert('먼저 간편인증을 시작해주세요.');
         return;
       }
+
+      if (isCompleting) {
+        // 이미 한 번 진행 중이면 두 번째 클릭은 무시
+        return;
+      }
+      isCompleting = true;
+
       setStatus('인증 결과를 확인 중입니다...');
       btnComplete.disabled = true;
 
@@ -763,19 +772,25 @@
         const data = await rsp.json();
         console.log('[DH][complete]', rsp.status, data);
 
-        if (rsp.ok && data.result === 'OK') {
-          setStatus('인증 및 검진 조회가 완료되었습니다. 잠시 후 다음 단계로 이동합니다.', 'ok');
-          if (data.next_url) {
-            window.location.href = data.next_url;
-          }
-        } else {
-          setStatus(data.message || '인증 결과 확인에 실패했습니다. 다시 시도해주세요.', 'err');
+if (rsp.ok && data.result === 'OK') {
+  setStatus('인증 및 검진 조회가 완료되었습니다. 잠시 후 다음 단계로 이동합니다.', 'ok');
+
+  // 서버가 next_url을 안 보내면 템플릿의 기본 nextUrl을 사용
+  const fallbackNext = nextUrlEl?.value || '/info';
+  const goTo = data.next_url || fallbackNext;
+
+  if (goTo) {
+    window.location.href = goTo;
+  }
+}  else {
+          setStatus(data.message || '인증 결과 확인에 실패했습니다. 인증을 다시 시도해주세요.', 'err');
           btnComplete.disabled = false;
         }
       } catch (e) {
         console.error(e);
-        setStatus('인증 결과 확인 중 오류가 발생했습니다. 다시 시도해주세요.', 'err');
+        setStatus('인증 결과 확인 중 오류가 발생했습니다. 인증을 다시 시도해주세요.', 'err');
         btnComplete.disabled = false;
+        isCompleting = false; 
       }
     });
   })();
