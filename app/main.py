@@ -1391,12 +1391,12 @@ def login_verify_phone(
 
         rid = session.exec(
             sa_text("""
-                INSERT INTO respondent (status, partner_id, updated_at)
-                VALUES ('started', :pid, (now() AT TIME ZONE 'Asia/Seoul'))
+                INSERT INTO respondent (user_id, status, created_at, partner_id)
+                VALUES (:uid, 'started', now(), :pid)
                 RETURNING id
-            """).bindparams(pid=admin_id)
+            """).bindparams(uid=user.id, pid=admin_id)
         ).first()[0]
-        
+                
         #임시로그
         logging.info("[RESP][CREATE] rid=%s partner_id=%s", rid, admin_id)
         request.session["partner_id"] = admin_id
@@ -2622,7 +2622,6 @@ async def dh_simple_start(
     #      여기까지 들어왔다는 것 = 필수 4개 모두 동의한 상태로 간주
     # ─────────────────────────────────────────────
     try:
-        from sqlmodel import select  # 파일 상단에 이미 있다면 이 줄은 생략 가능
 
         resp_obj = None
         rid = -1
