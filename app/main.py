@@ -208,7 +208,7 @@ else:
     DEFAULT_FONT_BOLD = "Helvetica-Bold"
 
 AUTH_COOKIE_NAME = "auth"
-AUTH_MAX_AGE = 3600 * 1  # 1 hours
+AUTH_MAX_AGE = 60 * 30  # 0.5 hours
 
 def sign_user(user_id: int) -> str:
     return signer.sign(f"user:{user_id}").decode("utf-8")

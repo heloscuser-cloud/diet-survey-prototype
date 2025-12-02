@@ -463,35 +463,11 @@
       );
     }
 
-    // 전체 동의
-    if (agreeAll) {
-      agreeAll.addEventListener('change', () => {
-        const checked = agreeAll.checked;
-
-        // 하위 4개 동의 체크박스를 강제로 모두 동일 상태로 맞추기
-        [agreeCollect, agreeThird, agreeUnique, agreeOverseas].forEach(el => {
-          if (!el) return;
-          if (el.checked !== checked) {
-            el.checked = checked;
-            // 시각적 갱신 + 다른 리스너(예: validateStartEnabled)도 같이 태우기
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-          }
-        });
-
-        // 혹시를 위해 한 번 더 검증
-        validateStartEnabled();
-      });
+    // 개별 동의 상태를 기준으로 전체동의 체크 여부를 맞춰주는 함수
+    function syncAgreeAll() {
+      if (!agreeAll) return;
+      agreeAll.checked = allConsentChecked();
     }
-
-
-    // 개별 동의 변경 시
-    [agreeCollect, agreeThird, agreeUnique, agreeOverseas].forEach(el => {
-      if (!el) return;
-      el.addEventListener('change', () => {
-        syncAgreeAll();
-        validateStartEnabled();
-      });
-    });
 
     function validateStartEnabled() {
       const opt      = loginSel?.value || '';
@@ -675,6 +651,7 @@
     });
 
 
+
     // ---------- 입력 이벤트 바인딩 ----------
     loginSel?.addEventListener('change', applyInputRule);
     telecomSel?.addEventListener('change', validateStartEnabled);
@@ -815,28 +792,7 @@
     }
   });
 
-
-if (rsp.ok && data.result === 'OK') {
-  setStatus('인증 및 검진 조회가 완료되었습니다. 잠시 후 다음 단계로 이동합니다.', 'ok');
-
-  // 서버가 next_url을 안 보내면 템플릿의 기본 nextUrl을 사용
-  const fallbackNext = nextUrlEl?.value || '/info';
-  const goTo = data.next_url || fallbackNext;
-
-  if (goTo) {
-    window.location.href = goTo;
-  }
-}  else {
-          setStatus(data.message || '인증 결과 확인에 실패했습니다. 인증을 다시 시도해주세요.', 'err');
-          btnComplete.disabled = false;
-        }
-      } catch (e) {
-        console.error(e);
-        setStatus('인증 결과 확인 중 오류가 발생했습니다. 인증을 다시 시도해주세요.', 'err');
-        btnComplete.disabled = false;
-        isCompleting = false; 
-      }
-    });
+  
   })();
 </script>
 
