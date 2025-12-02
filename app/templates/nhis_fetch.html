@@ -463,11 +463,35 @@
       );
     }
 
-    function syncAgreeAll() {
-      if (agreeAll) {
-        agreeAll.checked = allConsentChecked();
-      }
+    // 전체 동의
+    if (agreeAll) {
+      agreeAll.addEventListener('change', () => {
+        const checked = agreeAll.checked;
+
+        // 하위 4개 동의 체크박스를 강제로 모두 동일 상태로 맞추기
+        [agreeCollect, agreeThird, agreeUnique, agreeOverseas].forEach(el => {
+          if (!el) return;
+          if (el.checked !== checked) {
+            el.checked = checked;
+            // 시각적 갱신 + 다른 리스너(예: validateStartEnabled)도 같이 태우기
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        });
+
+        // 혹시를 위해 한 번 더 검증
+        validateStartEnabled();
+      });
     }
+
+
+    // 개별 동의 변경 시
+    [agreeCollect, agreeThird, agreeUnique, agreeOverseas].forEach(el => {
+      if (!el) return;
+      el.addEventListener('change', () => {
+        syncAgreeAll();
+        validateStartEnabled();
+      });
+    });
 
     function validateStartEnabled() {
       const opt      = loginSel?.value || '';
@@ -650,35 +674,6 @@
       });
     });
 
-    // 전체 동의
-    if (agreeAll) {
-      agreeAll.addEventListener('change', () => {
-        const checked = agreeAll.checked;
-
-        // 하위 4개 동의 체크박스를 강제로 모두 동일 상태로 맞추기
-        [agreeCollect, agreeThird, agreeUnique, agreeOverseas].forEach(el => {
-          if (!el) return;
-          if (el.checked !== checked) {
-            el.checked = checked;
-            // 시각적 갱신 + 다른 리스너(예: validateStartEnabled)도 같이 태우기
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-          }
-        });
-
-        // 혹시를 위해 한 번 더 검증
-        validateStartEnabled();
-      });
-    }
-
-
-    // 개별 동의 변경 시
-    [agreeCollect, agreeThird, agreeUnique, agreeOverseas].forEach(el => {
-      if (!el) return;
-      el.addEventListener('change', () => {
-        syncAgreeAll();
-        validateStartEnabled();
-      });
-    });
 
     // ---------- 입력 이벤트 바인딩 ----------
     loginSel?.addEventListener('change', applyInputRule);
