@@ -2622,38 +2622,63 @@ async def dh_simple_start(
     #      여기까지 들어왔다는 것 = 필수 4개 모두 동의한 상태로 간주
     # ─────────────────────────────────────────────
     try:
-        # rtoken은 쿠키나 세션에 이미 넣어둔 값 재사용
-        rtoken = request.cookies.get("rtoken") or request.session.get("rtoken")
-        rid = verify_token(rtoken) if rtoken else -1
+        from sqlmodel import select  # 파일 상단에 이미 있다면 이 줄은 생략 가능
 
-        if rid > 0:
-            resp_obj = session.get(Respondent, rid)
+        resp_obj = None
+        rid = -1
+
+        # 1) 우선 AUTH 쿠키 → 현재 user_id → 가장 최근 Respondent 탐색
+        auth_cookie = request.cookies.get(AUTH_COOKIE_NAME)
+        user_id = verify_user(auth_cookie) if auth_cookie else -1
+
+        if user_id > 0:
+            resp_obj = session.exec(
+                select(Respondent)
+                .where(Respondent.user_id == user_id)
+                .order_by(Respondent.created_at.desc())
+            ).first()
             if resp_obj:
-                prev_all = getattr(resp_obj, "agreement_all", False)
-                prev_at  = getattr(resp_obj, "agreement_at", None)
+                rid = resp_obj.id
 
-                # 이미 true로 박혀 있으면 그대로 두고,
-                # 아직 false/None 이면 이번 시점에 동의로 기록
-                if not prev_all:
-                    resp_obj.agreement_all = True
-                if prev_at is None:
-                    resp_obj.agreement_at = now_kst()
+        # 2) 그래도 못 찾았으면 rtoken으로 한 번 더 시도
+        if (not resp_obj) or rid <= 0:
+            rtoken = request.cookies.get("rtoken") or request.session.get("rtoken")
+            rid2 = verify_token(rtoken) if rtoken else -1
+            if rid2 > 0:
+                rid = rid2
+                resp_obj = session.get(Respondent, rid)
 
-                resp_obj.updated_at = now_kst()
+        if resp_obj and rid > 0:
+            prev_all = getattr(resp_obj, "agreement_all", False)
+            prev_at  = getattr(resp_obj, "agreement_at", None)
 
-                session.add(resp_obj)
-                session.commit()
+            # 이미 true로 박혀 있으면 그대로 두고,
+            # 아직 false/None 이면 이번 시점에 동의로 기록
+            if not prev_all:
+                resp_obj.agreement_all = True
+            if prev_at is None:
+                resp_obj.agreement_at = now_kst()
 
-                logging.info(
-                    "[CONSENT][SAVE] rid=%s agreement_all=%s agreement_at=%s",
-                    resp_obj.id,
-                    resp_obj.agreement_all,
-                    resp_obj.agreement_at,
-                )
+            resp_obj.updated_at = now_kst()
+
+            session.add(resp_obj)
+            session.commit()
+
+            logging.info(
+                "[CONSENT][SAVE] rid=%s agreement_all=%s agreement_at=%s",
+                resp_obj.id,
+                resp_obj.agreement_all,
+                resp_obj.agreement_at,
+            )
         else:
-            logging.warning("[CONSENT][WARN] invalid rid from rtoken (rid=%s)", rid)
+            logging.warning(
+                "[CONSENT][WARN] could not resolve respondent (user_id=%s rid=%s)",
+                user_id,
+                rid,
+            )
     except Exception as e:
         logging.warning("[CONSENT][WARN] agreement save failed: %r", e)
+
 
     
 
