@@ -279,6 +279,9 @@ class Respondent(SQLModel, table=True):
     campaign_id: str = Field(default="default")
     status: str = Field(default="draft")
     created_at: datetime = Field(default_factory=now_kst)
+    updated_at: datetime = Field(
+        default_factory=now_kst,
+    )
 
     # 인적정보 스냅샷
     applicant_name: str | None = None
@@ -301,7 +304,6 @@ class Respondent(SQLModel, table=True):
     client_phone: str | None = None
     partner_id: int | None = None
     is_mapped: bool = Field(default=False)
-    updated_at: datetime | None = None
     
     #동의서 관련 필드
     agreement_all: bool = Field(default=False)
