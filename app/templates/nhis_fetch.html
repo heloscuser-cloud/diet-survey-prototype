@@ -719,6 +719,13 @@
       setStatus('간편인증 요청 전송 중...');
       btnStart.disabled = true;
 
+      // 동의 체크 상태 수집
+      const consentCollect  = !!(agreeCollect && agreeCollect.checked);
+      const consentThird    = !!(agreeThird && agreeThird.checked);
+      const consentUnique   = !!(agreeUnique && agreeUnique.checked);
+      const consentOverseas = !!(agreeOverseas && agreeOverseas.checked);
+      const consentAll      = allConsentChecked();
+
       try {
         const rsp = await fetch('/api/dh/simple/start', {
           method: 'POST',
@@ -729,8 +736,15 @@
             userName: name,
             hpNumber: phone,
             birth,
-            gender
+            gender,
+            // 동의 정보도 함께 전송
+            agreementAll: consentAll,
+            agreementCollect: consentCollect,
+            agreementThird: consentThird,
+            agreementUnique: consentUnique,
+            agreementOverseas: consentOverseas
           })
+          credentials: 'include'
         });
         const data = await rsp.json();
         console.log('[DH][start]', rsp.status, data);

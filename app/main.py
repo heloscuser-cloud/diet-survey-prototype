@@ -2136,18 +2136,29 @@ def survey_finish(
         sync_respondent_contact_from_nhis(request, session, resp)
 
 
-    # 로그인 시점에 세션에 넣어둔 partner_id로 보정
+    # ── partner_id 누락 시, 로그인 시 세션에 저장해둔 admin_phone으로 복원 ──
     if resp and not resp.partner_id:
-        pid_from_session = request.session.get("partner_id")
-        if pid_from_session:
-            resp.partner_id = pid_from_session
-            session.add(resp)
-            session.commit()
-            logging.info(
-                "[RESP][FIX-PID] resp_id=%s partner_id=%s (from session)",
-                resp.id,
-                resp.partner_id,
-            )
+        try:
+            admin_phone = (request.session or {}).get("admin_phone")
+            if admin_phone:
+                phone_digits = re.sub(r"[^0-9]", "", str(admin_phone))
+                row = session.exec(
+                    sa_text("""
+                        SELECT id
+                          FROM user_admin
+                         WHERE phone = :p
+                           AND is_active = TRUE
+                         LIMIT 1
+                    """).bindparams(p=phone_digits)
+                ).first()
+                if row:
+                    resp.partner_id = row[0]
+                    resp.updated_at = now_kst()
+                    session.add(resp)
+                    session.commit()
+        except Exception as e:
+            logging.warning("[RESPONDENT][PARTNER-FILL][ERR] %r", e)
+
 
     def calc_age(bd, ref_date):
         if not bd:
@@ -2591,6 +2602,36 @@ async def dh_simple_start(
     gender = str(payload.get("gender","")).strip() 
     request.session["nhis_gender"] = gender if gender in ("남","여") else ""
     
+    # ── 동의 여부 파싱 ──────────────────────────────────────────────
+    agreement_all      = bool(payload.get("agreementAll"))
+    agreement_collect  = bool(payload.get("agreementCollect"))
+    agreement_third    = bool(payload.get("agreementThird"))
+    agreement_unique   = bool(payload.get("agreementUnique"))
+    agreement_overseas = bool(payload.get("agreementOverseas"))
+
+    # 세션에도 간단히 기록(나중에 필요하면 참고용)
+    request.session["agreement_all"] = agreement_all
+
+    # rtoken → respondent_id → Respondent에 동의 정보 반영
+    try:
+        rtoken = request.cookies.get("rtoken") or (request.session.get("rtoken") if hasattr(request, "session") else None)
+        respondent_id = verify_token(rtoken) if rtoken else -1
+    except Exception:
+        respondent_id = -1
+
+    if respondent_id > 0 and agreement_all:
+        try:
+            resp_obj = session.get(Respondent, respondent_id)
+            if resp_obj:
+                resp_obj.agreement_all = True
+                resp_obj.agreement_at = now_kst()
+                resp_obj.updated_at = now_kst()
+                session.add(resp_obj)
+                session.commit()
+        except Exception as e:
+            logging.warning("[AGREEMENT][SAVE][ERR] %r", e)
+
+        
     #인적정보 세션 보관
     request.session["nhis_start_payload"] = dh_body
     
