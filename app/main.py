@@ -1308,7 +1308,7 @@ async def partner_mapping_post(
 
     # 매핑 성공 여부에 따라 메시지 보완 (선택)
     if mapping.is_mapped:
-        message = "고객 매핑 요청을 등록했고, 기존 문진과 자동으로 매칭되었습니다."
+        message = "매핑 요청 성공, 고객 문진과 자동으로 매핑되었습니다."
 
     return templates.TemplateResponse(
         "partner/mapping.html",
@@ -2612,30 +2612,11 @@ async def dh_simple_start(
     # 세션에도 간단히 기록(나중에 필요하면 참고용)
     request.session["agreement_all"] = agreement_all
 
-    # rtoken → respondent_id → Respondent에 동의 정보 반영
-    try:
-        rtoken = request.cookies.get("rtoken") or (request.session.get("rtoken") if hasattr(request, "session") else None)
-        respondent_id = verify_token(rtoken) if rtoken else -1
-    except Exception:
-        respondent_id = -1
-
-    if respondent_id > 0 and agreement_all:
-        try:
-            resp_obj = session.get(Respondent, respondent_id)
-            if resp_obj:
-                resp_obj.agreement_all = True
-                resp_obj.agreement_at = now_kst()
-                resp_obj.updated_at = now_kst()
-                session.add(resp_obj)
-                session.commit()
-        except Exception as e:
-            logging.warning("[AGREEMENT][SAVE][ERR] %r", e)
-
         
     #인적정보 세션 보관
     request.session["nhis_start_payload"] = dh_body
-    
-        # ─────────────────────────────────────────────
+
+    # ─────────────────────────────────────────────
     # ✅ 간편인증 시작 시점에 동의 여부를 respondent에 저장
     #    - 프론트에서 4개 모두 체크 안 하면 버튼이 비활성이라,
     #      여기까지 들어왔다는 것 = 필수 4개 모두 동의한 상태로 간주
@@ -2648,17 +2629,32 @@ async def dh_simple_start(
         if rid > 0:
             resp_obj = session.get(Respondent, rid)
             if resp_obj:
-                # 이미 true로 박혀 있으면 다시 바꿀 필요는 없음
-                if not getattr(resp_obj, "agreement_all", False):
+                prev_all = getattr(resp_obj, "agreement_all", False)
+                prev_at  = getattr(resp_obj, "agreement_at", None)
+
+                # 이미 true로 박혀 있으면 그대로 두고,
+                # 아직 false/None 이면 이번 시점에 동의로 기록
+                if not prev_all:
                     resp_obj.agreement_all = True
-                # 아직 동의 시각이 없으면 이번 시점으로 기록
-                if getattr(resp_obj, "agreement_at", None) is None:
+                if prev_at is None:
                     resp_obj.agreement_at = now_kst()
+
+                resp_obj.updated_at = now_kst()
 
                 session.add(resp_obj)
                 session.commit()
+
+                logging.info(
+                    "[CONSENT][SAVE] rid=%s agreement_all=%s agreement_at=%s",
+                    resp_obj.id,
+                    resp_obj.agreement_all,
+                    resp_obj.agreement_at,
+                )
+        else:
+            logging.warning("[CONSENT][WARN] invalid rid from rtoken (rid=%s)", rid)
     except Exception as e:
         logging.warning("[CONSENT][WARN] agreement save failed: %r", e)
+
     
 
     # ===============================================
