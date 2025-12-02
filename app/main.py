@@ -78,7 +78,7 @@ ADMIN_PASS = os.environ.get("ADMIN_PASS")
 
 NHIS_MAX_LIGHT_FETCH = int(os.getenv("NHIS_MAX_LIGHT_FETCH", "1"))     # light는 기본 1회만
 NHIS_FETCH_INTERVAL  = float(os.getenv("NHIS_FETCH_INTERVAL", "2.0"))  # 폴링 간격(초)
-NHIS_POLL_MAX_SEC    = int(os.getenv("NHIS_POLL_MAX_SEC", "120"))      # 최대 대기(초)
+NHIS_POLL_MAX_SEC    = int(os.getenv("NHIS_POLL_MAX_SEC", "30"))      # 최대 대기(초)
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -208,7 +208,7 @@ else:
     DEFAULT_FONT_BOLD = "Helvetica-Bold"
 
 AUTH_COOKIE_NAME = "auth"
-AUTH_MAX_AGE = 60 * 30  # 0.5 hours
+AUTH_MAX_AGE = 3600 * 1  # 1 hours
 
 def sign_user(user_id: int) -> str:
     return signer.sign(f"user:{user_id}").decode("utf-8")
@@ -279,9 +279,6 @@ class Respondent(SQLModel, table=True):
     campaign_id: str = Field(default="default")
     status: str = Field(default="draft")
     created_at: datetime = Field(default_factory=now_kst)
-    updated_at: datetime = Field(
-        default_factory=now_kst,
-    )
 
     # 인적정보 스냅샷
     applicant_name: str | None = None
@@ -304,6 +301,7 @@ class Respondent(SQLModel, table=True):
     client_phone: str | None = None
     partner_id: int | None = None
     is_mapped: bool = Field(default=False)
+    updated_at: datetime | None = None
     
     #동의서 관련 필드
     agreement_all: bool = Field(default=False)
@@ -1308,7 +1306,7 @@ async def partner_mapping_post(
 
     # 매핑 성공 여부에 따라 메시지 보완 (선택)
     if mapping.is_mapped:
-        message = "매핑 요청 성공, 고객 문진과 자동으로 매핑되었습니다."
+        message = "고객 매핑 요청을 등록했고, 기존 문진과 자동으로 매칭되었습니다."
 
     return templates.TemplateResponse(
         "partner/mapping.html",
@@ -1391,12 +1389,12 @@ def login_verify_phone(
 
         rid = session.exec(
             sa_text("""
-                INSERT INTO respondent (user_id, status, created_at, partner_id)
-                VALUES (:uid, 'started', now(), :pid)
+                INSERT INTO respondent (status, partner_id, updated_at)
+                VALUES ('started', :pid, (now() AT TIME ZONE 'Asia/Seoul'))
                 RETURNING id
-            """).bindparams(uid=user.id, pid=admin_id)
+            """).bindparams(pid=admin_id)
         ).first()[0]
-                
+        
         #임시로그
         logging.info("[RESP][CREATE] rid=%s partner_id=%s", rid, admin_id)
         request.session["partner_id"] = admin_id
@@ -2131,34 +2129,53 @@ def survey_finish(
     resp = session.get(Respondent, respondent_id)
     user = session.get(User, resp.user_id) if resp and resp.user_id else None
     
+    
+    # ── 간편인증 시점의 동의 정보(세션) → 이번 설문 respondent에 최종 반영 ──
+    try:
+        sess = request.session or {}
+        consent_all = bool(sess.get("agreement_all"))
+        consent_at_str = sess.get("agreement_at")  # now_kst().isoformat() 형태 문자열
+
+        if resp and consent_all:
+            # 이미 true면 다시 false로 바꾸지 않음
+            if not getattr(resp, "agreement_all", False):
+                resp.agreement_all = True
+
+            # 동의 시각이 비어있으면 세션에 남겨둔 시각을 쓰고, 없으면 지금 시각
+            if getattr(resp, "agreement_at", None) is None:
+                if consent_at_str:
+                    try:
+                        at_val = datetime.fromisoformat(consent_at_str)
+                    except Exception:
+                        at_val = now_kst()
+                else:
+                    at_val = now_kst()
+                resp.agreement_at = at_val
+
+            resp.updated_at = now_kst()
+            session.add(resp)
+            session.commit()
+    except Exception as e:
+        logging.warning("[CONSENT][WARN][finish] apply failed: %r", e)
+
+    
     # NHIS 세션 정보 → Respondent에 반영 (고객 이름/휴대폰)
     if resp:
         sync_respondent_contact_from_nhis(request, session, resp)
 
 
-    # ── partner_id 누락 시, 로그인 시 세션에 저장해둔 admin_phone으로 복원 ──
+    # 로그인 시점에 세션에 넣어둔 partner_id로 보정
     if resp and not resp.partner_id:
-        try:
-            admin_phone = (request.session or {}).get("admin_phone")
-            if admin_phone:
-                phone_digits = re.sub(r"[^0-9]", "", str(admin_phone))
-                row = session.exec(
-                    sa_text("""
-                        SELECT id
-                          FROM user_admin
-                         WHERE phone = :p
-                           AND is_active = TRUE
-                         LIMIT 1
-                    """).bindparams(p=phone_digits)
-                ).first()
-                if row:
-                    resp.partner_id = row[0]
-                    resp.updated_at = now_kst()
-                    session.add(resp)
-                    session.commit()
-        except Exception as e:
-            logging.warning("[RESPONDENT][PARTNER-FILL][ERR] %r", e)
-
+        pid_from_session = request.session.get("partner_id")
+        if pid_from_session:
+            resp.partner_id = pid_from_session
+            session.add(resp)
+            session.commit()
+            logging.info(
+                "[RESP][FIX-PID] resp_id=%s partner_id=%s (from session)",
+                resp.id,
+                resp.partner_id,
+            )
 
     def calc_age(bd, ref_date):
         if not bd:
@@ -2602,7 +2619,8 @@ async def dh_simple_start(
     gender = str(payload.get("gender","")).strip() 
     request.session["nhis_gender"] = gender if gender in ("남","여") else ""
     
-    # ── 동의 여부 파싱 ──────────────────────────────────────────────
+    
+        # ── 동의 여부 파싱 ──────────────────────────────────────────────
     agreement_all      = bool(payload.get("agreementAll"))
     agreement_collect  = bool(payload.get("agreementCollect"))
     agreement_third    = bool(payload.get("agreementThird"))
@@ -2612,73 +2630,41 @@ async def dh_simple_start(
     # 세션에도 간단히 기록(나중에 필요하면 참고용)
     request.session["agreement_all"] = agreement_all
 
+        # 동의한 시점(간편인증 시작 버튼을 누른 시각)도 같이 보관
+    if agreement_all:
+        request.session["agreement_at"] = now_kst().isoformat()
+    else:
+        # 전체동의를 해제한 상태로 다시 들어왔다면 시각도 지워둠
+        request.session.pop("agreement_at", None)
+
         
     #인적정보 세션 보관
     request.session["nhis_start_payload"] = dh_body
-
-    # ─────────────────────────────────────────────
+    
+        # ─────────────────────────────────────────────
     # ✅ 간편인증 시작 시점에 동의 여부를 respondent에 저장
     #    - 프론트에서 4개 모두 체크 안 하면 버튼이 비활성이라,
     #      여기까지 들어왔다는 것 = 필수 4개 모두 동의한 상태로 간주
     # ─────────────────────────────────────────────
     try:
+        # rtoken은 쿠키나 세션에 이미 넣어둔 값 재사용
+        rtoken = request.cookies.get("rtoken") or request.session.get("rtoken")
+        rid = verify_token(rtoken) if rtoken else -1
 
-        resp_obj = None
-        rid = -1
-
-        # 1) 우선 AUTH 쿠키 → 현재 user_id → 가장 최근 Respondent 탐색
-        auth_cookie = request.cookies.get(AUTH_COOKIE_NAME)
-        user_id = verify_user(auth_cookie) if auth_cookie else -1
-
-        if user_id > 0:
-            resp_obj = session.exec(
-                select(Respondent)
-                .where(Respondent.user_id == user_id)
-                .order_by(Respondent.created_at.desc())
-            ).first()
+        if rid > 0:
+            resp_obj = session.get(Respondent, rid)
             if resp_obj:
-                rid = resp_obj.id
+                # 이미 true로 박혀 있으면 다시 바꿀 필요는 없음
+                if not getattr(resp_obj, "agreement_all", False):
+                    resp_obj.agreement_all = True
+                # 아직 동의 시각이 없으면 이번 시점으로 기록
+                if getattr(resp_obj, "agreement_at", None) is None:
+                    resp_obj.agreement_at = now_kst()
 
-        # 2) 그래도 못 찾았으면 rtoken으로 한 번 더 시도
-        if (not resp_obj) or rid <= 0:
-            rtoken = request.cookies.get("rtoken") or request.session.get("rtoken")
-            rid2 = verify_token(rtoken) if rtoken else -1
-            if rid2 > 0:
-                rid = rid2
-                resp_obj = session.get(Respondent, rid)
-
-        if resp_obj and rid > 0:
-            prev_all = getattr(resp_obj, "agreement_all", False)
-            prev_at  = getattr(resp_obj, "agreement_at", None)
-
-            # 이미 true로 박혀 있으면 그대로 두고,
-            # 아직 false/None 이면 이번 시점에 동의로 기록
-            if not prev_all:
-                resp_obj.agreement_all = True
-            if prev_at is None:
-                resp_obj.agreement_at = now_kst()
-
-            resp_obj.updated_at = now_kst()
-
-            session.add(resp_obj)
-            session.commit()
-
-            logging.info(
-                "[CONSENT][SAVE] rid=%s agreement_all=%s agreement_at=%s",
-                resp_obj.id,
-                resp_obj.agreement_all,
-                resp_obj.agreement_at,
-            )
-        else:
-            logging.warning(
-                "[CONSENT][WARN] could not resolve respondent (user_id=%s rid=%s)",
-                user_id,
-                rid,
-            )
+                session.add(resp_obj)
+                session.commit()
     except Exception as e:
         logging.warning("[CONSENT][WARN] agreement save failed: %r", e)
-
-
     
 
     # ===============================================
@@ -2917,7 +2903,6 @@ async def dh_simple_complete(
     max_wait_sec = NHIS_POLL_MAX_SEC
     deadline = time.time() + max_wait_sec
     attempt = 0
-    max_attempt = 5
 
     # 시작 단계 값 복구
     SP = (request.session or {}).get("nhis_start_payload") or {}
@@ -2983,23 +2968,42 @@ async def dh_simple_complete(
         logging.info("[DH-COMPLETE][FETCH] attempt=%s kind=%s err=%s income_len=%s",
                      attempt, kind, err2, (len(income) if isinstance(income, list) else "NA"))
 
-        # errCode 2003(이용횟수 소진)은 더 이상 폴링해도 소용 없으므로 즉시 중단
+        # ★ errCode 2003: 이용횟수 소진 → 재시도해도 소용 없으므로 즉시 종료
         if err2 == "2003":
             msg = (
                 data2.get("ERRMSG")
                 or (rsp2 or {}).get("errMsg")
-                or "조회 가능 횟수 소진. 관리자에게 문의해주세요."
+                or "건강검진 조회 가능 횟수가 소진되었습니다. 관리자에게 문의해주세요."
             )
             return JSONResponse(
                 status_code=200,
                 content={
                     "ok": False,
                     "errCode": err2,
-                    "msg": msg,        # 프론트 alert에서 우선 사용
-                    "message": msg,    # 혹시 모를 호환용
+                    "msg": msg,
+                    "message": msg,
                     "data": data2,
                 },
             )
+
+        # ★ errCode 0001: 사용자 입력/인증 미완료 상태 → 폴링 중단하고 안내 메시지 반환
+        if err2 == "0001":
+            msg = (
+                data2.get("ERRMSG")
+                or (rsp2 or {}).get("errMsg")
+                or "휴대폰에서 인증을 완료하신 뒤 다시 \"인증완료\"를 눌러주세요."
+            )
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "ok": False,
+                    "errCode": err2,
+                    "msg": msg,
+                    "message": msg,
+                    "data": data2,
+                },
+            )
+
 
         if err2 == "0000" and isinstance(income, list) and len(income) > 0:
             picked = pick_latest_general(rsp2, mode=("all" if want_all else "latest"))
