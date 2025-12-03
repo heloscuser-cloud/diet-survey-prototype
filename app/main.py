@@ -241,6 +241,8 @@ def _mask_birth(s: str) -> str:
 
 # ---- Models ----
 class User(SQLModel, table=True):
+    __tablename__ = "users"
+    __table_args__ = {"extend_existing": True}
     id: Optional[int] = Field(default=None, primary_key=True)
     phone_hash: str
     name_enc: Optional[str] = None
@@ -2164,6 +2166,27 @@ def survey_finish(
         sync_respondent_contact_from_nhis(request, session, resp)
 
 
+        # 동의 여부 세션 → Respondent 컬럼으로 반영
+    if resp:
+        try:
+            sess = request.session or {}
+            agr_all = bool(sess.get("agreement_all"))
+            agr_at_str = sess.get("agreement_at")
+
+            if agr_all:
+                resp.agreement_all = True
+                # 이미 값이 있으면 덮어쓰지 않고, 없을 때만 기록
+                if not resp.agreement_at:
+                    try:
+                        from datetime import datetime
+                        # 세션에 isoformat()으로 넣어둔 값을 되살림
+                        resp.agreement_at = datetime.fromisoformat(agr_at_str) if agr_at_str else now_kst()
+                    except Exception:
+                        resp.agreement_at = now_kst()
+        except Exception as e:
+            logging.warning("[CONSENT][WARN] agreement sync failed: %r", e)
+
+
     # 로그인 시점에 세션에 넣어둔 partner_id로 보정
     if resp and not resp.partner_id:
         pid_from_session = request.session.get("partner_id")
@@ -2619,53 +2642,26 @@ async def dh_simple_start(
     gender = str(payload.get("gender","")).strip() 
     request.session["nhis_gender"] = gender if gender in ("남","여") else ""
     
-    
-        # ── 동의 여부 파싱 ──────────────────────────────────────────────
+    # ── 동의 여부 파싱 ──────────────────────────────────────────────
     agreement_all      = bool(payload.get("agreementAll"))
     agreement_collect  = bool(payload.get("agreementCollect"))
     agreement_third    = bool(payload.get("agreementThird"))
     agreement_unique   = bool(payload.get("agreementUnique"))
     agreement_overseas = bool(payload.get("agreementOverseas"))
 
-    # 세션에도 간단히 기록(나중에 필요하면 참고용)
+    # 세션에 동의 여부 + 동의 시각만 기록 (DB 반영은 /survey/finish 에서)
     request.session["agreement_all"] = agreement_all
-
-        # 동의한 시점(간편인증 시작 버튼을 누른 시각)도 같이 보관
     if agreement_all:
+        # 세션은 datetime을 그대로 못 넣으니까 문자열로 저장
         request.session["agreement_at"] = now_kst().isoformat()
     else:
-        # 전체동의를 해제한 상태로 다시 들어왔다면 시각도 지워둠
+        # 전체 동의 취소한 경우 흔적 제거
         request.session.pop("agreement_at", None)
 
-        
-    #인적정보 세션 보관
+    # 인적정보 세션 보관 (원래 있던 줄은 그대로 유지)
     request.session["nhis_start_payload"] = dh_body
-    
-        # ─────────────────────────────────────────────
-    # ✅ 간편인증 시작 시점에 동의 여부를 respondent에 저장
-    #    - 프론트에서 4개 모두 체크 안 하면 버튼이 비활성이라,
-    #      여기까지 들어왔다는 것 = 필수 4개 모두 동의한 상태로 간주
-    # ─────────────────────────────────────────────
-    try:
-        # rtoken은 쿠키나 세션에 이미 넣어둔 값 재사용
-        rtoken = request.cookies.get("rtoken") or request.session.get("rtoken")
-        rid = verify_token(rtoken) if rtoken else -1
 
-        if rid > 0:
-            resp_obj = session.get(Respondent, rid)
-            if resp_obj:
-                # 이미 true로 박혀 있으면 다시 바꿀 필요는 없음
-                if not getattr(resp_obj, "agreement_all", False):
-                    resp_obj.agreement_all = True
-                # 아직 동의 시각이 없으면 이번 시점으로 기록
-                if getattr(resp_obj, "agreement_at", None) is None:
-                    resp_obj.agreement_at = now_kst()
-
-                session.add(resp_obj)
-                session.commit()
-    except Exception as e:
-        logging.warning("[CONSENT][WARN] agreement save failed: %r", e)
-    
+        
 
     # ===============================================
     # 1) DataHub.simple_auth_start 재시도(최대 3회)
