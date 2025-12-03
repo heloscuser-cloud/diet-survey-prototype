@@ -303,7 +303,8 @@ class Respondent(SQLModel, table=True):
     client_phone: str | None = None
     partner_id: int | None = None
     is_mapped: bool = Field(default=False)
-    updated_at: datetime | None = None
+    # updated_at은 NOT NULL 컬럼이므로 기본값을 now_kst로 강제
+    updated_at: datetime = Field(default_factory=now_kst)
     
     #동의서 관련 필드
     agreement_all: bool = Field(default=False)
