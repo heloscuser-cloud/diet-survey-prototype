@@ -1926,51 +1926,70 @@ def survey_root(
     if not user or not user.name_enc or not user.gender or not has_birth:
         return RedirectResponse(url="/info", status_code=303)
 
-    # 로그인 시점에 세션에 저장해 둔 partner_id 복원 시도
-    partner_id_from_session = None
-    try:
-        pid = (request.session or {}).get("partner_id")
-        if pid is not None:
-            try:
-                partner_id_from_session = int(pid)
-            except (TypeError, ValueError):
-                # 숫자로 안 바뀌면 그냥 무시
-                partner_id_from_session = None
-    except Exception as e:
-        logging.warning("[SURVEY][PID] session read failed: %r", e)
-        partner_id_from_session = None
+    # ── partner_id 결정: 세션 → user_admin(phone) 순으로 시도 ──
+    partner_id_value: int | None = None
 
-    if partner_id_from_session:
+    try:
+        sess = request.session or {}
+    except Exception:
+        sess = {}
+
+    # 1) /login/verify 에서 직접 넣어둔 partner_id 우선 사용
+    raw_pid = sess.get("partner_id")
+    if raw_pid is not None:
+        try:
+            partner_id_value = int(raw_pid)
+        except (TypeError, ValueError):
+            partner_id_value = None
+
+    # 2) 없으면 admin_phone 기반으로 user_admin에서 다시 찾기
+    if partner_id_value is None:
+        admin_phone = sess.get("admin_phone")
+        if admin_phone:
+            try:
+                row = session.exec(
+                    sa_text("""
+                        SELECT id
+                          FROM user_admin
+                         WHERE phone = :p
+                           AND is_active = TRUE
+                         LIMIT 1
+                    """).bindparams(p=admin_phone)
+                ).first()
+                if row:
+                    partner_id_value = int(row[0])
+            except Exception as e:
+                logging.warning("[SURVEY][PID][LOOKUP-FAIL] phone=%s err=%r", admin_phone, e)
+
+    # 3) Respondent 생성 (partner_id 있으면 같이 저장)
+    if partner_id_value is not None:
         resp = Respondent(
             user_id=user.id,
             campaign_id="demo",
             status="draft",
-            partner_id=partner_id_from_session,
+            partner_id=partner_id_value,
         )
         logging.info(
-            "[SURVEY][RESP-CREATE] user_id=%s partner_id=%s (from session)",
+            "[SURVEY][RESP-CREATE] user_id=%s partner_id=%s",
             user.id,
-            partner_id_from_session,
+            partner_id_value,
         )
     else:
-        # 세션에 partner_id가 없으면 기존 로직대로 partner_id 없이 생성
         resp = Respondent(
             user_id=user.id,
             campaign_id="demo",
             status="draft",
         )
         logging.info(
-            "[SURVEY][RESP-CREATE] user_id=%s partner_id=None (no session pid)",
+            "[SURVEY][RESP-CREATE] user_id=%s partner_id=None",
             user.id,
         )
 
     session.add(resp)
     session.commit()
     session.refresh(resp)
-
-
-    
     # User 정보 스냅샷을 Respondent에 저장(관리자 테이블 출력용)
+
     # 실제 생년월일 우선 스냅샷
     bd = None
     try:
@@ -2239,26 +2258,62 @@ def survey_finish(
             logging.warning("[CONSENT][WARN] agreement sync failed: %r", e)
 
 
-    # 로그인 시점에 세션에 넣어둔 partner_id로 보정
+    # 로그인 시점 정보로 partner_id 보정
     if resp and not resp.partner_id:
-        
-        # 임시로그
-        sess = request.session or {}
-        logging.info(
-            "[RESP][FIX-PID][CHECK] resp_id=%s has_session_keys=%s",
-            resp.id,
-            list(sess.keys()),
-        )
-        pid_from_session = request.session.get("partner_id")                 
-        if pid_from_session:
-            resp.partner_id = pid_from_session
+        try:
+            sess = request.session or {}
+        except Exception:
+            sess = {}
+
+        # 1) 세션의 partner_id 먼저 시도
+        pid_from_session = sess.get("partner_id")
+        partner_id_value: int | None = None
+        if pid_from_session is not None:
+            try:
+                partner_id_value = int(pid_from_session)
+            except (TypeError, ValueError):
+                partner_id_value = None
+
+        # 2) 없으면 admin_phone → user_admin.id 조회
+        if partner_id_value is None:
+            admin_phone = sess.get("admin_phone")
+            if admin_phone:
+                try:
+                    row = session.exec(
+                        sa_text("""
+                            SELECT id
+                              FROM user_admin
+                             WHERE phone = :p
+                               AND is_active = TRUE
+                             LIMIT 1
+                        """).bindparams(p=admin_phone)
+                    ).first()
+                    if row:
+                        partner_id_value = int(row[0])
+                        logging.info(
+                            "[RESP][FIX-PID][ADMIN-PHONE] resp_id=%s admin_phone=%s partner_id=%s",
+                            resp.id,
+                            admin_phone,
+                            partner_id_value,
+                        )
+                except Exception as e:
+                    logging.warning(
+                        "[RESP][FIX-PID][LOOKUP-FAIL] resp_id=%s phone=%s err=%r",
+                        resp.id,
+                        admin_phone,
+                        e,
+                    )
+
+        if partner_id_value is not None:
+            resp.partner_id = partner_id_value
             session.add(resp)
             session.commit()
             logging.info(
-                "[RESP][FIX-PID] resp_id=%s partner_id=%s (from session)",
+                "[RESP][FIX-PID] resp_id=%s partner_id=%s",
                 resp.id,
                 resp.partner_id,
             )
+
 
     def calc_age(bd, ref_date):
         if not bd:
