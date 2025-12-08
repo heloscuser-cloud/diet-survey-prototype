@@ -1895,7 +1895,7 @@ app.include_router(admin_router)
 
 @app.get("/survey")
 
-def survey_root(auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+def survey_root(request: Request, auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
                 session: Session = Depends(get_session),):
     user_id = verify_user(auth) if auth else -1
     if user_id < 0:
@@ -1914,10 +1914,38 @@ def survey_root(auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
     has_birth = bool(getattr(user, "birth_date", None) or getattr(user, "birth_year", None))
     if not user or not user.name_enc or not user.gender or not has_birth:
         return RedirectResponse(url="/info", status_code=303)
-    resp = Respondent(user_id=user.id, campaign_id="demo", status="draft")
+
+    # 로그인 시점에 세션에 저장해 둔 partner_id 사용 (담당자 매핑 유지용)
+    partner_id_from_session = None
+    try:
+        pid = request.session.get("partner_id")
+        if pid is not None:
+            try:
+                partner_id_from_session = int(pid)
+            except (TypeError, ValueError):
+                partner_id_from_session = None
+    except Exception:
+        partner_id_from_session = None
+
+    if partner_id_from_session:
+        resp = Respondent(
+            user_id=user.id,
+            campaign_id="demo",
+            status="draft",
+            partner_id=partner_id_from_session,
+        )
+    else:
+        # 세션에 partner_id가 없으면 기존 로직대로 partner_id 없이 생성
+        resp = Respondent(
+            user_id=user.id,
+            campaign_id="demo",
+            status="draft",
+        )
+
     session.add(resp)
     session.commit()
     session.refresh(resp)
+
     
     # User 정보 스냅샷을 Respondent에 저장(관리자 테이블 출력용)
     # 실제 생년월일 우선 스냅샷
