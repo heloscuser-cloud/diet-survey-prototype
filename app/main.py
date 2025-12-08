@@ -1400,6 +1400,14 @@ def login_verify_phone(
         
         #임시로그
         logging.info("[RESP][CREATE] rid=%s partner_id=%s", rid, admin_id)
+        request.session["partner_id"] = admin_id    
+
+
+        logging.info(
+            "[SESSION][SET] partner_id=%s admin_phone=%s (login_verify)",
+            admin_id,
+            phone_digits,
+        )
         request.session["partner_id"] = admin_id
 
         # 프로젝트에 이미 있는 signer를 재사용해 rtoken 생성 (verify_token과 호환)
@@ -1895,8 +1903,11 @@ app.include_router(admin_router)
 
 @app.get("/survey")
 
-def survey_root(request: Request, auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
-                session: Session = Depends(get_session),):
+def survey_root(
+    request: Request,
+    auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+    session: Session = Depends(get_session),
+):
     user_id = verify_user(auth) if auth else -1
     if user_id < 0:
         return RedirectResponse(url="/login", status_code=302)
@@ -1915,16 +1926,18 @@ def survey_root(request: Request, auth: str | None = Cookie(default=None, alias=
     if not user or not user.name_enc or not user.gender or not has_birth:
         return RedirectResponse(url="/info", status_code=303)
 
-    # 로그인 시점에 세션에 저장해 둔 partner_id 사용 (담당자 매핑 유지용)
+    # 로그인 시점에 세션에 저장해 둔 partner_id 복원 시도
     partner_id_from_session = None
     try:
-        pid = request.session.get("partner_id")
+        pid = (request.session or {}).get("partner_id")
         if pid is not None:
             try:
                 partner_id_from_session = int(pid)
             except (TypeError, ValueError):
+                # 숫자로 안 바뀌면 그냥 무시
                 partner_id_from_session = None
-    except Exception:
+    except Exception as e:
+        logging.warning("[SURVEY][PID] session read failed: %r", e)
         partner_id_from_session = None
 
     if partner_id_from_session:
@@ -1934,6 +1947,11 @@ def survey_root(request: Request, auth: str | None = Cookie(default=None, alias=
             status="draft",
             partner_id=partner_id_from_session,
         )
+        logging.info(
+            "[SURVEY][RESP-CREATE] user_id=%s partner_id=%s (from session)",
+            user.id,
+            partner_id_from_session,
+        )
     else:
         # 세션에 partner_id가 없으면 기존 로직대로 partner_id 없이 생성
         resp = Respondent(
@@ -1941,10 +1959,15 @@ def survey_root(request: Request, auth: str | None = Cookie(default=None, alias=
             campaign_id="demo",
             status="draft",
         )
+        logging.info(
+            "[SURVEY][RESP-CREATE] user_id=%s partner_id=None (no session pid)",
+            user.id,
+        )
 
     session.add(resp)
     session.commit()
     session.refresh(resp)
+
 
     
     # User 정보 스냅샷을 Respondent에 저장(관리자 테이블 출력용)
@@ -2218,7 +2241,15 @@ def survey_finish(
 
     # 로그인 시점에 세션에 넣어둔 partner_id로 보정
     if resp and not resp.partner_id:
-        pid_from_session = request.session.get("partner_id")
+        
+        # 임시로그
+        sess = request.session or {}
+        logging.info(
+            "[RESP][FIX-PID][CHECK] resp_id=%s has_session_keys=%s",
+            resp.id,
+            list(sess.keys()),
+        )
+        pid_from_session = request.session.get("partner_id")                 
         if pid_from_session:
             resp.partner_id = pid_from_session
             session.add(resp)
