@@ -10,40 +10,52 @@
   <div style="background:#ffffff; border:1px solid #e5e7eb; border-radius:16px; padding:16px 16px 12px 16px; margin-bottom:16px; box-shadow:0 6px 18px rgba(0,0,0,.03);">
     <form method="get" action="/partner/requests" style="display:flex; flex-direction:column; gap:10px;">
 
-      <!-- 1행: 고객신청일 / 담당자신청일 -->
-      <div style="display:flex; flex-wrap:wrap; gap:12px;">
+      <!-- 1행: 신청일(고객 또는 담당자) -->
+      <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end;">
         <div style="display:flex; flex-direction:column; font-size:13px;">
-          <label style="color:#64748b; margin-bottom:4px;">고객신청일 (최대 30일)</label>
+          <label style="color:#64748b; margin-bottom:4px;">신청일 (고객 또는 담당자, 최대 31일)</label>
           <div style="display:flex; align-items:center; gap:6px;">
-            <input type="text" name="client_from" inputmode="numeric"
+            <input type="text"
+                   name="date_from"
+                   inputmode="numeric"
                    placeholder="YYYY-MM-DD"
-                   value="{{ client_from or '' }}"
+                   value="{{ date_from or '' }}"
+                   class="date-ymd"
                    style="width:140px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:10px; font-size:14px;">
             <span>~</span>
-            <input type="text" name="client_to" inputmode="numeric"
+            <input type="text"
+                   name="date_to"
+                   inputmode="numeric"
                    placeholder="YYYY-MM-DD"
-                   value="{{ client_to or '' }}"
-                   style="width:140px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:10px; font-size:14px;">
-          </div>
-        </div>
-
-        <div style="display:flex; flex-direction:column; font-size:13px;">
-          <label style="color:#64748b; margin-bottom:4px;">담당자신청일 (최대 30일)</label>
-          <div style="display:flex; align-items:center; gap:6px;">
-            <input type="text" name="partner_from" inputmode="numeric"
-                   placeholder="YYYY-MM-DD"
-                   value="{{ partner_from or '' }}"
-                   style="width:140px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:10px; font-size:14px;">
-            <span>~</span>
-            <input type="text" name="partner_to" inputmode="numeric"
-                   placeholder="YYYY-MM-DD"
-                   value="{{ partner_to or '' }}"
+                   value="{{ date_to or '' }}"
+                   class="date-ymd"
                    style="width:140px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:10px; font-size:14px;">
           </div>
         </div>
       </div>
 
-      <!-- 2행: 고객명 / 휴대폰 뒤 4자리 / 진행 상태 -->
+      <!-- 2행: 빠른 기간 선택 -->
+      <div style="display:flex; flex-wrap:wrap; gap:8px; font-size:13px;">
+        <span style="color:#64748b; align-self:center;">빠른 기간 선택</span>
+        <button type="button" data-range="today"
+                style="cursor:pointer; border:none; border-radius:999px; padding:4px 12px; font-size:13px; background:#e5e7eb;">
+          오늘
+        </button>
+        <button type="button" data-range="1w"
+                style="cursor:pointer; border:none; border-radius:999px; padding:4px 12px; font-size:13px; background:#e5e7eb;">
+          1주
+        </button>
+        <button type="button" data-range="2w"
+                style="cursor:pointer; border:none; border-radius:999px; padding:4px 12px; font-size:13px; background:#e5e7eb;">
+          2주
+        </button>
+        <button type="button" data-range="1m"
+                style="cursor:pointer; border:none; border-radius:999px; padding:4px 12px; font-size:13px; background:#e5e7eb;">
+          1개월
+        </button>
+      </div>
+
+      <!-- 3행: 고객명 / 휴대폰 뒷 4자리 -->
       <div style="display:flex; flex-wrap:wrap; gap:12px;">
         <div style="display:flex; flex-direction:column; font-size:13px;">
           <label style="color:#64748b; margin-bottom:4px;">고객명</label>
@@ -61,7 +73,10 @@
                  maxlength="4"
                  style="width:140px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:10px; font-size:14px;">
         </div>
+      </div>
 
+      <!-- 4행: 진행 상태값 -->
+      <div style="display:flex; flex-wrap:wrap; gap:12px;">
         <div style="display:flex; flex-direction:column; font-size:13px;">
           <label style="color:#64748b; margin-bottom:4px;">진행 상태값</label>
           <select name="status" style="width:200px; padding:8px 10px; border-radius:10px; border:1px solid #e5e7eb; font-size:14px;">
@@ -73,16 +88,12 @@
         </div>
       </div>
 
-      <!-- 숨김: 현재 로그인된 파트너 필터 -->
-      <input type="hidden" name="partner_id" value="{{ partner_id or '' }}">
-      <input type="hidden" name="partner_name" value="{{ partner_name or '' }}">
-
-      <!-- 조회 버튼 -->
-      <div style="margin-top:4px; display:flex; justify-content:flex-end;">
+      <!-- 조회 버튼: 가운데 배치, 가로 넓게 -->
+      <div style="margin-top:8px; display:flex; justify-content:center;">
         <button type="submit"
                 style="cursor:pointer; border:none; border-radius:999px;
                        background:#1e40af; color:#ffffff;
-                       padding:8px 24px; font-weight:600; font-size:14px;">
+                       padding:10px 48px; font-weight:600; font-size:14px;">
           조회
         </button>
       </div>
@@ -95,19 +106,26 @@
     <table style="width:100%; border-collapse:collapse;">
       <thead>
         <tr style="background:#f3f4f6;">
-          <th style="padding:10px 12px; font-size:13px; color:#4b5563;">고객신청일</th>
-          <th style="padding:10px 12px; font-size:13px; color:#4b5563;">담당자신청일</th>
-          <th style="padding:10px 12px; font-size:13px; color:#4b5563;">고객명</th>
-          <th style="padding:10px 12px; font-size:13px; color:#4b5563;">고객연락처</th>
-          <th style="padding:10px 12px; font-size:13px; color:#4b5563;">진행 상태값</th>
-          <th style="padding:10px 12px; font-size:13px; color:#4b5563;">리포트 발송여부</th>
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">연번</th>
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">고객신청일</th>
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">담당자신청일</th>
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">고객명</th>
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">고객연락처</th>
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">진행 상태값</th>
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">리포트 발송여부</th>
         </tr>
       </thead>
       <tbody>
       {% if rows and rows|length > 0 %}
-        {# rows: (pcm, resp, sr, rf) 튜플이라고 가정 #}
+        {# rows: (pcm, resp, sr, rf) 튜플 #}
         {% for pcm, resp, sr, rf in rows %}
+          {% set row_no = (page - 1) * page_size + loop.index %}
           <tr>
+            <!-- 연번 -->
+            <td style="padding:10px 12px; font-size:14px; text-align:center;">
+              {{ row_no }}
+            </td>
+
             <!-- 고객신청일: partner_client_mapping.client_submitted_at -->
             <td style="padding:10px 12px; font-size:14px; text-align:center;">
               {{ to_kst_str(pcm.client_submitted_at) if pcm.client_submitted_at else '' }}
@@ -138,7 +156,7 @@
               {% endif %}
             </td>
 
-            <!-- 진행 상태값: /admin/responses와 동일 매핑 -->
+            <!-- 진행 상태값 -->
             <td style="padding:10px 12px; font-size:14px; text-align:center;">
               {% set st = resp.status if resp else '' %}
               {% if st == 'submitted' %}
@@ -152,7 +170,7 @@
               {% endif %}
             </td>
 
-            <!-- 리포트 발송여부: reportfile 존재 여부 -->
+            <!-- 리포트 발송여부 -->
             <td style="padding:10px 12px; font-size:14px; text-align:center;">
               {% if rf %}
                 <span style="color:#16a34a; font-weight:600;">발송</span>
@@ -164,14 +182,78 @@
         {% endfor %}
       {% else %}
         <tr>
-          <td colspan="6" style="padding:20px; text-align:center; font-size:14px; color:#6b7280;">
+          <td colspan="7" style="padding:20px; text-align:center; font-size:14px; color:#6b7280;">
             조회 결과가 없습니다.
           </td>
         </tr>
       {% endif %}
       </tbody>
     </table>
+
+    <!-- 페이지네이션 -->
+    <div class="pagination" style="justify-content:center; padding:10px 12px;">
+      {% if total_pages and total_pages > 1 %}
+        {% if page > 1 %}
+          <a href="/partner/requests?page={{ page - 1 }}&date_from={{ date_from }}&date_to={{ date_to }}&client_name={{ client_name }}&client_phone_suffix={{ client_phone_suffix }}&status={{ status }}">이전</a>
+        {% endif %}
+
+        {% for p in range(1, total_pages + 1) %}
+          {% if p == page %}
+            <span>{{ p }}</span>
+          {% else %}
+            <a href="/partner/requests?page={{ p }}&date_from={{ date_from }}&date_to={{ date_to }}&client_name={{ client_name }}&client_phone_suffix={{ client_phone_suffix }}&status={{ status }}">{{ p }}</a>
+          {% endif %}
+        {% endfor %}
+
+        {% if page < total_pages %}
+          <a href="/partner/requests?page={{ page + 1 }}&date_from={{ date_from }}&date_to={{ date_to }}&client_name={{ client_name }}&client_phone_suffix={{ client_phone_suffix }}&status={{ status }}">다음</a>
+        {% endif %}
+      {% endif %}
+    </div>
+
   </div>
 
 </div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const fromInput = document.querySelector('input[name="date_from"]');
+    const toInput = document.querySelector('input[name="date_to"]');
+
+    // 날짜 입력 자동 포맷 (YYYY-MM-DD)
+    document.querySelectorAll('.date-ymd').forEach(function(inp) {
+      inp.addEventListener('input', function(e) {
+        let v = e.target.value.replace(/[^0-9]/g, '').slice(0,8);
+        if (v.length >= 5) v = v.slice(0,4) + '-' + v.slice(4);
+        if (v.length >= 8) v = v.slice(0,7) + '-' + v.slice(7);
+        e.target.value = v;
+      });
+    });
+
+    // 빠른 기간 버튼
+    document.querySelectorAll('[data-range]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        const type = this.getAttribute('data-range');
+        const today = new Date();
+        const toStr = today.toISOString().slice(0,10);
+
+        let from = new Date(today);
+        if (type === 'today') {
+          // 오늘 하루
+        } else if (type === '1w') {
+          from.setDate(today.getDate() - 6); // 오늘 포함 7일
+        } else if (type === '2w') {
+          from.setDate(today.getDate() - 13); // 오늘 포함 14일
+        } else if (type === '1m') {
+          from.setDate(today.getDate() - 30); // 오늘 포함 31일 근처
+        }
+        const fromStr = from.toISOString().slice(0,10);
+
+        if (fromInput) fromInput.value = fromStr;
+        if (toInput) toInput.value = toStr;
+      });
+    });
+  });
+</script>
+
 {% endblock %}
