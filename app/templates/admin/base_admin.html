@@ -21,13 +21,20 @@
   </style>
 </head>
 <body>
-  <header>
-    <div><strong>관리자</strong> <span class="muted">/ mini</span></div>
-    <nav>
+<header>
+  <div><strong>관리자</strong> <span class="muted">/ mini</span></div>
+  <nav>
+    {# URL이 /partner 로 시작하면 파트너용 헤더, 아니면 관리자용 헤더 #}
+    {% if request.url.path.startswith('/partner') %}
+      <a href="/partner/dashboard">대시보드</a>
+      <a href="/partner/logout" onclick="return confirm('로그아웃 하시겠어요?')">로그아웃</a>
+    {% else %}
       <a href="/admin/responses">응답 목록</a>
       <a href="/admin/logout" onclick="return confirm('로그아웃 하시겠어요?')">로그아웃</a>
-    </nav>
-  </header>
+    {% endif %}
+  </nav>
+</header>
+
   <div class="wrap">
     {% block content %}{% endblock %}
   </div>

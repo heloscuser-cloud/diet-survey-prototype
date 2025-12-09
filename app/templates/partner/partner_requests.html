@@ -1,0 +1,177 @@
+{% extends "admin/base_admin.html" %}
+{% block title %}신청내역 조회{% endblock %}
+
+{% block content %}
+<div style="max-width:960px; margin:24px auto; padding:0 12px;">
+
+  <h2 style="font-size:20px; font-weight:700; margin-bottom:16px;">신청내역 조회</h2>
+
+  <!-- 검색 영역 -->
+  <div style="background:#ffffff; border:1px solid #e5e7eb; border-radius:16px; padding:16px 16px 12px 16px; margin-bottom:16px; box-shadow:0 6px 18px rgba(0,0,0,.03);">
+    <form method="get" action="/partner/requests" style="display:flex; flex-direction:column; gap:10px;">
+
+      <!-- 1행: 고객신청일 / 담당자신청일 -->
+      <div style="display:flex; flex-wrap:wrap; gap:12px;">
+        <div style="display:flex; flex-direction:column; font-size:13px;">
+          <label style="color:#64748b; margin-bottom:4px;">고객신청일 (최대 30일)</label>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <input type="text" name="client_from" inputmode="numeric"
+                   placeholder="YYYY-MM-DD"
+                   value="{{ client_from or '' }}"
+                   style="width:140px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:10px; font-size:14px;">
+            <span>~</span>
+            <input type="text" name="client_to" inputmode="numeric"
+                   placeholder="YYYY-MM-DD"
+                   value="{{ client_to or '' }}"
+                   style="width:140px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:10px; font-size:14px;">
+          </div>
+        </div>
+
+        <div style="display:flex; flex-direction:column; font-size:13px;">
+          <label style="color:#64748b; margin-bottom:4px;">담당자신청일 (최대 30일)</label>
+          <div style="display:flex; align-items:center; gap:6px;">
+            <input type="text" name="partner_from" inputmode="numeric"
+                   placeholder="YYYY-MM-DD"
+                   value="{{ partner_from or '' }}"
+                   style="width:140px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:10px; font-size:14px;">
+            <span>~</span>
+            <input type="text" name="partner_to" inputmode="numeric"
+                   placeholder="YYYY-MM-DD"
+                   value="{{ partner_to or '' }}"
+                   style="width:140px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:10px; font-size:14px;">
+          </div>
+        </div>
+      </div>
+
+      <!-- 2행: 고객명 / 휴대폰 뒤 4자리 / 진행 상태 -->
+      <div style="display:flex; flex-wrap:wrap; gap:12px;">
+        <div style="display:flex; flex-direction:column; font-size:13px;">
+          <label style="color:#64748b; margin-bottom:4px;">고객명</label>
+          <input type="text" name="client_name"
+                 value="{{ client_name or '' }}"
+                 placeholder="홍길동"
+                 style="width:160px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:10px; font-size:14px;">
+        </div>
+
+        <div style="display:flex; flex-direction:column; font-size:13px;">
+          <label style="color:#64748b; margin-bottom:4px;">고객연락처 (휴대폰 뒷번호 4자리)</label>
+          <input type="text" name="client_phone_suffix" inputmode="numeric"
+                 value="{{ client_phone_suffix or '' }}"
+                 placeholder="1234"
+                 maxlength="4"
+                 style="width:140px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:10px; font-size:14px;">
+        </div>
+
+        <div style="display:flex; flex-direction:column; font-size:13px;">
+          <label style="color:#64748b; margin-bottom:4px;">진행 상태값</label>
+          <select name="status" style="width:200px; padding:8px 10px; border-radius:10px; border:1px solid #e5e7eb; font-size:14px;">
+            <option value="" {{ 'selected' if not status }}>전체</option>
+            <option value="submitted" {{ 'selected' if status=='submitted' }}>신청완료</option>
+            <option value="accepted" {{ 'selected' if status=='accepted' }}>접수완료</option>
+            <option value="report_uploaded" {{ 'selected' if status=='report_uploaded' }}>리포트 업로드 완료</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- 숨김: 현재 로그인된 파트너 필터 -->
+      <input type="hidden" name="partner_id" value="{{ partner_id or '' }}">
+      <input type="hidden" name="partner_name" value="{{ partner_name or '' }}">
+
+      <!-- 조회 버튼 -->
+      <div style="margin-top:4px; display:flex; justify-content:flex-end;">
+        <button type="submit"
+                style="cursor:pointer; border:none; border-radius:999px;
+                       background:#1e40af; color:#ffffff;
+                       padding:8px 24px; font-weight:600; font-size:14px;">
+          조회
+        </button>
+      </div>
+
+    </form>
+  </div>
+
+  <!-- 결과 테이블 -->
+  <div style="background:#ffffff; border:1px solid #e5e7eb; border-radius:16px; padding:0; box-shadow:0 6px 18px rgba(0,0,0,.03); overflow:auto;">
+    <table style="width:100%; border-collapse:collapse;">
+      <thead>
+        <tr style="background:#f3f4f6;">
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563;">고객신청일</th>
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563;">담당자신청일</th>
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563;">고객명</th>
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563;">고객연락처</th>
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563;">진행 상태값</th>
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563;">리포트 발송여부</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% if rows and rows|length > 0 %}
+        {# rows: (pcm, resp, sr, rf) 튜플이라고 가정 #}
+        {% for pcm, resp, sr, rf in rows %}
+          <tr>
+            <!-- 고객신청일: partner_client_mapping.client_submitted_at -->
+            <td style="padding:10px 12px; font-size:14px; text-align:center;">
+              {{ to_kst_str(pcm.client_submitted_at) if pcm.client_submitted_at else '' }}
+            </td>
+
+            <!-- 담당자신청일: partner_client_mapping.created_at -->
+            <td style="padding:10px 12px; font-size:14px; text-align:center;">
+              {{ to_kst_str(pcm.created_at) }}
+            </td>
+
+            <!-- 고객명: 두 번째 글자 마스킹 -->
+            <td style="padding:10px 12px; font-size:14px; text-align:center;">
+              {% set nm = pcm.client_name or '' %}
+              {% if nm|length >= 2 %}
+                {{ nm[0] ~ '*' ~ nm[2:] }}
+              {% else %}
+                {{ nm }}
+              {% endif %}
+            </td>
+
+            <!-- 고객연락처: 010****0000 형식으로 마스킹 -->
+            <td style="padding:10px 12px; font-size:14px; text-align:center;">
+              {% set ph = pcm.client_phone or '' %}
+              {% if ph|length >= 7 %}
+                {{ ph[:3] ~ '****' ~ ph[-4:] }}
+              {% else %}
+                {{ ph }}
+              {% endif %}
+            </td>
+
+            <!-- 진행 상태값: /admin/responses와 동일 매핑 -->
+            <td style="padding:10px 12px; font-size:14px; text-align:center;">
+              {% set st = resp.status if resp else '' %}
+              {% if st == 'submitted' %}
+                <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#eef2ff; font-size:12px;">신청완료</span>
+              {% elif st == 'accepted' %}
+                <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#dcfce7; font-size:12px;">접수완료</span>
+              {% elif st == 'report_uploaded' %}
+                <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#fee2e2; font-size:12px;">리포트 업로드 완료</span>
+              {% else %}
+                <span style="font-size:12px; color:#6b7280;">{{ st or '-' }}</span>
+              {% endif %}
+            </td>
+
+            <!-- 리포트 발송여부: reportfile 존재 여부 -->
+            <td style="padding:10px 12px; font-size:14px; text-align:center;">
+              {% if rf %}
+                <span style="color:#16a34a; font-weight:600;">발송</span>
+              {% else %}
+                <span style="color:#6b7280;">미발송</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      {% else %}
+        <tr>
+          <td colspan="6" style="padding:20px; text-align:center; font-size:14px; color:#6b7280;">
+            조회 결과가 없습니다.
+          </td>
+        </tr>
+      {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+</div>
+{% endblock %}

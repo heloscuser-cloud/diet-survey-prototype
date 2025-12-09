@@ -358,7 +358,7 @@ class PartnerClientMapping(SQLModel, table=True):
     client_phone: Optional[str] = None
 
     is_mapped: bool = Field(default=False)
-
+    client_submitted_at: Optional[datetime] = None
 
 class Otp(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -666,6 +666,22 @@ def try_auto_map_partner_for_respondent(
     respondent.is_mapped = True
     mapping.is_mapped = True
     
+    # 고객 문진 제출 시각을 partner_client_mapping의 client_submitted_at로 복사 (있으면)
+    try:
+        sr = session.exec(
+            select(SurveyResponse)
+            .where(SurveyResponse.respondent_id == respondent.id)
+            .order_by(SurveyResponse.submitted_at.desc())
+        ).first()
+        if sr and sr.submitted_at:
+            mapping.client_submitted_at = sr.submitted_at
+    except Exception as e:
+        logging.warning(
+            "[AUTO-MAP] failed to set client_submitted_at: resp_id=%s err=%r",
+            getattr(respondent, "id", None),
+            e,
+        )
+        
     # ✅ 매핑이 실제로 일어난 시점 기록
     respondent.updated_at = now_kst()
 
@@ -738,6 +754,22 @@ def try_auto_map_respondent_for_mapping(
 
     resp.is_mapped = True
     mapping.is_mapped = True
+
+    # 고객 문진 제출 시각을 partner_client_mapping의 client_submitted_at로 복사 (있으면)
+    try:
+        sr = session.exec(
+            select(SurveyResponse)
+            .where(SurveyResponse.respondent_id == resp.id)
+            .order_by(SurveyResponse.submitted_at.desc())
+        ).first()
+        if sr and sr.submitted_at:
+            mapping.client_submitted_at = sr.submitted_at
+    except Exception as e:
+        logging.warning(
+            "[AUTO-MAP2] failed to set client_submitted_at: resp_id=%s err=%r",
+            getattr(resp, "id", None),
+            e,
+        )
 
     session.add(resp)
     session.add(mapping)
@@ -916,6 +948,18 @@ def partner_login_get(request: Request):
         "request": request,
         "error": None
     })
+    
+# -- 파트너 로그아웃 --#
+@app.get("/partner/logout")
+def partner_logout(request: Request):
+    """
+    파트너 세션만 정리하고 /partner/login 으로 돌려보낸다.
+    (사용자 설문용 AUTH 쿠키는 건드리지 않음)
+    """
+    request.session.clear()
+    return RedirectResponse(url="/partner/login", status_code=303)
+
+
 
 @app.get("/partner/signup", response_class=HTMLResponse)
 def partner_signup_form(request: Request):
@@ -1322,6 +1366,174 @@ async def partner_mapping_post(
     )
 
 
+# ---------------------------
+# 파트너 신청내역 조회 (/partner/requests)
+# ---------------------------
+@app.get("/partner/requests", response_class=HTMLResponse)
+def partner_requests(
+    request: Request,
+    client_from: str | None = None,
+    client_to: str | None = None,
+    partner_from: str | None = None,
+    partner_to: str | None = None,
+    client_name: str | None = None,
+    client_phone_suffix: str | None = None,
+    status: str | None = None,
+    session: Session = Depends(get_session),
+):
+    # 1) 로그인 체크
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=302)
+
+    # 2) 기본 쿼리: 현재 파트너의 매핑만
+    stmt = select(PartnerClientMapping).where(
+        PartnerClientMapping.partner_id == partner_id
+    )
+
+    # --- 날짜 파싱 헬퍼 ---
+    def parse_date(s: str | None):
+        if not s:
+            return None
+        try:
+            return datetime.strptime(s, "%Y-%m-%d").date()
+        except Exception:
+            return None
+
+    c_from_d = parse_date(client_from)
+    c_to_d = parse_date(client_to)
+    p_from_d = parse_date(partner_from)
+    p_to_d = parse_date(partner_to)
+
+    # 최대 30일로 좁혀주는 헬퍼
+    def clamp_30(d1, d2):
+        if d1 and d2:
+            days = (d2 - d1).days
+            if days > 30:
+                # 끝 기준으로 30일만 보이도록 시작일 조정
+                d1 = d2 - timedelta(days=30)
+        return d1, d2
+
+    c_from_d, c_to_d = clamp_30(c_from_d, c_to_d)
+    p_from_d, p_to_d = clamp_30(p_from_d, p_to_d)
+
+    # --- 고객신청일(client_submitted_at) 필터 ---
+    if c_from_d or c_to_d:
+        c_start_utc, c_end_utc = kst_date_range_to_utc_datetimes(c_from_d, c_to_d)
+        if c_start_utc:
+            stmt = stmt.where(PartnerClientMapping.client_submitted_at >= c_start_utc)
+        if c_end_utc:
+            stmt = stmt.where(PartnerClientMapping.client_submitted_at < c_end_utc)
+
+    # --- 담당자신청일(created_at) 필터 ---
+    if p_from_d or p_to_d:
+        p_start_utc, p_end_utc = kst_date_range_to_utc_datetimes(p_from_d, p_to_d)
+        if p_start_utc:
+            stmt = stmt.where(PartnerClientMapping.created_at >= p_start_utc)
+        if p_end_utc:
+            stmt = stmt.where(PartnerClientMapping.created_at < p_end_utc)
+
+    # --- 고객명 like 검색 ---
+    if client_name:
+        like = f"%{client_name.strip()}%"
+        stmt = stmt.where(PartnerClientMapping.client_name.ilike(like))
+
+    # --- 휴대폰 뒷 4자리 검색 ---
+    if client_phone_suffix:
+        digits = re.sub(r"[^0-9]", "", client_phone_suffix)
+        if digits:
+            stmt = stmt.where(PartnerClientMapping.client_phone.ilike(f"%{digits}"))
+
+    # 정렬: 담당자신청일 최신순
+    mappings = session.exec(
+        stmt.order_by(PartnerClientMapping.created_at.desc())
+    ).all()
+
+    rows = []
+
+    for pcm in mappings:
+        resp = None
+        sr = None
+        rf = None
+
+        # 3) respondent 찾기: 같은 파트너 + 이름 + 휴대폰 기준 (가장 최근 1건)
+        try:
+            if pcm.client_name and pcm.client_phone:
+                resp = session.exec(
+                    select(Respondent)
+                    .where(
+                        Respondent.partner_id == pcm.partner_id,
+                        Respondent.applicant_name == pcm.client_name,
+                        Respondent.client_phone == pcm.client_phone,
+                    )
+                    .order_by(Respondent.created_at.desc())
+                ).first()
+        except Exception as e:
+            logging.warning(
+                "[PARTNER-REQ][RESP-LOOKUP][WARN] mapping_id=%s err=%r",
+                getattr(pcm, "id", None),
+                e,
+            )
+
+        # 4) 진행 상태값(status) 필터
+        if status in ("submitted", "accepted", "report_uploaded"):
+            # respondent가 없으면 이 상태 필터를 만족할 수 없음 → 스킵
+            if not resp or resp.status != status:
+                continue
+
+        # 5) SurveyResponse / ReportFile (최신 1건)
+        if resp:
+            try:
+                sr = session.exec(
+                    select(SurveyResponse)
+                    .where(SurveyResponse.respondent_id == resp.id)
+                    .order_by(SurveyResponse.submitted_at.desc())
+                ).first()
+            except Exception as e:
+                logging.warning(
+                    "[PARTNER-REQ][SR-LOOKUP][WARN] resp_id=%s err=%r",
+                    getattr(resp, "id", None),
+                    e,
+                )
+
+            if sr:
+                rf = session.exec(
+                    select(ReportFile).where(
+                        ReportFile.survey_response_id == sr.id
+                    )
+                ).first()
+
+        rows.append((pcm, resp, sr, rf))
+
+    # 템플릿에서 바로 쓸 수 있게 KST 포맷터 제공
+    to_kst_str = lambda dt: to_kst(dt).strftime("%Y-%m-%d %H:%M") if dt else ""
+
+    # 파트너 이름은 필요하면 조회 (선택)
+    partner_name = None
+    try:
+        admin_user = session.get(UserAdmin, partner_id)
+        if admin_user and admin_user.name:
+            partner_name = admin_user.name
+    except Exception:
+        partner_name = None
+
+    return templates.TemplateResponse(
+        "partner_requests.html",  # 이미 만들어둔 템플릿 이름
+        {
+            "request": request,
+            "rows": rows,
+            "client_from": client_from,
+            "client_to": client_to,
+            "partner_from": partner_from,
+            "partner_to": partner_to,
+            "client_name": client_name,
+            "client_phone_suffix": client_phone_suffix,
+            "status": status or "",
+            "partner_id": partner_id,
+            "partner_name": partner_name,
+            "to_kst_str": to_kst_str,
+        },
+    )
 
 
 #사용자 로그인 화면 렌더
