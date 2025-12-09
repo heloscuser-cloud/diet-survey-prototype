@@ -1365,7 +1365,6 @@ async def partner_mapping_post(
         },
     )
 
-
 # ---------------------------
 # 파트너 신청내역 조회 (/partner/requests)
 # ---------------------------
@@ -1405,7 +1404,7 @@ def partner_requests(
     p_from_d = parse_date(partner_from)
     p_to_d = parse_date(partner_to)
 
-    # 최대 30일로 좁혀주는 헬퍼
+    # 최대 30일 제한
     def clamp_30(d1, d2):
         if d1 and d2:
             days = (d2 - d1).days
@@ -1419,44 +1418,50 @@ def partner_requests(
 
     # --- 고객신청일(client_submitted_at) 필터 ---
     if c_from_d or c_to_d:
-        c_start_utc, c_end_utc = kst_date_range_to_utc_datetimes(c_from_d, c_to_d)
-        if c_start_utc:
-            stmt = stmt.where(PartnerClientMapping.client_submitted_at >= c_start_utc)
-        if c_end_utc:
-            stmt = stmt.where(PartnerClientMapping.client_submitted_at < c_end_utc)
+        start_utc, end_utc = kst_date_range_to_utc_datetimes(c_from_d, c_to_d)
+        if start_utc:
+            stmt = stmt.where(PartnerClientMapping.client_submitted_at >= start_utc)
+        if end_utc:
+            stmt = stmt.where(PartnerClientMapping.client_submitted_at < end_utc)
 
     # --- 담당자신청일(created_at) 필터 ---
     if p_from_d or p_to_d:
-        p_start_utc, p_end_utc = kst_date_range_to_utc_datetimes(p_from_d, p_to_d)
-        if p_start_utc:
-            stmt = stmt.where(PartnerClientMapping.created_at >= p_start_utc)
-        if p_end_utc:
-            stmt = stmt.where(PartnerClientMapping.created_at < p_end_utc)
+        start_utc, end_utc = kst_date_range_to_utc_datetimes(p_from_d, p_to_d)
+        if start_utc:
+            stmt = stmt.where(PartnerClientMapping.created_at >= start_utc)
+        if end_utc:
+            stmt = stmt.where(PartnerClientMapping.created_at < end_utc)
 
-    # --- 고객명 like 검색 ---
+    # --- 고객명: 정확 일치 ---
     if client_name:
-        like = f"%{client_name.strip()}%"
-        stmt = stmt.where(PartnerClientMapping.client_name.ilike(like))
+        stmt = stmt.where(PartnerClientMapping.client_name == client_name.strip())
 
-    # --- 휴대폰 뒷 4자리 검색 ---
+    # --- 휴대폰 뒷 4자리: 정확 일치 ---
     if client_phone_suffix:
         digits = re.sub(r"[^0-9]", "", client_phone_suffix)
         if digits:
-            stmt = stmt.where(PartnerClientMapping.client_phone.ilike(f"%{digits}"))
+            # DB에 저장된 전체 번호의 "맨 뒤 4자리"가 동일해야 함
+            stmt = stmt.where(
+                func.right(PartnerClientMapping.client_phone, 4) == digits
+            )
 
-    # 정렬: 담당자신청일 최신순
-    mappings = session.exec(
-        stmt.order_by(PartnerClientMapping.created_at.desc())
-    ).all()
+    # 정렬: "고객 신청일(제출일)" 기준 최신순
+    # client_submitted_at이 비어있는 경우를 대비해서 created_at도 함께 정렬
+    stmt = stmt.order_by(
+        PartnerClientMapping.client_submitted_at.desc(),
+        PartnerClientMapping.created_at.desc(),
+    )
 
-    rows = []
+    mappings = session.exec(stmt).all()
+
+    rows: list[tuple[PartnerClientMapping, Optional[Respondent], Optional[SurveyResponse], Optional[ReportFile]]] = []
 
     for pcm in mappings:
-        resp = None
-        sr = None
-        rf = None
+        resp: Optional[Respondent] = None
+        sr: Optional[SurveyResponse] = None
+        rf: Optional[ReportFile] = None
 
-        # 3) respondent 찾기: 같은 파트너 + 이름 + 휴대폰 기준 (가장 최근 1건)
+        # 3) respondent 찾기: 같은 파트너 + 이름 + 전화 기준, 최신 1건
         try:
             if pcm.client_name and pcm.client_phone:
                 resp = session.exec(
@@ -1475,9 +1480,8 @@ def partner_requests(
                 e,
             )
 
-        # 4) 진행 상태값(status) 필터
+        # 4) 진행 상태값 필터 (submitted / accepted / report_uploaded)
         if status in ("submitted", "accepted", "report_uploaded"):
-            # respondent가 없으면 이 상태 필터를 만족할 수 없음 → 스킵
             if not resp or resp.status != status:
                 continue
 
@@ -1505,35 +1509,37 @@ def partner_requests(
 
         rows.append((pcm, resp, sr, rf))
 
-    # 템플릿에서 바로 쓸 수 있게 KST 포맷터 제공
-    to_kst_str = lambda dt: to_kst(dt).strftime("%Y-%m-%d %H:%M") if dt else ""
+    # 템플릿에서 바로 쓸 수 있게 KST 포맷 함수 제공
+    def to_kst_str(dt: Optional[datetime]) -> str:
+        return to_kst(dt).strftime("%Y-%m-%d %H:%M") if dt else ""
 
-    # 파트너 이름은 필요하면 조회 (선택)
-    partner_name = None
+    # 파트너 이름(옵션)
+    partner_name_val = None
     try:
         admin_user = session.get(UserAdmin, partner_id)
         if admin_user and admin_user.name:
-            partner_name = admin_user.name
+            partner_name_val = admin_user.name
     except Exception:
-        partner_name = None
+        partner_name_val = None
 
     return templates.TemplateResponse(
-        "partner_requests.html",  # 이미 만들어둔 템플릿 이름
+        "partner_requests.html",   # 이미 만들어둔 템플릿 파일 이름
         {
             "request": request,
             "rows": rows,
-            "client_from": client_from,
-            "client_to": client_to,
-            "partner_from": partner_from,
-            "partner_to": partner_to,
-            "client_name": client_name,
-            "client_phone_suffix": client_phone_suffix,
+            "client_from": client_from or "",
+            "client_to": client_to or "",
+            "partner_from": partner_from or "",
+            "partner_to": partner_to or "",
+            "client_name": client_name or "",
+            "client_phone_suffix": client_phone_suffix or "",
             "status": status or "",
             "partner_id": partner_id,
-            "partner_name": partner_name,
+            "partner_name": partner_name_val,
             "to_kst_str": to_kst_str,
         },
     )
+
 
 
 #사용자 로그인 화면 렌더
