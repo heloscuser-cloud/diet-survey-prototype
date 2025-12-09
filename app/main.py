@@ -1523,7 +1523,7 @@ def partner_requests(
         partner_name_val = None
 
     return templates.TemplateResponse(
-        "partner_requests.html",   # 이미 만들어둔 템플릿 파일 이름
+        "partner/requests.html",   # 이미 만들어둔 템플릿 파일 이름
         {
             "request": request,
             "rows": rows,
