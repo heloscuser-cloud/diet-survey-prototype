@@ -1371,13 +1371,6 @@ async def partner_mapping_post(
 @app.get("/partner/requests", response_class=HTMLResponse)
 def partner_requests(
     request: Request,
-    client_from: str | None = None,
-    client_to: str | None = None,
-    partner_from: str | None = None,
-    partner_to: str | None = None,
-    client_name: str | None = None,
-    client_phone_suffix: str | None = None,
-    status: str | None = None,
     session: Session = Depends(get_session),
 ):
     # 1) 로그인 체크
@@ -1385,12 +1378,54 @@ def partner_requests(
     if not partner_id:
         return RedirectResponse(url="/partner/login", status_code=302)
 
-    # 2) 기본 쿼리: 현재 파트너의 매핑만
-    stmt = select(PartnerClientMapping).where(
-        PartnerClientMapping.partner_id == partner_id
-    )
+    PAGE_SIZE = 50
 
-    # --- 날짜 파싱 헬퍼 ---
+    # ---------------------------
+    # 쿼리스트링에서 필터값 직접 꺼내기
+    # ---------------------------
+    qp = request.query_params
+
+    raw_page = qp.get("page", "1")
+    try:
+        page = int(raw_page)
+    except ValueError:
+        page = 1
+    if page < 1:
+        page = 1
+
+    date_from = (qp.get("date_from") or "").strip()
+    date_to = (qp.get("date_to") or "").strip()
+    client_name = (qp.get("client_name") or "").strip()
+    client_phone_suffix = (qp.get("client_phone_suffix") or "").strip()
+    status = (qp.get("status") or "").strip()
+
+    # 쿼리스트링이 완전히 비어있으면 "첫 진입"으로 간주
+    is_first_visit = (request.url.query == "")
+
+    # 오늘 날짜 문자열
+    today_str = now_kst().date().isoformat()
+
+    # ---------------------------
+    # 날짜 기본값 세팅 로직
+    # ---------------------------
+    if is_first_visit:
+        # 👉 첫 진입: 둘 다 오늘 날짜로 강제 세팅
+        date_from_str = today_str
+        date_to_str = today_str
+    else:
+        # 👉 조회 후: 사용자가 넘긴 값을 그대로 유지
+        #    (빈 값이면 빈 값 그대로)
+        date_from_str = date_from
+        date_to_str = date_to
+
+    rows: list[tuple[PartnerClientMapping, Optional[Respondent], Optional[SurveyResponse], Optional[ReportFile]]] = []
+    total = 0
+    total_pages = 1
+
+    # ---------------------------
+    # 여기부터는 date_from_str/date_to_str 기준으로 항상 조회
+    # ---------------------------
+
     def parse_date(s: str | None):
         if not s:
             return None
@@ -1399,69 +1434,75 @@ def partner_requests(
         except Exception:
             return None
 
-    c_from_d = parse_date(client_from)
-    c_to_d = parse_date(client_to)
-    p_from_d = parse_date(partner_from)
-    p_to_d = parse_date(partner_to)
+    d_from = parse_date(date_from_str)
+    d_to = parse_date(date_to_str)
 
-    # 최대 30일 제한
-    def clamp_30(d1, d2):
-        if d1 and d2:
-            days = (d2 - d1).days
-            if days > 30:
-                # 끝 기준으로 30일만 보이도록 시작일 조정
-                d1 = d2 - timedelta(days=30)
-        return d1, d2
+    # 기간 최대 31일 제한 (둘 다 있는 경우만)
+    if d_from and d_to:
+        diff_days = (d_to - d_from).days
+        if diff_days > 31:
+            d_from = d_to - timedelta(days=31)
 
-    c_from_d, c_to_d = clamp_30(c_from_d, c_to_d)
-    p_from_d, p_to_d = clamp_30(p_from_d, p_to_d)
+    # KST → UTC 변환
+    start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
 
-    # --- 고객신청일(client_submitted_at) 필터 ---
-    if c_from_d or c_to_d:
-        start_utc, end_utc = kst_date_range_to_utc_datetimes(c_from_d, c_to_d)
-        if start_utc:
-            stmt = stmt.where(PartnerClientMapping.client_submitted_at >= start_utc)
-        if end_utc:
-            stmt = stmt.where(PartnerClientMapping.client_submitted_at < end_utc)
+    # 기본 쿼리: 해당 파트너 매핑만
+    stmt = select(PartnerClientMapping).where(
+        PartnerClientMapping.partner_id == partner_id
+    )
 
-    # --- 담당자신청일(created_at) 필터 ---
-    if p_from_d or p_to_d:
-        start_utc, end_utc = kst_date_range_to_utc_datetimes(p_from_d, p_to_d)
-        if start_utc:
-            stmt = stmt.where(PartnerClientMapping.created_at >= start_utc)
-        if end_utc:
-            stmt = stmt.where(PartnerClientMapping.created_at < end_utc)
+    # --- 날짜 조건: "고객신청일(client_submitted_at) OR 담당자신청일(created_at)" ---
+    if start_utc or end_utc:
+        def make_range(col):
+            cond = None
+            if start_utc:
+                cond = col >= start_utc
+            if end_utc:
+                cond = (cond & (col < end_utc)) if cond is not None else (col < end_utc)
+            return cond
+
+        cond_client = make_range(PartnerClientMapping.client_submitted_at)
+        cond_partner = make_range(PartnerClientMapping.created_at)
+
+        combined = None
+        if cond_client is not None and cond_partner is not None:
+            combined = cond_client | cond_partner
+        elif cond_client is not None:
+            combined = cond_client
+        elif cond_partner is not None:
+            combined = cond_partner
+
+        if combined is not None:
+            stmt = stmt.where(combined)
 
     # --- 고객명: 정확 일치 ---
     if client_name:
-        stmt = stmt.where(PartnerClientMapping.client_name == client_name.strip())
+        stmt = stmt.where(PartnerClientMapping.client_name == client_name)
 
     # --- 휴대폰 뒷 4자리: 정확 일치 ---
     if client_phone_suffix:
         digits = re.sub(r"[^0-9]", "", client_phone_suffix)
         if digits:
-            # DB에 저장된 전체 번호의 "맨 뒤 4자리"가 동일해야 함
-            stmt = stmt.where(
-                func.right(PartnerClientMapping.client_phone, 4) == digits
-            )
+            stmt = stmt.where(func.right(PartnerClientMapping.client_phone, 4) == digits)
 
-    # 정렬: "고객 신청일(제출일)" 기준 최신순
-    # client_submitted_at이 비어있는 경우를 대비해서 created_at도 함께 정렬
+    # 정렬: 고객신청일(제출일) 우선, 없으면 created_at 기준
     stmt = stmt.order_by(
         PartnerClientMapping.client_submitted_at.desc(),
         PartnerClientMapping.created_at.desc(),
+        PartnerClientMapping.id.desc(),
     )
 
     mappings = session.exec(stmt).all()
 
-    rows: list[tuple[PartnerClientMapping, Optional[Respondent], Optional[SurveyResponse], Optional[ReportFile]]] = []
+    # --- 상태 필터/리포트 발송 여부 반영하면서 rows 빌드 ---
+    all_rows: list[tuple[PartnerClientMapping, Optional[Respondent], Optional[SurveyResponse], Optional[ReportFile]]] = []
 
     for pcm in mappings:
         resp: Optional[Respondent] = None
         sr: Optional[SurveyResponse] = None
         rf: Optional[ReportFile] = None
 
-        # 3) respondent 찾기: 같은 파트너 + 이름 + 전화 기준, 최신 1건
+        # Respondent: 같은 파트너 + 이름 + 전화, 최신 1건
         try:
             if pcm.client_name and pcm.client_phone:
                 resp = session.exec(
@@ -1480,12 +1521,12 @@ def partner_requests(
                 e,
             )
 
-        # 4) 진행 상태값 필터 (submitted / accepted / report_uploaded)
+        # 진행 상태값 필터
         if status in ("submitted", "accepted", "report_uploaded"):
             if not resp or resp.status != status:
                 continue
 
-        # 5) SurveyResponse / ReportFile (최신 1건)
+        # SurveyResponse / ReportFile
         if resp:
             try:
                 sr = session.exec(
@@ -1507,9 +1548,22 @@ def partner_requests(
                     )
                 ).first()
 
-        rows.append((pcm, resp, sr, rf))
+        all_rows.append((pcm, resp, sr, rf))
 
-    # 템플릿에서 바로 쓸 수 있게 KST 포맷 함수 제공
+    # --- 페이지네이션 ---
+    total = len(all_rows)
+    total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE if total > 0 else 1
+    if total_pages == 0:
+        total_pages = 1
+
+    if page > total_pages:
+        page = total_pages
+
+    start_idx = (page - 1) * PAGE_SIZE
+    end_idx = start_idx + PAGE_SIZE
+    rows = all_rows[start_idx:end_idx]
+
+    # 출력용 KST 포맷
     def to_kst_str(dt: Optional[datetime]) -> str:
         return to_kst(dt).strftime("%Y-%m-%d %H:%M") if dt else ""
 
@@ -1523,17 +1577,20 @@ def partner_requests(
         partner_name_val = None
 
     return templates.TemplateResponse(
-        "partner/requests.html",   # 이미 만들어둔 템플릿 파일 이름
+        "partner/requests.html",
         {
             "request": request,
             "rows": rows,
-            "client_from": client_from or "",
-            "client_to": client_to or "",
-            "partner_from": partner_from or "",
-            "partner_to": partner_to or "",
-            "client_name": client_name or "",
-            "client_phone_suffix": client_phone_suffix or "",
-            "status": status or "",
+            "page": page,
+            "page_size": PAGE_SIZE,
+            "total": total,
+            "total_pages": total_pages,
+            # 👉 템플릿에서 그대로 쓰는 날짜/필터 값들
+            "date_from": date_from_str,
+            "date_to": date_to_str,
+            "client_name": client_name,
+            "client_phone_suffix": client_phone_suffix,
+            "status": status,
             "partner_id": partner_id,
             "partner_name": partner_name_val,
             "to_kst_str": to_kst_str,
