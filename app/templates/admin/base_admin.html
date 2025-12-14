@@ -24,26 +24,34 @@
 <header>
   <div><strong>관리자</strong> <span class="muted">/ mini</span></div>
   <nav>
-    {# 1) /admin-portal 에서는 우측 버튼 숨김 #}
+    {# 1) /admin-portal: 버튼 숨김 #}
     {% if request.url.path == '/admin-portal' %}
       {# 아무 버튼도 표시하지 않음 #}
 
-    {# 2) /partner/login 에서는 "메인 홈" 버튼만 표시 (→ /admin-portal) #}
+    {# 2) /partner/login: 메인 홈만 #}
     {% elif request.url.path.startswith('/partner/login') %}
       <a href="/admin-portal">메인 홈</a>
 
-    {# 3) 그 외 /partner/* 페이지에서는 기존처럼 파트너용 헤더 #}
+    {# 3) /admin/login: 메인 홈만 #}
+    {% elif request.url.path.startswith('/admin/login') %}
+      <a href="/admin-portal">메인 홈</a>
+
+    {# 4) /partner/* (로그인 이후 화면들): 대시보드 + 로그아웃 #}
     {% elif request.url.path.startswith('/partner') %}
       <a href="/partner/dashboard">대시보드</a>
       <a href="/partner/logout" onclick="return confirm('로그아웃 하시겠어요?')">로그아웃</a>
 
-    {# 4) 나머지는 기존 관리자 헤더 (#/admin/* 등) #}
+    {# 5) /admin/responses*: 로그아웃만 #}
+    {% elif request.url.path.startswith('/admin/responses') %}
+      <a href="/admin/logout" onclick="return confirm('로그아웃 하시겠어요?')">로그아웃</a>
+
+    {# 6) 나머지 /admin/*: 응답 목록 + 로그아웃 (기존 동작 유지) #}
     {% else %}
-      <a href="/admin/responses">응답 목록</a>
       <a href="/admin/logout" onclick="return confirm('로그아웃 하시겠어요?')">로그아웃</a>
     {% endif %}
   </nav>
 </header>
+
 
 
   <div class="wrap">
