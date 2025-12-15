@@ -22,8 +22,9 @@
 
     <!-- 사번(필수, 숫자만) -->
     <label style="display:flex; flex-direction:column; font-size:14px;">
-      사번<span style="color:#ef4444; margin-left:4px;">*</span>
+      <span>사번 <span style="color:#ef4444;">*</span></span>
       <input type="text" name="emp_no" required
+             value="{{ emp_no or '' }}"
              inputmode="numeric"
              pattern="[0-9]+"
              placeholder="숫자만 입력"
@@ -32,16 +33,18 @@
 
     <!-- 이름(필수) -->
     <label style="display:flex; flex-direction:column; font-size:14px;">
-      이름<span style="color:#ef4444; margin-left:4px;">*</span>
+      <span>이름 <span style="color:#ef4444;">*</span></span>
       <input type="text" name="name" required
+             value="{{ name or '' }}"
              placeholder="홍길동"
              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
     </label>
 
     <!-- 전화번호(필수) -->
     <label style="display:flex; flex-direction:column; font-size:14px;">
-      전화번호<span style="color:#ef4444; margin-left:4px;">*</span>
+      <span>전화번호 <span style="color:#ef4444;">*</span></span>
       <input type="tel" name="phone" required
+             value="{{ phone or '' }}"
              inputmode="numeric"
              pattern="[0-9]{10,11}"
              placeholder="01012345678"
@@ -53,25 +56,39 @@
 
     <!-- 이메일(필수) -->
     <label style="display:flex; flex-direction:column; font-size:14px;">
-      이메일 주소<span style="color:#ef4444; margin-left:4px;">*</span>
+      <span>이메일 주소 <span style="color:#ef4444;">*</span></span>
       <input type="email" name="email" required
+             value="{{ email or '' }}"
              placeholder="user@example.com"
              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
     </label>
 
-    <!-- 소속(선택) -->
+    <!-- 이메일 확인(필수) -->
     <label style="display:flex; flex-direction:column; font-size:14px;">
-      소속(회사명 등)
-      <input type="text" name="division"
-             placeholder="예: ㈜가온앤"
-             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+      <span>이메일 주소(확인-이메일 주소 동일하게 재입력) <span style="color:#ef4444;">*</span></span>
+      <input type="email" name="email_confirm" required
+            value="{{ email_confirm or '' }}"
+            placeholder="user@example.com"
+            style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
     </label>
+
+
+    <!-- 소속(필수) -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      <span>소속(회사명 등) <span style="color:#ef4444;">*</span></span>
+      <input type="text" name="division" required
+            value="{{ division or '' }}"
+            placeholder="예: ㈜가온앤"
+            style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+    </label>
+
 
     <!-- 부서(선택) -->
     <label style="display:flex; flex-direction:column; font-size:14px;">
       부서
       <input type="text" name="department"
-             placeholder="예: 영업팀"
+             value="{{ department or '' }}"
+             placeholder="예: 영업팀, 서울지부"
              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
     </label>
 
@@ -105,6 +122,26 @@
         이미 계정이 있으신가요? 로그인 하러가기
       </a>
     </div>
+
+<script>
+  (function () {
+    const form = document.querySelector('form[action="/partner/signup"]');
+    if (!form) return;
+
+    form.addEventListener('submit', function (e) {
+      const email = (form.querySelector('input[name="email"]')?.value || '').trim();
+      const email2 = (form.querySelector('input[name="email_confirm"]')?.value || '').trim();
+
+      if (email && email2 && email !== email2) {
+        e.preventDefault();
+        alert("이메일주소를 확인해주세요");
+        return;
+      }
+    });
+  })();
+</script>
+
+
   </form>
 </div>
 {% endblock %}
