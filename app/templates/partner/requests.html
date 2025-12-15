@@ -2,6 +2,32 @@
 {% block title %}신청내역 조회{% endblock %}
 
 {% block content %}
+
+<style>
+  /* ✅ 모바일에서만: 테이블 가로 스크롤 */
+  @media (max-width: 768px) {
+    .table-scroll {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      width: 100%;
+      border: 1px solid #eee;
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    .table-scroll table {
+      min-width: 900px;   /* 열이 많으면 더 키워도 됨 (예: 1100px) */
+      table-layout: auto;
+    }
+
+    /* 너무 찌그러지지 않게 셀 줄바꿈 제한(필요하면) */
+    .table-scroll th,
+    .table-scroll td {
+      white-space: nowrap;
+    }
+  }
+</style>
+
 <div style="max-width:960px; margin:24px auto; padding:0 12px;">
 
   <h2 style="font-size:20px; font-weight:700; margin-bottom:16px;">신청내역 조회</h2>
@@ -102,7 +128,7 @@
   </div>
 
   <!-- 결과 테이블 -->
-  <div style="background:#ffffff; border:1px solid #e5e7eb; border-radius:16px; padding:0; box-shadow:0 6px 18px rgba(0,0,0,.03); overflow:auto;">
+  <div class="table-scroll"; style="background:#ffffff; border:1px solid #e5e7eb; border-radius:16px; padding:0; box-shadow:0 6px 18px rgba(0,0,0,.03); overflow:auto;">
     <table style="width:100%; border-collapse:collapse;">
       <thead>
         <tr style="background:#f3f4f6;">
