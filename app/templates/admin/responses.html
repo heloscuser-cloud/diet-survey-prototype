@@ -1,74 +1,68 @@
-<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>응답 목록</title>
-  <style>
-    :root{
-      --bg:#f6f7fb;
-      --card:#fff;
-      --border:#e5e7eb;
-      --text:#111827;
-      --muted:#6b7280;
-      --btn1:#1e40af; /* 조회 */
-      --btn2:#06b6d4; /* 접수 */
-      --btn3:#0ea5e9; /* 엑셀 */
-    }
-    html,body{height:100%}
-    body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-    /* 전체 폭 꽉 채우기 */
-    .page{width:100%; max-width:1366px; margin:0 auto; padding:20px}
-    /* 카드 */
-    .card{background:var(--card); border:1px solid var(--border); border-radius:16px; box-shadow:0 6px 18px rgba(0,0,0,.04)}
-    /* 검색 카드: 왼쪽 정렬 */
-    .search-card{padding:16px 16px 8px 16px; margin-bottom:10px}
-    .row{display:flex; gap:12px; flex-wrap:wrap; align-items:center}
-    .row>div{display:flex; gap:8px; align-items:center}
-    label{font-size:12px; color:#64748b}
-    input, select{padding:8px 10px; border:1px solid var(--border); border-radius:10px; background:#fff; font-size:14px}
-    .w-date{width:150px}
-    .w-status{width:210px}
-    .w-text{ width:360px }
-    /* 컨트롤 바: 검색과 테이블 사이, 왼쪽 정렬 */
-    .control-bar{display:flex; justify-content:flex-start; gap:8px; padding:8px 12px; margin-bottom:10px}
-    .control-bar.card{border-radius:12px}
-    /* 테이블: 화면 가득 */
-    .table-card{padding:0; overflow:auto}
-    table{width:100%; border-collapse:collapse; table-layout:auto; background:#fff}
-    th, td{padding:10px 12px; border-bottom:1px solid var(--border); font-size:14px; text-align:center}
-    th{background:#f3f4f6; text-align:left}
-    .nowrap{white-space:nowrap}
-    .tag{display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:#eef2ff}
-    .muted{color:var(--muted)}
-    /* 버튼: 둥근, 테두리 없음, 커서 손가락 */
-    .btn{cursor:pointer; border:none; border-radius:999px; color:#fff; padding:.5rem 1rem; font-weight:600}
-    .btn:hover{opacity:.95}
-    .btn:active{opacity:.9}
-    .btn-primary{background:var(--btn1)}
-    .btn-cyan{background:var(--btn2)}
-    .btn-sky{background:var(--btn3)}
-    .btn-sm{padding:.4rem .8rem; font-weight:600;}
-    /* 아이콘 버튼(정사각, 테두리 제거) */
-    .iconbtn{width:28px; height:28px; border:none; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; background:#7ED2FF; cursor:pointer}
-    .iconbtn2{width:28px; height:28px; border:none; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; background:#FFB4B4; cursor:pointer}
-    .iconbtn:hover{opacity:.9}
-    /* 페이지네이션 */
-    .pagination{display:flex; justify-content:center; gap:6px; margin:16px 0}
-    .pagination a, .pagination span{
-      display:inline-block; min-width:28px; padding:6px 10px; border-radius:8px; text-decoration:none
-    }
-    .pagination a{ background:#e5e7eb; color:#1e293b}
-    .pagination span{ background:#1e40af; color:#fff; font-weight:700}
-    /* 상단 작은 폭 컨트롤: 페이지당 조회수 */
-    .pagesize-card{display:flex; align-items:center; gap:8px; padding:8px 12px; margin-bottom:10px}
-    /* 파일 아이콘 */
-    .ico{width:16px; height:16px}
-table thead th, table tbody td { text-align: center !important; }
-  </style>
-</head>
-<body>
+{% extends "admin/base_admin.html" %}
+{% block title %}가온앤 관리자페이지{% endblock %}
+
+{% block content %}
+<style>
+  :root{
+    --bg:#f6f7fb;
+    --card:#fff;
+    --border:#e5e7eb;
+    --text:#111827;
+    --muted:#6b7280;
+    --btn1:#1e40af; /* 조회 */
+    --btn2:#06b6d4; /* 접수 */
+    --btn3:#0ea5e9; /* 엑셀 */
+  }
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  /* 전체 폭 꽉 채우기 */
+  .page{width:100%; max-width:1366px; margin:0 auto; padding:20px}
+  /* 카드 */
+  .card{background:var(--card); border:1px solid var(--border); border-radius:16px; box-shadow:0 6px 18px rgba(0,0,0,.04)}
+  /* 검색 카드: 왼쪽 정렬 */
+  .search-card{padding:16px 16px 8px 16px; margin-bottom:10px}
+  .row{display:flex; gap:12px; flex-wrap:wrap; align-items:center}
+  .row>div{display:flex; gap:8px; align-items:center}
+  label{font-size:12px; color:#64748b}
+  input, select{padding:8px 10px; border:1px solid var(--border); border-radius:10px; background:#fff; font-size:14px}
+  .w-date{width:150px}
+  .w-status{width:210px}
+  .w-text{ width:360px }
+  /* 컨트롤 바: 검색과 테이블 사이, 왼쪽 정렬 */
+  .control-bar{display:flex; justify-content:flex-start; gap:8px; padding:8px 12px; margin-bottom:10px}
+  .control-bar.card{border-radius:12px}
+  /* 테이블: 화면 가득 */
+  .table-card{padding:0; overflow:auto}
+  table{width:100%; border-collapse:collapse; table-layout:auto; background:#fff}
+  th, td{padding:10px 12px; border-bottom:1px solid var(--border); font-size:14px; text-align:center}
+  th{background:#f3f4f6; text-align:left}
+  .nowrap{white-space:nowrap}
+  .tag{display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:#eef2ff}
+  .muted{color:var(--muted)}
+  /* 버튼 */
+  .btn{cursor:pointer; border:none; border-radius:999px; color:#fff; padding:.5rem 1rem; font-weight:600}
+  .btn:hover{opacity:.95}
+  .btn:active{opacity:.9}
+  .btn-primary{background:var(--btn1)}
+  .btn-cyan{background:var(--btn2)}
+  .btn-sky{background:var(--btn3)}
+  .btn-sm{padding:.4rem .8rem; font-weight:600;}
+  .iconbtn{width:28px; height:28px; border:none; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; background:#7ED2FF; cursor:pointer}
+  .iconbtn2{width:28px; height:28px; border:none; border-radius:8px; display:inline-flex; align-items:center; justify-content:center; background:#FFB4B4; cursor:pointer}
+  .iconbtn:hover{opacity:.9}
+  .pagination{display:flex; justify-content:center; gap:6px; margin:16px 0}
+  .pagination a, .pagination span{
+    display:inline-block; min-width:28px; padding:6px 10px; border-radius:8px; text-decoration:none
+  }
+  .pagination a{ background:#e5e7eb; color:#1e293b}
+  .pagination span{ background:#1e40af; color:#fff; font-weight:700}
+  .pagesize-card{display:flex; align-items:center; gap:8px; padding:8px 12px; margin-bottom:10px}
+  .ico{width:16px; height:16px}
+  table thead th, table tbody td { text-align: center !important; }
+</style>
+
 <div class="page">
+
 
   <!-- 검색 조건: 전체 하얀 영역, 왼쪽 정렬 -->
   <div class="card search-card">
@@ -262,5 +256,3 @@ function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.s
   });
 
 </script>
-</body>
-</html>
