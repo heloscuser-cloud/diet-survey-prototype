@@ -245,6 +245,16 @@
 </div>
 
 <script>
+  function pad2(n) { return String(n).padStart(2, "0"); }
+
+  // ✅ UTC(toISOString) 금지. 로컬(KST 포함) 기준 YYYY-MM-DD 생성
+  function formatLocalYYYYMMDD(d) {
+    const y = d.getFullYear();
+    const m = pad2(d.getMonth() + 1);
+    const day = pad2(d.getDate());
+    return `${y}-${m}-${day}`;
+  }
+
   document.addEventListener('DOMContentLoaded', function() {
     const fromInput = document.querySelector('input[name="date_from"]');
     const toInput = document.querySelector('input[name="date_to"]');
@@ -267,29 +277,36 @@
       });
     });
 
-    // 빠른 기간 버튼
-    document.querySelectorAll('[data-range]').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        const type = this.getAttribute('data-range');
-        const today = new Date();
-        const toStr = today.toISOString().slice(0,10);
+// 빠른 기간 버튼
+document.querySelectorAll('[data-range]').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    const type = this.getAttribute('data-range');
 
-        let from = new Date(today);
-        if (type === 'today') {
-          // 오늘 하루
-        } else if (type === '1w') {
-          from.setDate(today.getDate() - 6); // 오늘 포함 7일
-        } else if (type === '2w') {
-          from.setDate(today.getDate() - 13); // 오늘 포함 14일
-        } else if (type === '1m') {
-          from.setDate(today.getDate() - 30); // 오늘 포함 31일 근처
-        }
-        const fromStr = from.toISOString().slice(0,10);
+    // ✅ KST 포함 '로컬 날짜' 기준으로 계산되도록:
+    const today = new Date();
+    today.setHours(12, 0, 0, 0); // (권장) 날짜 밀림 방지용 정오 고정
 
-        if (fromInput) fromInput.value = fromStr;
-        if (toInput) toInput.value = toStr;
-      });
-    });
+    const toStr = formatLocalYYYYMMDD(today);
+
+    let from = new Date(today);
+    if (type === 'today') {
+      // 오늘 하루
+    } else if (type === '1w') {
+      from.setDate(today.getDate() - 6); // 오늘 포함 7일
+    } else if (type === '2w') {
+      from.setDate(today.getDate() - 13); // 오늘 포함 14일
+    } else if (type === '1m') {
+      from.setDate(today.getDate() - 30); // 오늘 포함 31일 근처
+    }
+
+    const fromStr = formatLocalYYYYMMDD(from);
+
+    if (fromInput) fromInput.value = fromStr;
+    if (toInput) toInput.value = toStr;
+  });
+});
+
+
   });
 </script>
 
