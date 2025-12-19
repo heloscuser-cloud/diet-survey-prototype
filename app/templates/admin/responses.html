@@ -331,7 +331,7 @@ function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.s
   f.addEventListener("submit", function(){
     // hidden page=1은 그대로, 추가 작업 없음
   });
-})
+})();
 
   function getSelectedIds(){
     return Array.from(document.querySelectorAll('.rowChk:checked')).map(el=>el.value).filter(Boolean);
@@ -390,7 +390,7 @@ if (s) s.value = nextUrl;
 
 
   document.querySelectorAll("input.rowNext").forEach(el => el.value = nextUrl);
-})
+})();
 
 
 // 담당자 툴팁: ⓘ 클릭 토글, 바깥 클릭/ESC 닫기
@@ -421,7 +421,7 @@ if (s) s.value = nextUrl;
   document.addEventListener('keydown', function(e){
     if (e.key === 'Escape') hideAll();
   });
-})
+})();
 
 (function(){
   const msg = "{{ msg or '' }}";
