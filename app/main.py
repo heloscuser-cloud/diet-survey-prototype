@@ -30,6 +30,7 @@ from email.message import EmailMessage
 import zipfile
 import csv
 import itsdangerous
+import urllib.parse
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
@@ -590,6 +591,83 @@ def send_submission_email(serial_no: int, applicant_name: str, created_at_kst_st
         print("[EMAIL] DNS A lookup failed (non-fatal):", repr(_e))
 
     # 시도: 587 → 실패 시 465 폴백
+    try:
+        try_587()
+        return
+    except Exception as e1:
+        print("[EMAIL] 587 failed:", repr(e1))
+        traceback.print_exc()
+
+    try:
+        try_465()
+        return
+    except Exception as e2:
+        print("[EMAIL] 465 failed:", repr(e2))
+        traceback.print_exc()
+
+    print("[EMAIL] send failed: both 587 and 465 attempts failed")
+
+
+def send_report_email(
+    to_email: str,
+    partner_name: str,
+    applicant_name: str,
+    partner_requested_at_kst_str: str,
+    pdf_filename: str,
+    pdf_bytes: bytes,
+):
+    host = os.getenv("SMTP_HOST")
+    port_env = os.getenv("SMTP_PORT", "").strip()
+    user = (os.getenv("SMTP_USER") or "").strip()
+    password = (os.getenv("SMTP_PASS") or "").strip()
+    mail_from = (os.getenv("SMTP_FROM") or "").strip()
+    timeout = int(os.getenv("SMTP_TIMEOUT", "25"))
+
+    if not (host and user and password and mail_from and to_email):
+        print("[EMAIL] SMTP env not configured or recipient missing, skip.")
+        return
+
+    login_user = user if "@" in user else f"{user}@naver.com"
+
+    masked_applicant = mask_second_char(applicant_name)
+    subject = f"[(주)가온앤] \"{masked_applicant}\"님의 영양분석 리포트가 도착했습니다."
+
+    body = (
+        f"\"{partner_name}\"님 안녕하세요,\n"
+        f"(주)가온앤 영양분석서비스 담당자입니다.\n\n"
+        f"\"{partner_requested_at_kst_str}\"에 분석신청하신 고객 \"{applicant_name}\"님의 영양분석 리포트를 전달드립니다.\n"
+        f"리포트는 고객님 이외 다른 사람에게 전달되지 않도록 주의해주시기 바랍니다.\n\n"
+        f"저희 가온앤 서비스를 신청해주셔서 감사합니다.\n"
+        f"앞으로도 양질의 서비스를 제공해드리기 위해 최선을 다하겠습니다.\n\n"
+        f"즐거운 하루 보내세요!\n\n"
+        f"** 보안을 위해 리포트에는 암호가 적용되어있습니다 **\n"
+        f"[암호 : 수검자 생년월일 8자리 YYYYMMDD]\n"
+    )
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = mail_from
+    msg["To"] = to_email
+    msg.set_content(body)
+
+    # PDF 첨부
+    msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename=pdf_filename)
+
+    ctx = ssl.create_default_context()
+
+    def try_587():
+        with smtplib.SMTP(host, 587, timeout=timeout) as s:
+            s.ehlo()
+            s.starttls(context=ctx)
+            s.ehlo()
+            s.login(login_user, password)
+            s.send_message(msg)
+
+    def try_465():
+        with smtplib.SMTP_SSL(host, 465, timeout=timeout, context=ctx) as s:
+            s.login(login_user, password)
+            s.send_message(msg)
+
     try:
         try_587()
         return
@@ -1857,6 +1935,7 @@ def admin_responses(
     status: Optional[str] = None,  # submitted/accepted/report_uploaded or ""
     from_: Optional[str] = Query(None, alias="from"),
     to: Optional[str] = None,
+    msg: Optional[str] = None,
     session: Session = Depends(get_session),
 ):
     # 안전 파싱
@@ -1970,7 +2049,7 @@ def admin_responses(
             (Respondent.status == "submitted") &
             (pcm_latest.c.created_at.is_(None))
         )
-    elif status in ("accepted", "report_uploaded"):
+    elif status in ("accepted", "report_uploaded", "report_sent"):
         stmt = stmt.where(Respondent.status == status)
 
 
@@ -2013,17 +2092,31 @@ def admin_responses(
             "to": to,
             "status": status or "",
             "q": q,
+            "msg": msg or "",
             "page_size": page_size_norm,
             "to_kst_str": to_kst_str,
         },
     )
+
+#responses 페이지 안전 리다이렉트 헬퍼
+def _safe_next_url(next_url: str | None) -> str:
+    if not next_url:
+        return "/admin/responses"
+    # 외부 URL 오픈리다이렉트 방지: 내부 경로만 허용
+    if next_url.startswith("/admin/responses"):
+        return next_url
+    if next_url.startswith("/admin/response"):
+        # 혹시 개별 액션 후 responses로 돌리고 싶다면 제한적으로 허용 가능
+        return "/admin/responses"
+    return "/admin/responses"
 
 
 # 접수완료 처리 (POST + Form)
 @admin_router.post("/responses/accept")
 async def admin_bulk_accept(
     request: Request,
-    response: Response, 
+    response: Response,
+    next: str | None = Form(None),
     ids: str = Form(...),  # "1,2,3"
     session: Session = Depends(get_session),
 ):
@@ -2031,15 +2124,118 @@ async def admin_bulk_accept(
     # ... 나머지 처리 및 RedirectResponse 반환
     id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
     if not id_list:
-        return RedirectResponse(url="/admin/responses", status_code=303)
+        return RedirectResponse(url=_safe_next_url(next), status_code=303)
     srs = session.exec(select(SurveyResponse).where(SurveyResponse.id.in_(id_list))).all()
+    sent_cnt = 0
+    accepted_cnt = 0
+
+    for sr in srs:
+        resp = session.get(Respondent, sr.respondent_id)
+        if not resp:
+            continue
+        if resp.status == "report_sent":
+            sent_cnt += 1
+            continue
+        resp.status = "accepted"
+        session.add(resp)
+        accepted_cnt += 1
+
+    session.commit()
+
+    if sent_cnt > 0:
+        msg = f"이미 리포트를 발송한 건 \"{sent_cnt}건\"이 포함되어있습니다.\\n해당 건을 제외하고 접수완료 처리를 진행하였습니다. (접수완료 처리 \"{accepted_cnt}건\")"
+        url = _safe_next_url(next)
+        url = url + ("&" if "?" in url else "?") + "msg=" + urllib.parse.quote(msg)
+        return RedirectResponse(url=url, status_code=303)
+
+    return RedirectResponse(url=_safe_next_url(next), status_code=303)
+
+
+
+@admin_router.post("/responses/report/send")
+async def admin_send_reports(
+    ids: str = Form(...),
+    next: str | None = Form(None),
+    session: Session = Depends(get_session),
+):
+    id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+    if not id_list:
+        return RedirectResponse(url=_safe_next_url(next), status_code=303)
+
+    # SurveyResponse 기준으로 조회
+    srs = session.exec(select(SurveyResponse).where(SurveyResponse.id.in_(id_list))).all()
+
+    # 대상 Respondent / ReportFile / UserAdmin 확보
+    # 유효성 체크: (1) report_uploaded만 가능 (2) report_sent 포함 시 즉시 에러
+    already_sent = 0
+    not_uploaded = 0
+
+    # 미리 respondent_id 모으기
+    respondents: list[Respondent] = []
     for sr in srs:
         resp = session.get(Respondent, sr.respondent_id)
         if resp:
-            resp.status = "accepted"
-            session.add(resp)
+            respondents.append(resp)
+
+    for resp in respondents:
+        if resp.status == "report_sent":
+            already_sent += 1
+        elif resp.status != "report_uploaded":
+            # 문진제출/분석신청/접수완료 등
+            not_uploaded += 1
+
+    if already_sent > 0:
+        msg = f"이미 리포트 발송을 완료한 건 \"{already_sent}건\"이 포함되어있습니다.\\n확인 후 다시 시도해주세요."
+        return RedirectResponse(url=_safe_next_url(next) + ("&" if "?" in _safe_next_url(next) else "?") + "msg=" + urllib.parse.quote(msg), status_code=303)
+
+    if not_uploaded > 0:
+        msg = f"선택한 목록 중 아직 리포트 업로드가 완료되지 않은 건이 \"{not_uploaded}건\" 있습니다. \\n확인 후 다시 시도해주세요."
+        return RedirectResponse(url=_safe_next_url(next) + ("&" if "?" in _safe_next_url(next) else "?") + "msg=" + urllib.parse.quote(msg), status_code=303)
+
+    # 발송 진행: 각 건별 담당자 메일로 PDF 첨부 발송 + 상태 report_sent로 변경
+    for sr in srs:
+        resp = session.get(Respondent, sr.respondent_id)
+        if not resp or resp.status != "report_uploaded":
+            continue
+
+        ua = session.get(UserAdmin, resp.partner_id) if resp.partner_id else None
+        if not ua or not (ua.mail or "").strip():
+            # 담당자 메일 없으면 skip (정책상 전체 실패로 할지 선택인데, 일단 안전하게 skip)
+            continue
+
+        rf = session.exec(select(ReportFile).where(ReportFile.survey_response_id == sr.id)).first()
+        if not rf or not rf.content:
+            continue
+
+        # 담당자신청일: PartnerClientMapping 최신 1건의 created_at
+        partner_requested_at = session.exec(
+            select(func.max(PartnerClientMapping.created_at))
+            .where(
+                (PartnerClientMapping.partner_id == resp.partner_id) &
+                (PartnerClientMapping.client_phone == resp.client_phone)
+            )
+        ).one()
+
+        partner_requested_at_kst = to_kst(partner_requested_at) if partner_requested_at else None
+        partner_requested_at_kst_str = partner_requested_at_kst.strftime("%Y-%m-%d %H:%M") if partner_requested_at_kst else ""
+
+        applicant_name = resp.applicant_name or ""
+        partner_name = ua.name or ""
+
+        send_report_email(
+            to_email=(ua.mail or "").strip(),
+            partner_name=partner_name,
+            applicant_name=applicant_name,
+            partner_requested_at_kst_str=partner_requested_at_kst_str,
+            pdf_filename=rf.filename or "report.pdf",
+            pdf_bytes=rf.content,
+        )
+
+        resp.status = "report_sent"
+        session.add(resp)
+
     session.commit()
-    return RedirectResponse(url="/admin/responses", status_code=303)
+    return RedirectResponse(url=_safe_next_url(next), status_code=303)
 
 
 # 리포트 업로드 (POST + multipart/form-data)
@@ -2047,6 +2243,7 @@ async def admin_bulk_accept(
 async def admin_upload_report(
     rid: int,
     file: UploadFile = File(...),
+    next: str | None = Form(None),
     session: Session = Depends(get_session),
 ):
     sr = session.get(SurveyResponse, rid)
@@ -2071,13 +2268,14 @@ async def admin_upload_report(
         session.add(resp)
 
     session.commit()
-    return RedirectResponse(url="/admin/responses", status_code=303)
+    return RedirectResponse(url=_safe_next_url(next), status_code=303)
 
 
 # 리포트 삭제 (POST)
 @admin_router.post("/response/{rid}/report/delete")
 def admin_delete_report(
     rid: int,
+    next: str | None = Form(None),
     session: Session = Depends(get_session),
 ):
     sr = session.get(SurveyResponse, rid)
@@ -2092,7 +2290,7 @@ def admin_delete_report(
         resp.status = "accepted"
         session.add(resp)
     session.commit()
-    return RedirectResponse(url="/admin/responses", status_code=303)
+    return RedirectResponse(url=_safe_next_url(next), status_code=303)
 
 
 # CSV (GET)
