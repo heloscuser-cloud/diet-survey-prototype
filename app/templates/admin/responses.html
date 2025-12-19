@@ -39,6 +39,54 @@
   .nowrap{white-space:nowrap}
   .tag{display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:#eef2ff}
   .muted{color:var(--muted)}
+  /* 테이블만 화면폭에 가깝게 확장(FHD 기준). 필터/검색 영역(.page)은 기존 유지 */
+.table-wide{
+  width: calc(100vw - 40px);
+  margin-left: 50%;
+  transform: translateX(-50%);
+}
+@media (max-width: 768px){
+  .table-wide{
+    width: 100%;
+    margin-left: 0;
+    transform: none;
+  }
+}
+
+/* 담당자 정보 툴팁 */
+.info-icon{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:18px;
+  height:18px;
+  margin-left:6px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:800;
+  line-height:1;
+  border:1px solid var(--border);
+  background:#fff;
+  cursor:pointer;
+  user-select:none;
+}
+.tooltip{
+  position:absolute;
+  z-index:9999;
+  min-width:220px;
+  background:#fff;
+  border:1px solid var(--border);
+  border-radius:12px;
+  box-shadow:0 10px 24px rgba(0,0,0,.12);
+  padding:10px 12px;
+  font-size:13px;
+  text-align:left;
+  display:none;
+}
+.tooltip .rowline{display:flex; gap:8px; margin:4px 0}
+.tooltip .k{width:66px; color:var(--muted)}
+.tooltip .v{flex:1; color:var(--text); word-break:break-all}
+
   /* 버튼 */
   .btn{cursor:pointer; border:none; border-radius:999px; color:#fff; padding:.5rem 1rem; font-weight:600}
   .btn:hover{opacity:.95}
@@ -88,10 +136,12 @@
         <div>
           <label>진행 상태</label>
           <select name="status" class="w-status">
-            <option value="" {{ 'selected' if not status }}>전체</option>
-            <option value="submitted" {{ 'selected' if status=='submitted' }}>신청완료</option>
-            <option value="accepted" {{ 'selected' if status=='accepted' }}>접수완료</option>
-            <option value="report_uploaded" {{ 'selected' if status=='report_uploaded' }}>리포트 업로드 완료</option>
+<option value="" {{ 'selected' if not status }}>전체</option>
+<option value="submitted" {{ 'selected' if status=='submitted' }}>문진제출</option>
+<option value="analysis_requested" {{ 'selected' if status=='analysis_requested' }}>분석신청</option>
+<option value="accepted" {{ 'selected' if status=='accepted' }}>접수완료</option>
+<option value="report_uploaded" {{ 'selected' if status=='report_uploaded' }}>리포트 업로드 완료</option>
+
           </select>
         </div>
       </div>
@@ -136,23 +186,27 @@
   </div>
 
   <!-- 테이블: 화면 가득 -->
-  <div class="card table-card">
+  <div class="card table-card table-wide">
     <table>
       <thead>
         <tr>
-          <th><input type="checkbox" id="chkAll" onclick="toggleAll(this)"/></th>
-          <th>신청번호</th>
-          <th>신청자</th>
-          <th>PDF 파일명</th>
-          <th>업로드 날짜</th>
-          <th>진행 상태값</th>
-          <th>신청일</th>
-          <th>제출일</th>
-          <th>리포트</th>
+<th><input type="checkbox" id="chkAll" onclick="toggleAll(this)"/></th>
+<th>신청번호</th>
+<th>신청자</th>
+<th>담당자</th>
+<th>담당자 소속</th>
+<th>PDF 파일명</th>
+<th>업로드 날짜</th>
+<th>진행 상태값</th>
+<th>문진제출일</th>
+<th>담당자신청일</th>
+<th>리포트</th>
+
         </tr>
       </thead>
       <tbody>
-      {% for sr, resp, user, rf in rows %}
+      {% for sr, resp, user, rf, ua, pcm in rows %}
+
         <tr>
           <td><input type="checkbox" class="rowChk" value="{{ sr.id }}"></td>
           <td class="nowrap">{{ resp.serial_no or '' }}</td>
@@ -254,6 +308,37 @@ function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.s
       e.target.value = v;
     });
   });
+
+// 담당자 툴팁: ⓘ 클릭 토글, 바깥 클릭/ESC 닫기
+(function(){
+  function hideAll(){
+    document.querySelectorAll('.tooltip').forEach(t => t.style.display = 'none');
+  }
+
+  document.addEventListener('click', function(e){
+    const icon = e.target.closest('.info-icon');
+    if (icon){
+      e.preventDefault();
+      e.stopPropagation();
+      const id = icon.getAttribute('data-tip-id');
+      const tip = document.getElementById(id);
+      if (!tip) return;
+
+      const isOpen = (tip.style.display === 'block');
+      hideAll();
+      tip.style.display = isOpen ? 'none' : 'block';
+      return;
+    }
+
+    if (e.target.closest('.tooltip')) return;
+    hideAll();
+  });
+
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') hideAll();
+  });
+})();
+
 
 </script>
 
