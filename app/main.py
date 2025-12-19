@@ -2231,8 +2231,19 @@ async def admin_send_reports(
             pdf_bytes=rf.content,
         )
 
-        resp.status = "report_sent"
-        session.add(resp)
+        ok = send_report_email(
+            to_email=(ua.mail or "").strip(),
+            partner_name=partner_name,
+            applicant_name=applicant_name,
+            partner_requested_at_kst_str=partner_requested_at_kst_str,
+            pdf_filename=rf.filename or "report.pdf",
+            pdf_bytes=rf.content,
+        )
+
+        if ok:
+            resp.status = "report_sent"
+            session.add(resp)
+
 
     session.commit()
     return RedirectResponse(url=_safe_next_url(next), status_code=303)
