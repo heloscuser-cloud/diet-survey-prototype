@@ -141,6 +141,8 @@
 <option value="analysis_requested" {{ 'selected' if status=='analysis_requested' }}>분석신청</option>
 <option value="accepted" {{ 'selected' if status=='accepted' }}>접수완료</option>
 <option value="report_uploaded" {{ 'selected' if status=='report_uploaded' }}>리포트 업로드 완료</option>
+<option value="report_sent" {{ 'selected' if status=='report_sent' }}>리포트 발송 완료</option>
+
 
           </select>
         </div>
@@ -177,12 +179,20 @@
   <div class="card control-bar">
     <form id="acceptForm" method="post" action="/admin/responses/accept" style="margin:0">
       <input type="hidden" name="ids" id="acceptIds">
+      <input type="hidden" name="next" id="acceptNext">
       <button class="btn btn-cyan btn-sm" type="button" onclick="bulkAccept()" style="width:120px;">접수 완료</button>
     </form>
     <form id="xlsxForm" method="post" action="/admin/responses/export.xlsx" style="margin:0">
       <input type="hidden" name="ids" id="xlsxIds">
+      <input type="hidden" name="next" id="xlsxNext">
       <button class="btn btn-sky btn-sm" type="button" onclick="bulkXlsx()" style="width:120px;">엑셀 다운로드</button>
     </form>
+    <form id="sendForm" method="post" action="/admin/responses/report/send" style="margin:0">
+  <input type="hidden" name="ids" id="sendIds">
+  <input type="hidden" name="next" id="sendNext">
+  <button class="btn btn-cyan btn-sm" type="button" onclick="bulkSendReport()" style="width:120px;">리포트발송</button>
+</form>
+
   </div>
 
   <!-- 테이블: 화면 가득 -->
@@ -249,6 +259,9 @@
       <span class="tag">접수완료</span>
     {% elif resp.status=='report_uploaded' %}
       <span class="tag">리포트 업로드 완료</span>
+      {% elif resp.status=='report_sent' %}
+  <span class="tag">리포트 발송 완료</span>
+
     {% else %}
       <span class="muted">{{ resp.status }}</span>
     {% endif %}
@@ -264,6 +277,7 @@
   <td class="nowrap">
     <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report" enctype="multipart/form-data">
       <input id="file_{{ sr.id }}" type="file" name="file" accept="application/pdf" style="display:none" onchange="this.form.submit()"/>
+      <input type="hidden" name="next" class="rowNext">
       <label for="file_{{ sr.id }}" title="리포트 등록" class="iconbtn">
         <img class="ico" src="/static/icons/plus.svg" alt="등록"/>
       </label>
@@ -271,6 +285,7 @@
 
     {% if rf %}
     <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report/delete">
+      <input type="hidden" name="next" class="rowNext">
       <button type="submit" title="리포트 삭제" class="iconbtn2">
         <img class="ico" src="/static/icons/trash.svg" alt="삭제"/>
       </button>
@@ -316,7 +331,7 @@ function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.s
   f.addEventListener("submit", function(){
     // hidden page=1은 그대로, 추가 작업 없음
   });
-})();
+})
 
   function getSelectedIds(){
     return Array.from(document.querySelectorAll('.rowChk:checked')).map(el=>el.value).filter(Boolean);
@@ -335,6 +350,17 @@ function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.s
     document.getElementById('xlsxIds').value = ids.join(',');
     f.submit();
   }
+function bulkSendReport(){
+  const ids = Array.from(document.querySelectorAll(".rowChk:checked")).map(x => x.value);
+  if (!ids.length){
+    alert("선택된 항목이 없습니다.");
+    return;
+  }
+  document.getElementById("sendIds").value = ids.join(",");
+  document.getElementById("sendForm").submit();
+}
+
+
   function toggleAll(master){
     document.querySelectorAll('.rowChk').forEach(cb=>cb.checked = master.checked);
   }
@@ -348,6 +374,24 @@ function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.s
       e.target.value = v;
     });
   });
+
+// 현재 필터 포함 URL을 next로 세팅 (리다이렉트 시 필터 유지)
+(function(){
+  const nextUrl = window.location.pathname + window.location.search;
+
+  const a = document.getElementById("acceptNext");
+  if (a) a.value = nextUrl;
+
+  const x = document.getElementById("xlsxNext");
+  if (x) x.value = nextUrl;
+
+  const s = document.getElementById("sendNext");
+if (s) s.value = nextUrl;
+
+
+  document.querySelectorAll("input.rowNext").forEach(el => el.value = nextUrl);
+})
+
 
 // 담당자 툴팁: ⓘ 클릭 토글, 바깥 클릭/ESC 닫기
 (function(){
@@ -377,8 +421,13 @@ function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.s
   document.addEventListener('keydown', function(e){
     if (e.key === 'Escape') hideAll();
   });
-})();
+})
 
+(function(){
+  const msg = "{{ msg or '' }}";
+  if (msg) alert(msg);
+})
+();
 
 </script>
 
