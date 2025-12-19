@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, date, timezone
 from starlette.responses import RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 from random import randint
-from sqlalchemy import func, Column, LargeBinary, Integer, text
+from sqlalchemy import func, Column, LargeBinary, Integer, text, and_
 from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import JSONB
 from itsdangerous import (
@@ -984,6 +984,7 @@ async def partner_signup_submit(
     name: str = Form(...),
     phone: str = Form(...),
     email: str = Form(...),
+    email_confirm: str = Form(...),
     division: str = Form(""),
     department: str = Form(""),
     password: str = Form(...),
@@ -995,6 +996,7 @@ async def partner_signup_submit(
     name = (name or "").strip()
     phone_raw = "".join(c for c in (phone or "") if c.isdigit())
     email = (email or "").strip()
+    email_confirm = (email_confirm or "").strip()
     division = (division or "").strip()
     department = (department or "").strip()
     password = (password or "").strip()
@@ -1005,6 +1007,8 @@ async def partner_signup_submit(
     # 필수값 체크
     if not emp_no or not name or not phone_raw or not email or not password or not password_confirm:
         error = "필수 항목을 모두 입력해주세요."
+    elif email != email_confirm:
+        error = "이메일주소를 확인해주세요"
     elif password != password_confirm:
         error = "비밀번호와 비밀번호 재확인이 일치하지 않습니다."
     elif len(password) < 4 or len(password) > 6 or not password.isdigit():
@@ -1012,16 +1016,26 @@ async def partner_signup_submit(
     elif len(phone_raw) < 10 or len(phone_raw) > 11:
         error = "전화번호는 숫자 10~11자리로 입력해주세요."
 
+    # 입력값 유지하면서 렌더
     if error:
-        # 입력값 유지하면서 다시 렌더
         return templates.TemplateResponse(
             "partner/signup.html",
             {
                 "request": request,
                 "error": error,
                 "message": None,
+
+                # ✅ 입력값 유지용
+                "emp_no": emp_no,
+                "name": name,
+                "phone": phone_raw,
+                "email": email,
+                "email_confirm": email_confirm,
+                "division": division,
+                "department": department,
             },
         )
+
 
     # 2) 중복 전화번호 체크 (user_admin.phone UNIQUE)
     from sqlalchemy import text as sa_text
@@ -1861,12 +1875,42 @@ def admin_responses(
         PAGE_SIZE = 50
 
     # --- 기본 쿼리 ---
+    # 담당자(UserAdmin) + 담당자신청일(PartnerClientMapping.created_at)을 함께 조회
+    # PartnerClientMapping은 (partner_id, client_phone)별 최신 1건만 붙여서 row 중복(뻥튀기)을 방지
+    pcm_latest = (
+        select(
+            PartnerClientMapping.partner_id.label("partner_id"),
+            PartnerClientMapping.client_phone.label("client_phone"),
+            func.max(PartnerClientMapping.created_at).label("created_at"),
+        )
+        .group_by(PartnerClientMapping.partner_id, PartnerClientMapping.client_phone)
+        .subquery()
+    )
+
     stmt = (
-        select(SurveyResponse, Respondent, User, ReportFile)
+        select(
+            SurveyResponse,
+            Respondent,
+            User,
+            ReportFile,
+            UserAdmin,
+            pcm_latest.c.created_at.label("partner_requested_at"),
+        )
         .join(Respondent, Respondent.id == SurveyResponse.respondent_id)
         .join(User, User.id == Respondent.user_id)
         .join(ReportFile, ReportFile.survey_response_id == SurveyResponse.id, isouter=True)
+        .join(UserAdmin, UserAdmin.id == Respondent.partner_id, isouter=True)
+        .join(
+            pcm_latest,
+            and_(
+                pcm_latest.c.partner_id == Respondent.partner_id,
+                pcm_latest.c.client_phone == Respondent.client_phone,
+            ),
+            isouter=True,
+        )
     )
+
+
 
     # --- 검색어 필터 (생년월일 yyyy-mm-dd 지원) ---
     if q:
@@ -1913,8 +1957,22 @@ def admin_responses(
         stmt = stmt.where(Respondent.created_at < end_utc)
 
     # --- 상태 필터 ---
-    if status in ("submitted", "accepted", "report_uploaded"):
+    # - 문진제출: Respondent.status == submitted AND 담당자신청일(created_at)이 없음
+    # - 분석신청: Respondent.status == submitted AND 담당자신청일(created_at)이 있음
+    # - 접수완료/리포트업로드 완료: 기존 status 그대로
+    if status == "analysis_requested":
+        stmt = stmt.where(
+            (Respondent.status == "submitted") &
+            (pcm_latest.c.created_at.isnot(None))
+        )
+    elif status == "submitted":
+        stmt = stmt.where(
+            (Respondent.status == "submitted") &
+            (pcm_latest.c.created_at.is_(None))
+        )
+    elif status in ("accepted", "report_uploaded"):
         stmt = stmt.where(Respondent.status == status)
+
 
     # --- 정렬: 최신 제출일 → 응답 ID 내림차순 ---
     stmt = stmt.order_by(
@@ -2055,12 +2113,40 @@ def admin_responses_csv(
     def to_kst_str(dt):
         return to_kst(dt).strftime("%Y-%m-%d %H:%M") if dt else ""
 
+    # 담당자신청일(PartnerClientMapping.created_at) 최신 1건만 (row 중복 방지)
+    pcm_latest = (
+        select(
+            PartnerClientMapping.partner_id.label("partner_id"),
+            PartnerClientMapping.client_phone.label("client_phone"),
+            func.max(PartnerClientMapping.created_at).label("created_at"),
+        )
+        .group_by(PartnerClientMapping.partner_id, PartnerClientMapping.client_phone)
+        .subquery()
+    )
+
     stmt = (
-        select(SurveyResponse, Respondent, User, ReportFile)
+        select(
+            SurveyResponse,
+            Respondent,
+            User,
+            ReportFile,
+            UserAdmin,
+            pcm_latest.c.created_at.label("partner_requested_at"),
+        )
         .join(Respondent, Respondent.id == SurveyResponse.respondent_id)
         .join(User, User.id == Respondent.user_id)
         .join(ReportFile, ReportFile.survey_response_id == SurveyResponse.id, isouter=True)
+        .join(UserAdmin, UserAdmin.id == Respondent.partner_id, isouter=True)
+        .join(
+            pcm_latest,
+            and_(
+                pcm_latest.c.partner_id == Respondent.partner_id,
+                pcm_latest.c.client_phone == Respondent.client_phone,
+            ),
+            isouter=True,
+        )
     )
+
 
     if q:
         like = f"%{q}%"
@@ -2102,30 +2188,53 @@ def admin_responses_csv(
     if end_utc:
         stmt = stmt.where(Respondent.created_at < end_utc)
 
-    if status in ("submitted", "accepted", "report_uploaded"):
+    if status == "analysis_requested":
+        stmt = stmt.where(
+            (Respondent.status == "submitted") &
+            (pcm_latest.c.created_at.isnot(None))
+        )
+    elif status == "submitted":
+        stmt = stmt.where(
+            (Respondent.status == "submitted") &
+            (pcm_latest.c.created_at.is_(None))
+        )
+    elif status in ("accepted", "report_uploaded"):
         stmt = stmt.where(Respondent.status == status)
+
 
     def generate():
         yield "\ufeff"
         s = StringIO(); w = csv.writer(s)
-        w.writerow(["신청번호","신청자","PDF 파일명","업로드 날짜","진행 상태값","신청일","제출일"])
+        w.writerow(["신청번호","신청자","담당자","담당자 소속","PDF 파일명","업로드 날짜","진행 상태값","문진제출일","담당자신청일"])
         yield s.getvalue(); s.seek(0); s.truncate(0)
 
         result = session.exec(stmt.order_by(SurveyResponse.submitted_at.desc())).all()
-        for idx, (sr, resp, user, rf) in enumerate(result, start=1):
+        for idx, (sr, resp, user, rf, ua, partner_requested_at) in enumerate(result, start=1):
             applicant = f"{resp.applicant_name or (user.name_enc or '')} ({(resp.birth_date or '')}, {resp.gender or (user.gender or '')})"
-            status_h = "신청완료" if resp.status=="submitted" else "접수완료" if resp.status=="accepted" else "리포트 업로드 완료" if resp.status=="report_uploaded" else (resp.status or "")
+
+            if resp.status == "submitted":
+                status_h = "분석신청" if partner_requested_at else "문진제출"
+            elif resp.status == "accepted":
+                status_h = "접수완료"
+            elif resp.status == "report_uploaded":
+                status_h = "리포트 업로드 완료"
+            else:
+                status_h = (resp.status or "")
+
             row = [
                 resp.serial_no or "",
                 applicant,
+                (ua.name if ua else ""),
+                (ua.division if ua else ""),
                 (rf.filename if rf else ""),
                 (to_kst_str(rf.uploaded_at) if rf else ""),
                 status_h,
-                to_kst_str(resp.created_at),
                 to_kst_str(sr.submitted_at),
+                to_kst_str(partner_requested_at),
             ]
             w.writerow(row)
             yield s.getvalue(); s.seek(0); s.truncate(0)
+
 
     return StreamingResponse(
         generate(),
