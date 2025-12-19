@@ -207,38 +207,78 @@
       <tbody>
       {% for sr, resp, user, rf, ua, partner_requested_at in rows %}
 
-        <tr>
-          <td><input type="checkbox" class="rowChk" value="{{ sr.id }}"></td>
-          <td class="nowrap">{{ resp.serial_no or '' }}</td>
-          <td>{{ resp.applicant_name or user.name_enc or '-' }} ({{ resp.birth_date or '' }}, {{ resp.gender or user.gender or '-' }})</td>
-          <td>{{ rf.filename if rf else '' }}</td>
-          <td>{{ to_kst_str(rf.uploaded_at) if rf else '' }}</td>
-          <td>
-            {% if resp.status=='submitted' %}<span class="tag">신청완료</span>
-            {% elif resp.status=='accepted' %}<span class="tag">접수완료</span>
-            {% elif resp.status=='report_uploaded' %}<span class="tag">리포트 업로드 완료</span>
-            {% else %}<span class="muted">{{ resp.status }}</span>{% endif %}
-          </td>
-          <td>{{ to_kst_str(resp.created_at) }}</td>
-          <td>{{ to_kst_str(sr.submitted_at) }}</td>
-          <td class="nowrap">
-            <!-- 업로드: 파일 선택 → 즉시 submit (at 포함) -->
-            <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report" enctype="multipart/form-data">
-              <input id="file_{{ sr.id }}" type="file" name="file" accept="application/pdf" style="display:none" onchange="this.form.submit()"/>
-              <label for="file_{{ sr.id }}" title="리포트 등록" class="iconbtn">
-                <img class="ico" src="/static/icons/plus.svg" alt="등록"/>
-              </label>
-            </form>
-            <!-- 삭제 -->
-            {% if rf %}
-            <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report/delete">
-                <button type="submit" title="리포트 삭제" class="iconbtn2">
-                <img class="ico" src="/static/icons/trash.svg" alt="삭제"/>
-              </button>
-            </form>
-            {% endif %}
-          </td>
-        </tr>
+       <tr>
+  <td><input type="checkbox" class="rowChk" value="{{ sr.id }}"></td>
+
+  <td class="nowrap">{{ resp.serial_no or '' }}</td>
+
+  <td>{{ resp.applicant_name or user.name_enc or '-' }} ({{ resp.birth_date or '' }}, {{ resp.gender or user.gender or '-' }})</td>
+
+  <!-- 담당자 + ⓘ 툴팁 -->
+  <td class="nowrap" style="position:relative;">
+    {{ ua.name if ua else '' }}
+    <span class="info-icon" data-tip-id="tip_{{ sr.id }}">ⓘ</span>
+
+    <div class="tooltip" id="tip_{{ sr.id }}">
+      <div class="rowline"><div class="k">소속</div><div class="v">{{ ua.division if ua else '' }}</div></div>
+      <div class="rowline"><div class="k">부서</div><div class="v">{{ ua.department if ua else '' }}</div></div>
+      <div class="rowline"><div class="k">이름</div><div class="v">{{ ua.name if ua else '' }}</div></div>
+      <div class="rowline"><div class="k">전화</div><div class="v">{{ ua.phone if ua else '' }}</div></div>
+      <div class="rowline"><div class="k">메일</div><div class="v">{{ ua.mail if ua else '' }}</div></div>
+    </div>
+  </td>
+
+  <!-- 담당자 소속 -->
+  <td class="nowrap">{{ ua.division if ua else '' }}</td>
+
+  <!-- PDF 파일명 -->
+  <td>{{ rf.filename if rf else '' }}</td>
+
+  <!-- 업로드 날짜 -->
+  <td>{{ to_kst_str(rf.uploaded_at) if rf else '' }}</td>
+
+  <!-- 진행 상태값 -->
+  <td>
+    {% if resp.status=='submitted' %}
+      {% if partner_requested_at %}
+        <span class="tag">분석신청</span>
+      {% else %}
+        <span class="tag">문진제출</span>
+      {% endif %}
+    {% elif resp.status=='accepted' %}
+      <span class="tag">접수완료</span>
+    {% elif resp.status=='report_uploaded' %}
+      <span class="tag">리포트 업로드 완료</span>
+    {% else %}
+      <span class="muted">{{ resp.status }}</span>
+    {% endif %}
+  </td>
+
+  <!-- 문진제출일 -->
+  <td>{{ to_kst_str(sr.submitted_at) }}</td>
+
+  <!-- 담당자신청일 -->
+  <td>{{ to_kst_str(partner_requested_at) if partner_requested_at else '' }}</td>
+
+  <!-- 리포트 -->
+  <td class="nowrap">
+    <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report" enctype="multipart/form-data">
+      <input id="file_{{ sr.id }}" type="file" name="file" accept="application/pdf" style="display:none" onchange="this.form.submit()"/>
+      <label for="file_{{ sr.id }}" title="리포트 등록" class="iconbtn">
+        <img class="ico" src="/static/icons/plus.svg" alt="등록"/>
+      </label>
+    </form>
+
+    {% if rf %}
+    <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report/delete">
+      <button type="submit" title="리포트 삭제" class="iconbtn2">
+        <img class="ico" src="/static/icons/trash.svg" alt="삭제"/>
+      </button>
+    </form>
+    {% endif %}
+  </td>
+</tr>
+
       {% endfor %}
       </tbody>
     </table>
