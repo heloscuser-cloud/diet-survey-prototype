@@ -2110,6 +2110,13 @@ def _safe_next_url(next_url: str | None) -> str:
         return "/admin/responses"
     return "/admin/responses"
 
+#리포트 발송 안내 문자열에서 "기호 제거
+def _redirect_with_msg(next_url: str | None, msg: str) -> RedirectResponse:
+    url = _safe_next_url(next_url)
+    if msg:
+        url = url + ("&" if "?" in url else "?") + "msg=" + urllib.parse.quote(msg)
+    return RedirectResponse(url=url, status_code=303)
+
 
 # 접수완료 처리 (POST + Form)
 @admin_router.post("/responses/accept")
@@ -2143,13 +2150,11 @@ async def admin_bulk_accept(
     session.commit()
 
     if sent_cnt > 0:
-        msg = f"이미 리포트를 발송한 건 \"{sent_cnt}건\"이 포함되어있습니다.\\n해당 건을 제외하고 접수완료 처리를 진행하였습니다. (접수완료 처리 \"{accepted_cnt}건\")"
-        url = _safe_next_url(next)
-        url = url + ("&" if "?" in url else "?") + "msg=" + urllib.parse.quote(msg)
-        return RedirectResponse(url=url, status_code=303)
-
-    return RedirectResponse(url=_safe_next_url(next), status_code=303)
-
+        msg = (
+            f"이미 리포트를 발송한 건 {sent_cnt}건이 포함되어있습니다.\n"
+            f"해당 건을 제외하고 접수완료 처리를 진행하였습니다. (접수완료 처리 {accepted_cnt}건)"
+        )
+        return _redirect_with_msg(next, msg)
 
 
 @admin_router.post("/responses/report/send")
@@ -2162,91 +2167,138 @@ async def admin_send_reports(
     if not id_list:
         return RedirectResponse(url=_safe_next_url(next), status_code=303)
 
-    # SurveyResponse 기준으로 조회
-    srs = session.exec(select(SurveyResponse).where(SurveyResponse.id.in_(id_list))).all()
+    # 담당자신청일(PartnerClientMapping.created_at) 최신 1건만 (row 중복 방지)
+    pcm_latest = (
+        select(
+            PartnerClientMapping.partner_id.label("partner_id"),
+            PartnerClientMapping.client_phone.label("client_phone"),
+            func.max(PartnerClientMapping.created_at).label("created_at"),
+        )
+        .group_by(PartnerClientMapping.partner_id, PartnerClientMapping.client_phone)
+        .subquery()
+    )
 
-    # 대상 Respondent / ReportFile / UserAdmin 확보
-    # 유효성 체크: (1) report_uploaded만 가능 (2) report_sent 포함 시 즉시 에러
+    stmt = (
+        select(
+            SurveyResponse,
+            Respondent,
+            User,
+            ReportFile,
+            UserAdmin,
+            pcm_latest.c.created_at.label("partner_requested_at"),
+        )
+        .join(Respondent, Respondent.id == SurveyResponse.respondent_id)
+        .join(User, User.id == Respondent.user_id)
+        .join(ReportFile, ReportFile.survey_response_id == SurveyResponse.id, isouter=True)
+        .join(UserAdmin, UserAdmin.id == Respondent.partner_id, isouter=True)
+        .join(
+            pcm_latest,
+            and_(
+                pcm_latest.c.partner_id == Respondent.partner_id,
+                pcm_latest.c.client_phone == Respondent.client_phone,
+            ),
+            isouter=True,
+        )
+        .where(SurveyResponse.id.in_(id_list))
+    )
+
+    rows = session.exec(stmt).all()
+    if not rows:
+        return RedirectResponse(url=_safe_next_url(next), status_code=303)
+
     already_sent = 0
     not_uploaded = 0
+    missing_email = 0
+    missing_report = 0
 
-    # 미리 respondent_id 모으기
-    respondents: list[Respondent] = []
-    for sr in srs:
-        resp = session.get(Respondent, sr.respondent_id)
-        if resp:
-            respondents.append(resp)
-
-    for resp in respondents:
+    # 1) 선검증: 하나라도 조건 안 맞으면 "상태 변경/메일발송" 절대 하지 않고 즉시 중단
+    for sr, resp, user, rf, ua, partner_requested_at in rows:
         if resp.status == "report_sent":
             already_sent += 1
-        elif resp.status != "report_uploaded":
-            # 문진제출/분석신청/접수완료 등
+            continue
+        if resp.status != "report_uploaded":
             not_uploaded += 1
+            continue
+        if not rf or not getattr(rf, "content", None):
+            missing_report += 1
+            continue
+        if not ua or not (ua.mail or "").strip():
+            missing_email += 1
+            continue
 
     if already_sent > 0:
-        msg = f"이미 리포트 발송을 완료한 건 \"{already_sent}건\"이 포함되어있습니다.\\n확인 후 다시 시도해주세요."
-        return RedirectResponse(url=_safe_next_url(next) + ("&" if "?" in _safe_next_url(next) else "?") + "msg=" + urllib.parse.quote(msg), status_code=303)
+        msg = (
+            f"이미 리포트 발송을 완료한 건 {already_sent}건이 포함되어있습니다.\n"
+            f"확인 후 다시 시도해주세요."
+        )
+        return _redirect_with_msg(next, msg)
 
     if not_uploaded > 0:
-        msg = f"선택한 목록 중 아직 리포트 업로드가 완료되지 않은 건이 \"{not_uploaded}건\" 있습니다. \\n확인 후 다시 시도해주세요."
-        return RedirectResponse(url=_safe_next_url(next) + ("&" if "?" in _safe_next_url(next) else "?") + "msg=" + urllib.parse.quote(msg), status_code=303)
-
-    # 발송 진행: 각 건별 담당자 메일로 PDF 첨부 발송 + 상태 report_sent로 변경
-    for sr in srs:
-        resp = session.get(Respondent, sr.respondent_id)
-        if not resp or resp.status != "report_uploaded":
-            continue
-
-        ua = session.get(UserAdmin, resp.partner_id) if resp.partner_id else None
-        if not ua or not (ua.mail or "").strip():
-            # 담당자 메일 없으면 skip (정책상 전체 실패로 할지 선택인데, 일단 안전하게 skip)
-            continue
-
-        rf = session.exec(select(ReportFile).where(ReportFile.survey_response_id == sr.id)).first()
-        if not rf or not rf.content:
-            continue
-
-        # 담당자신청일: PartnerClientMapping 최신 1건의 created_at
-        partner_requested_at = session.exec(
-            select(func.max(PartnerClientMapping.created_at))
-            .where(
-                (PartnerClientMapping.partner_id == resp.partner_id) &
-                (PartnerClientMapping.client_phone == resp.client_phone)
-            )
-        ).one()
-
-        partner_requested_at_kst = to_kst(partner_requested_at) if partner_requested_at else None
-        partner_requested_at_kst_str = partner_requested_at_kst.strftime("%Y-%m-%d %H:%M") if partner_requested_at_kst else ""
-
-        applicant_name = resp.applicant_name or ""
-        partner_name = ua.name or ""
-
-        send_report_email(
-            to_email=(ua.mail or "").strip(),
-            partner_name=partner_name,
-            applicant_name=applicant_name,
-            partner_requested_at_kst_str=partner_requested_at_kst_str,
-            pdf_filename=rf.filename or "report.pdf",
-            pdf_bytes=rf.content,
+        msg = (
+            f"선택한 목록 중 아직 리포트 업로드가 완료되지 않은 건이 {not_uploaded}건 있습니다.\n"
+            f"확인 후 다시 시도해주세요."
         )
+        return _redirect_with_msg(next, msg)
+
+    if missing_report > 0:
+        msg = (
+            f"선택한 목록 중 리포트 파일이 없는 건이 {missing_report}건 있습니다.\n"
+            f"확인 후 다시 시도해주세요."
+        )
+        return _redirect_with_msg(next, msg)
+
+    if missing_email > 0:
+        msg = (
+            f"선택한 목록 중 담당자 메일 정보가 없는 건이 {missing_email}건 있습니다.\n"
+            f"확인 후 다시 시도해주세요."
+        )
+        return _redirect_with_msg(next, msg)
+
+    # 2) 실제 발송: 여기까지 왔으면 모두 report_uploaded + 메일/파일 보장
+    ok_cnt = 0
+    fail_cnt = 0
+
+    for sr, resp, user, rf, ua, partner_requested_at in rows:
+        # 제목: 신청자명 2번째 글자 마스킹
+        applicant_name_raw = (resp.applicant_name or user.name_enc or "").strip()
+        masked_applicant = mask_second_char(applicant_name_raw) if applicant_name_raw else ""
+
+        partner_name = (ua.name or "").strip()
+        to_email = (ua.mail or "").strip()
+
+        # 담당자신청일(KST 문자열)
+        partner_requested_at_kst_str = ""
+        if partner_requested_at:
+            try:
+                partner_requested_at_kst_str = to_kst(partner_requested_at).strftime("%Y-%m-%d")
+            except Exception:
+                partner_requested_at_kst_str = ""
 
         ok = send_report_email(
-            to_email=(ua.mail or "").strip(),
+            to_email=to_email,
             partner_name=partner_name,
-            applicant_name=applicant_name,
+            applicant_name=applicant_name_raw,  # 본문은 마스킹 불필요(요청사항)
             partner_requested_at_kst_str=partner_requested_at_kst_str,
-            pdf_filename=rf.filename or "report.pdf",
+            pdf_filename=(rf.filename or "report.pdf"),
             pdf_bytes=rf.content,
         )
 
         if ok:
             resp.status = "report_sent"
             session.add(resp)
-
+            ok_cnt += 1
+        else:
+            fail_cnt += 1
 
     session.commit()
-    return RedirectResponse(url=_safe_next_url(next), status_code=303)
+
+    if fail_cnt > 0:
+        msg = f"리포트 발송 완료 {ok_cnt}건, 실패 {fail_cnt}건이 있습니다.\n로그를 확인해주세요."
+        return _redirect_with_msg(next, msg)
+
+    msg = f"리포트 발송을 완료했습니다. ({ok_cnt}건)"
+    return _redirect_with_msg(next, msg)
+
 
 
 # 리포트 업로드 (POST + multipart/form-data)
