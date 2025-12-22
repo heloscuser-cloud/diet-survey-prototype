@@ -115,7 +115,15 @@ body > .wrap {
   box-shadow: none;
   padding: 0;
 }
-  
+a.pdf-link{
+  color:#2563eb;
+  text-decoration: underline;
+  cursor: pointer;
+}
+a.pdf-link:hover{
+  opacity: 0.85;
+}
+
 </style>
 
 <div class="page">
@@ -234,24 +242,38 @@ body > .wrap {
   <td>{{ resp.applicant_name or user.name_enc or '-' }} ({{ resp.birth_date or '' }}, {{ resp.gender or user.gender or '-' }})</td>
 
   <!-- 담당자 + ⓘ 툴팁 -->
-  <td class="nowrap" style="position:relative;">
-    {{ ua.name if ua else '' }}
-    <span class="info-icon" data-tip-id="tip_{{ sr.id }}">ⓘ</span>
+<td class="nowrap" style="position:relative;">
+  {% set partner_name = (ua.name if ua and ua.name else '') %}
+  {{ partner_name }}
 
-    <div class="tooltip" id="tip_{{ sr.id }}">
+  {% if partner_name %}
+    <span class="info-btn" data-tip="tip-{{ sr.id }}">ⓘ</span>
+    <div class="tooltip" id="tip-{{ sr.id }}">
       <div class="rowline"><div class="k">소속</div><div class="v">{{ ua.division if ua else '' }}</div></div>
       <div class="rowline"><div class="k">부서</div><div class="v">{{ ua.department if ua else '' }}</div></div>
       <div class="rowline"><div class="k">이름</div><div class="v">{{ ua.name if ua else '' }}</div></div>
       <div class="rowline"><div class="k">전화</div><div class="v">{{ ua.phone if ua else '' }}</div></div>
       <div class="rowline"><div class="k">메일</div><div class="v">{{ ua.mail if ua else '' }}</div></div>
     </div>
-  </td>
+  {% endif %}
+</td>
+
 
   <!-- 담당자 소속 -->
   <td class="nowrap">{{ ua.division if ua else '' }}</td>
 
   <!-- PDF 파일명 -->
-  <td>{{ rf.filename if rf else '' }}</td>
+  <td>
+  {% if rf and rf.filename %}
+    <a href="/admin/response/{{ sr.id }}/report/download"
+       class="pdf-link"
+       download>
+      {{ rf.filename }}
+    </a>
+  {% else %}
+    &nbsp;
+  {% endif %}
+</td>
 
   <!-- 업로드 날짜 -->
   <td>{{ to_kst_str(rf.uploaded_at) if rf else '' }}</td>
