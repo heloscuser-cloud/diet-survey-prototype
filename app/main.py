@@ -2379,6 +2379,33 @@ def admin_delete_report(
     session.commit()
     return RedirectResponse(url=_safe_next_url(next), status_code=303)
 
+#리포트 다운로드
+@admin_router.get("/response/{sr_id}/report/download")
+def admin_download_report(rid: int, session: Session = Depends(get_session)):
+    rf = session.exec(
+        select(ReportFile).where(ReportFile.survey_response_id == rid)
+    ).first()
+
+    if not rf or not getattr(rf, "content", None):
+        # JSON 404 대신, 관리자 화면으로 msg 리다이렉트
+        return _redirect_with_msg("/admin/responses", "리포트 파일이 존재하지 않습니다.")
+
+    filename = (rf.filename or f"report_{rid}.pdf").strip()
+    if not filename.lower().endswith(".pdf"):
+        filename += ".pdf"
+
+    # UTF-8 파일명 대응 (공백/괄호 등)
+    quoted = urllib.parse.quote(filename)
+
+    headers = {
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"
+    }
+
+    return StreamingResponse(
+        BytesIO(rf.content),
+        media_type="application/pdf",
+        headers=headers
+    )
 
 # CSV (GET)
 @admin_router.get("/responses.csv")
