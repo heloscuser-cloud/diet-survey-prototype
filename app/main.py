@@ -616,6 +616,12 @@ def send_report_email(
     pdf_filename: str,
     pdf_bytes: bytes,
 ):
+    #성공/실패 이유 로그 강제출력
+    print("[EMAIL] send_report_email called",
+        "to=", to_email,
+        "pdf_filename=", pdf_filename,
+        "pdf_bytes.len=", (len(pdf_bytes) if pdf_bytes else None))
+
     host = os.getenv("SMTP_HOST")
     port_env = os.getenv("SMTP_PORT", "").strip()
     user = (os.getenv("SMTP_USER") or "").strip()
@@ -673,13 +679,15 @@ def send_report_email(
         return
     except Exception as e1:
         print("[EMAIL] 587 failed:", repr(e1))
+        import traceback
         traceback.print_exc()
 
     try:
         try_465()
         return
     except Exception as e2:
-        print("[EMAIL] 465 failed:", repr(e2))
+        print("[EMAIL] 587 failed:", repr(e1))
+        import traceback
         traceback.print_exc()
 
     print("[EMAIL] send failed: both 587 and 465 attempts failed")
@@ -2203,6 +2211,19 @@ async def admin_send_reports(
     )
 
     rows = session.exec(stmt).all()
+    
+    # DEBUG: 어떤 데이터가 들어왔는지 즉시 확인
+    print("[REPORT-SEND] rows=", len(rows))
+    for sr, resp, user, rf, ua, partner_requested_at in rows:
+        print(
+            "[REPORT-SEND] sr.id=", sr.id,
+            " resp.id=", resp.id if resp else None,
+            " status=", resp.status if resp else None,
+            " to_email=", (ua.mail if ua else None),
+            " rf=", bool(rf),
+            " rf.content.len=", (len(rf.content) if (rf and getattr(rf, "content", None)) else None),
+    )
+
     if not rows:
         return RedirectResponse(url=_safe_next_url(next), status_code=303)
 
