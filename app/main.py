@@ -621,6 +621,12 @@ def send_report_email(
         "to=", to_email,
         "pdf_filename=", pdf_filename,
         "pdf_bytes.len=", (len(pdf_bytes) if pdf_bytes else None))
+    print("[EMAIL] env check",
+      "HOST=", os.getenv("SMTP_HOST"),
+      "USER=", bool(os.getenv("SMTP_USER")),
+      "PASS=", bool(os.getenv("SMTP_PASS")),
+      "FROM=", os.getenv("SMTP_FROM"))
+
 
     host = os.getenv("SMTP_HOST")
     port_env = os.getenv("SMTP_PORT", "").strip()
@@ -676,6 +682,8 @@ def send_report_email(
 
     try:
         try_587()
+        print("[EMAIL] try 587 STARTTLS...")
+        print("[EMAIL] try 587 OK")
         return
     except Exception as e1:
         print("[EMAIL] 587 failed:", repr(e1))
@@ -684,9 +692,11 @@ def send_report_email(
 
     try:
         try_465()
+        print("[EMAIL] try 587 STARTTLS...")
+        print("[EMAIL] try 465 OK")
         return
     except Exception as e2:
-        print("[EMAIL] 587 failed:", repr(e1))
+        print("[EMAIL] 465 failed:", repr(e1))
         import traceback
         traceback.print_exc()
 
