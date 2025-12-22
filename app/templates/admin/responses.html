@@ -351,11 +351,13 @@ function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.s
     f.submit();
   }
 function bulkSendReport(){
-  const ids = Array.from(document.querySelectorAll(".rowChk:checked")).map(x => x.value);
-  if (!ids.length){
-    alert("선택된 항목이 없습니다.");
-    return;
-  }
+  const ids = getSelectedIds();
+  if(ids.length===0){ alert('선택된 항목이 없습니다.'); return; }
+  const f = document.getElementById('sendReportForm');
+  document.getElementById('sendReportIds').value = ids.join(',');
+  f.submit();
+}
+
   document.getElementById("sendIds").value = ids.join(",");
   document.getElementById("sendForm").submit();
 }
@@ -376,8 +378,11 @@ function bulkSendReport(){
   });
 
 // 현재 필터 포함 URL을 next로 세팅 (리다이렉트 시 필터 유지)
+// 단, msg 파라미터는 반복 알림 방지를 위해 제외
 (function(){
-  const nextUrl = window.location.pathname + window.location.search;
+  const u = new URL(window.location.href);
+  u.searchParams.delete("msg");
+  const nextUrl = u.pathname + (u.search ? u.search : "");
 
   const a = document.getElementById("acceptNext");
   if (a) a.value = nextUrl;
@@ -386,11 +391,11 @@ function bulkSendReport(){
   if (x) x.value = nextUrl;
 
   const s = document.getElementById("sendNext");
-if (s) s.value = nextUrl;
-
+  if (s) s.value = nextUrl;
 
   document.querySelectorAll("input.rowNext").forEach(el => el.value = nextUrl);
 })();
+
 
 
 // 담당자 툴팁: ⓘ 클릭 토글, 바깥 클릭/ESC 닫기
@@ -423,11 +428,19 @@ if (s) s.value = nextUrl;
   });
 })();
 
+
 (function(){
-  const msg = "{{ msg or '' }}";
-  if (msg) alert(msg);
-})
-();
+  const msg = {{ (msg or "") | tojson }};
+  if (!msg) return;
+
+  alert(msg);
+
+  // alert 후 msg 제거(재알림 방지)
+  const u = new URL(window.location.href);
+  u.searchParams.delete("msg");
+  history.replaceState({}, "", u.pathname + (u.search ? u.search : ""));
+})();
+
 
 </script>
 

@@ -616,38 +616,35 @@ def send_report_email(
     pdf_filename: str,
     pdf_bytes: bytes,
 ):
-    #성공/실패 이유 로그 강제출력
     print("[EMAIL] send_report_email called",
-        "to=", to_email,
-        "pdf_filename=", pdf_filename,
-        "pdf_bytes.len=", (len(pdf_bytes) if pdf_bytes else None))
-    print("[EMAIL] env check",
-      "HOST=", os.getenv("SMTP_HOST"),
-      "USER=", bool(os.getenv("SMTP_USER")),
-      "PASS=", bool(os.getenv("SMTP_PASS")),
-      "FROM=", os.getenv("SMTP_FROM"))
-
+          "to=", to_email,
+          "pdf_filename=", pdf_filename,
+          "pdf_bytes.len=", (len(pdf_bytes) if pdf_bytes else None))
 
     host = os.getenv("SMTP_HOST")
-    port_env = os.getenv("SMTP_PORT", "").strip()
     user = (os.getenv("SMTP_USER") or "").strip()
     password = (os.getenv("SMTP_PASS") or "").strip()
     mail_from = (os.getenv("SMTP_FROM") or "").strip()
     timeout = int(os.getenv("SMTP_TIMEOUT", "25"))
 
+    print("[EMAIL] env check HOST=", host,
+          "USER=", bool(user),
+          "PASS=", bool(password),
+          "FROM=", mail_from)
+
     if not (host and user and password and mail_from and to_email):
         print("[EMAIL] SMTP env not configured or recipient missing, skip.")
-        return
+        return False  # ✅ 중요
 
     login_user = user if "@" in user else f"{user}@naver.com"
 
     masked_applicant = mask_second_char(applicant_name)
-    subject = f"[(주)가온앤] \"{masked_applicant}\"님의 영양분석 리포트가 도착했습니다."
+    subject = f"[(주)가온앤] {masked_applicant}님의 영양분석 리포트가 도착했습니다."
 
     body = (
-        f"\"{partner_name}\"님 안녕하세요,\n"
+        f"{partner_name}님 안녕하세요,\n"
         f"(주)가온앤 영양분석서비스 담당자입니다.\n\n"
-        f"\"{partner_requested_at_kst_str}\"에 분석신청하신 고객 \"{applicant_name}\"님의 영양분석 리포트를 전달드립니다.\n"
+        f"{partner_requested_at_kst_str}에 분석신청하신 고객 {applicant_name}님의 영양분석 리포트를 전달드립니다.\n"
         f"리포트는 고객님 이외 다른 사람에게 전달되지 않도록 주의해주시기 바랍니다.\n\n"
         f"저희 가온앤 서비스를 신청해주셔서 감사합니다.\n"
         f"앞으로도 양질의 서비스를 제공해드리기 위해 최선을 다하겠습니다.\n\n"
@@ -662,46 +659,42 @@ def send_report_email(
     msg["To"] = to_email
     msg.set_content(body)
 
-    # PDF 첨부
-    msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename=pdf_filename)
+    fn = pdf_filename or "report.pdf"
+    if not fn.lower().endswith(".pdf"):
+        fn += ".pdf"
+    msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename=fn)
 
     ctx = ssl.create_default_context()
 
-    def try_587():
+    try:
+        print("[EMAIL] try 587 STARTTLS...")
         with smtplib.SMTP(host, 587, timeout=timeout) as s:
             s.ehlo()
             s.starttls(context=ctx)
             s.ehlo()
             s.login(login_user, password)
             s.send_message(msg)
-
-    def try_465():
-        with smtplib.SMTP_SSL(host, 465, timeout=timeout, context=ctx) as s:
-            s.login(login_user, password)
-            s.send_message(msg)
-
-    try:
-        try_587()
-        print("[EMAIL] try 587 STARTTLS...")
         print("[EMAIL] try 587 OK")
-        return
+        return True
     except Exception as e1:
         print("[EMAIL] 587 failed:", repr(e1))
         import traceback
         traceback.print_exc()
 
     try:
-        try_465()
-        print("[EMAIL] try 587 STARTTLS...")
+        print("[EMAIL] try 465 SSL...")
+        with smtplib.SMTP_SSL(host, 465, timeout=timeout, context=ctx) as s:
+            s.login(login_user, password)
+            s.send_message(msg)
         print("[EMAIL] try 465 OK")
-        return
+        return True
     except Exception as e2:
-        print("[EMAIL] 465 failed:", repr(e1))
+        print("[EMAIL] 465 failed:", repr(e2))
         import traceback
         traceback.print_exc()
 
     print("[EMAIL] send failed: both 587 and 465 attempts failed")
-
+    return False  # ✅ 중요
 
 #-- 업체담당자, 고객 매핑 헬퍼 1(업체 담당자가 고객 등록 후 문진 작성 시) --#
 def try_auto_map_partner_for_respondent(
