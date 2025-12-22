@@ -33,7 +33,7 @@
   .control-bar{position:relative; z-index:50;}
   .control-bar.card{border-radius:12px}
   /* 테이블: 화면 가득 */
-  .table-card{padding:0; overflow:auto; min-height: 420px;}
+  .table-card{padding:0; overflow:auto;}
   table{width:100%; border-collapse:collapse; table-layout:auto; background:#fff}
   th, td{padding:10px 12px; border-bottom:1px solid var(--border); font-size:14px; text-align:center}
   th{background:#f3f4f6; text-align:left}
@@ -108,6 +108,14 @@
   .pagesize-card{display:flex; align-items:center; gap:8px; padding:8px 12px; margin-bottom:10px}
   .ico{width:16px; height:16px}
   table thead th, table tbody td { text-align: center !important; }
+
+/* base_admin.html의 큰 흰 래퍼(.wrap)를 responses 페이지에서만 제거 */
+body > .wrap {
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+  
 </style>
 
 <div class="page">
