@@ -17,12 +17,10 @@
   body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
   /* 전체 폭 꽉 채우기 */
   .page{width:100%; max-width:1366px; margin:0 auto; padding:20px}
-  .page{background:transparent;}              /* 혹시 상속되는 배경 제거 */
-  .table-card{margin-top:0;}                  /* 간격 유지(안전) */
   /* 카드 */
   .card{background:var(--card); border:1px solid var(--border); border-radius:16px; box-shadow:0 6px 18px rgba(0,0,0,.04)}
   /* 검색 카드: 왼쪽 정렬 */
-  .search-card{padding:16px 16px 8px 16px; margin-bottom:10px; display:inline-block; width:100%}
+  .search-card{padding:16px 16px 8px 16px; margin-bottom:10px;}
   .row{display:flex; gap:12px; flex-wrap:wrap; align-items:center}
   .row>div{display:flex; gap:8px; align-items:center}
   label{font-size:12px; color:#64748b}
@@ -35,7 +33,7 @@
   .control-bar{position:relative; z-index:50;}
   .control-bar.card{border-radius:12px}
   /* 테이블: 화면 가득 */
-  .table-card{padding:0; overflow:auto}
+  .table-card{padding:0; overflow:auto; min-height: 420px;}
   table{width:100%; border-collapse:collapse; table-layout:auto; background:#fff}
   th, td{padding:10px 12px; border-bottom:1px solid var(--border); font-size:14px; text-align:center}
   th{background:#f3f4f6; text-align:left}
