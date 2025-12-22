@@ -29,7 +29,8 @@
   .w-status{width:210px}
   .w-text{ width:360px }
   /* 컨트롤 바: 검색과 테이블 사이, 왼쪽 정렬 */
-  .control-bar{display:flex; justify-content:flex-start; gap:8px; padding:8px 12px; margin-bottom:10px}
+  .control-bar{display:flex; justify-content:flex-start; gap:8px; padding:8px 12px; margin-bottom:10px;}
+  .control-bar{position:relative; z-index:50;}
   .control-bar.card{border-radius:12px}
   /* 테이블: 화면 가득 */
   .table-card{padding:0; overflow:auto}
@@ -350,21 +351,15 @@ function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.s
     document.getElementById('xlsxIds').value = ids.join(',');
     f.submit();
   }
-function bulkSendReport(){
-  const ids = getSelectedIds();
-  if(ids.length===0){ alert('선택된 항목이 없습니다.'); return; }
-  const f = document.getElementById('sendReportForm');
-  document.getElementById('sendReportIds').value = ids.join(',');
-  f.submit();
-}
-
-  document.getElementById("sendIds").value = ids.join(",");
-  document.getElementById("sendForm").submit();
-}
-
+  function bulkSendReport(){
+    const ids = getSelectedIds();
+    if(ids.length===0){ alert('선택된 항목이 없습니다.'); return; }
+    document.getElementById('sendIds').value = ids.join(',');
+    document.getElementById('sendForm').submit();
+  }
 
   function toggleAll(master){
-    document.querySelectorAll('.rowChk').forEach(cb=>cb.checked = master.checked);
+      document.querySelectorAll('.rowChk').forEach(cb=>cb.checked = master.checked);
   }
 
   // 날짜 입력 보정(YYYY-MM-DD)
