@@ -381,7 +381,6 @@ def on_startup():
 # --- NHIS 저장 헬퍼 (rtoken 없이 rid가 확실할 때) ---
 def _save_nhis_to_db_with_id(session, respondent_id: int, picked: dict, raw: dict):
     try:
-        from sqlalchemy import text as sa_text
         stmt = sa_text("""
             UPDATE surveyresponse
                SET nhis_json = :js,
@@ -476,8 +475,6 @@ def verify_partner_password(raw_password: str, stored_hash: str | None) -> bool:
     """
     if not raw_password or not stored_hash:
         return False
-
-    import hashlib
 
     SALT = "partner_salt_v1"   # ❗ 서비스 운영 시 환경변수로 분리 권장
     hashed = hashlib.sha256((SALT + raw_password).encode("utf-8")).hexdigest()
@@ -678,7 +675,6 @@ def send_report_email(
         return True
     except Exception as e1:
         print("[EMAIL] 587 failed:", repr(e1))
-        import traceback
         traceback.print_exc()
 
     try:
@@ -690,7 +686,6 @@ def send_report_email(
         return True
     except Exception as e2:
         print("[EMAIL] 465 failed:", repr(e2))
-        import traceback
         traceback.print_exc()
 
     print("[EMAIL] send failed: both 587 and 465 attempts failed")
@@ -1127,8 +1122,6 @@ async def partner_signup_submit(
 
 
     # 2) 중복 전화번호 체크 (user_admin.phone UNIQUE)
-    from sqlalchemy import text as sa_text
-
     row = session.exec(
         sa_text(
             """
@@ -1334,7 +1327,6 @@ async def partner_profile_post(
     # 3) 비밀번호 변경 의도가 있고 검증도 통과한 경우에만 password_p 변경
     # ---------------------------
     if wants_pw_change:
-        import hashlib
         SALT = "partner_salt_v1"
         user.password_p = hashlib.sha256(
             (SALT + new_password).encode("utf-8")
@@ -1411,7 +1403,6 @@ async def partner_mapping_post(
             },
         )
 
-    from sqlalchemy import text as sa_text
     one_month_ago = datetime.utcnow() - timedelta(days=31)
 
     # 최근 1개월 내 중복 요청 여부 확인
@@ -2380,7 +2371,7 @@ def admin_delete_report(
     return RedirectResponse(url=_safe_next_url(next), status_code=303)
 
 #리포트 다운로드
-@admin_router.get("/response/{sr_id}/report/download")
+@admin_router.get("/response/{rid}/report/download")
 def admin_download_report(rid: int, session: Session = Depends(get_session)):
     rf = session.exec(
         select(ReportFile).where(ReportFile.survey_response_id == rid)
@@ -2815,9 +2806,6 @@ def survey_finish(
 
     # === NHIS 최종 수집: 세션의 '작은 값'(picked_tmp) + nhis_audit 원문(raw_from_audit) ===
     try:
-        import json
-        from sqlalchemy import text as sa_text
-
         picked_tmp = (request.session or {}).get("nhis_latest") or {}
 
         # 1순위: 이번 세션의 callbackId로 감사로그에서 가장 최근 원문
@@ -2948,7 +2936,6 @@ def survey_finish(
                 # 이미 값이 있으면 덮어쓰지 않고, 없을 때만 기록
                 if not resp.agreement_at:
                     try:
-                        from datetime import datetime
                         # 세션에 isoformat()으로 넣어둔 값을 되살림
                         resp.agreement_at = datetime.fromisoformat(agr_at_str) if agr_at_str else now_kst()
                     except Exception:
@@ -3682,7 +3669,6 @@ async def dh_simple_complete(
 
             # --- 성공 직전 User 인적정보 업데이트(이름/성별/생년월일) ---
             try:
-                from datetime import date
                 auth_cookie = request.cookies.get(AUTH_COOKIE_NAME)
                 user_id = verify_user(auth_cookie) if auth_cookie else -1
                 if user_id and user_id > 0:
@@ -3828,7 +3814,6 @@ async def dh_simple_complete(
                 
             # --- 성공 직전 User 인적정보 업데이트(이름/성별/생년월일) ---
             try:
-                from datetime import date
                 auth_cookie = request.cookies.get(AUTH_COOKIE_NAME)
                 user_id = verify_user(auth_cookie) if auth_cookie else -1
                 if user_id and user_id > 0:
@@ -3926,11 +3911,8 @@ def dh_nhis_result(payload: dict = Body(...), request: Request = None):
 
 
 #임시 디버그 라우트, 로그. 운영 시 삭제
-from fastapi.responses import JSONResponse
-
 @app.get("/debug/datahub-selftest")
 def debug_datahub_selftest():
-    import os, base64, hashlib
     from app.vendors.datahub_client import encrypt_field, _get_key_iv, _get_text_encoding
 
     plain  = (os.getenv("DATAHUB_SELFTEST_PLAIN", "") or "").strip()
@@ -3998,9 +3980,6 @@ def debug_datahub_finder():
     - (보너스) 키 유도(SHA-256/MD5) 방식
     조합을 브루트포스로 시도해 'expect'와 일치하는 암호문을 찾는다.
     """
-    import os, base64, hashlib
-    from Crypto.Cipher import AES
-
     def pkcs7_pad(b: bytes, block=16) -> bytes:
         n = block - (len(b) % block)
         return b + bytes([n]) * n
