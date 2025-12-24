@@ -1495,6 +1495,9 @@ def partner_requests(
     client_name = (qp.get("client_name") or "").strip()
     client_phone_suffix = (qp.get("client_phone_suffix") or "").strip()
     status = (qp.get("status") or "").strip()
+    #문진 미제출
+    only_not_submitted = (qp.get("only_not_submitted") or "").strip() in ("1", "true", "on", "yes")
+
 
     # 쿼리스트링이 완전히 비어있으면 "첫 진입"으로 간주
     is_first_visit = (request.url.query == "")
@@ -1618,10 +1621,35 @@ def partner_requests(
                 e,
             )
 
-        # 진행 상태값 필터
-        if status in ("submitted", "accepted", "report_uploaded"):
-            if not resp or resp.status != status:
+        # ---------------------------
+        # 필터: (1) 리포트 발송여부 status=unsent/sent
+        # ---------------------------
+        # sent: Respondent.status == report_sent
+        # unsent: 그 외(응답이 없거나 report_sent가 아닌 경우 포함)
+        if status == "sent":
+            if not resp or resp.status != "report_sent":
                 continue
+        elif status == "unsent":
+            if resp and resp.status == "report_sent":
+                continue
+
+        # ---------------------------
+        # 필터: (2) 문진 미제출 인원만 보기 (체크박스)
+        # ---------------------------
+        # 문진 미제출 정의:
+        # - resp.status == submitted
+        # - pcm.created_at(담당자신청일)은 존재
+        # - pcm.client_submitted_at(고객신청일)이 비어있음
+        if only_not_submitted:
+            is_not_submitted = (
+                (resp is not None)
+                and (resp.status == "submitted")
+                and (pcm.created_at is not None)
+                and (pcm.client_submitted_at is None)
+            )
+            if not is_not_submitted:
+                continue
+
 
         # SurveyResponse / ReportFile
         if resp:
@@ -1690,6 +1718,7 @@ def partner_requests(
             "status": status,
             "partner_id": partner_id,
             "partner_name": partner_name_val,
+            "only_not_submitted": only_not_submitted,
             "to_kst_str": to_kst_str,
         },
     )

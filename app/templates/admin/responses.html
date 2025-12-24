@@ -315,7 +315,7 @@ a.pdf-link:hover{
     </form>
 
     {% if rf %}
-    <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report/delete">
+    <form style="display:inline" method="post" action="/admin/response/{{ sr.id }}/report/delete" onsubmit="return confirm('등록한 리포트를 삭제하시겠습니까?');">
       <input type="hidden" name="next" class="rowNext">
       <button type="submit" title="리포트 삭제" class="iconbtn2">
         <img class="ico" src="/static/icons/trash.svg" alt="삭제"/>

@@ -39,7 +39,7 @@
       <!-- 1행: 신청일(고객 또는 담당자) -->
       <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end;">
         <div style="display:flex; flex-direction:column; font-size:13px;">
-          <label style="color:#64748b; margin-bottom:4px;">신청일 (고객 또는 담당자, 최대 31일)</label>
+          <label style="color:#64748b; margin-bottom:4px;">신청일 (고객 또는 담당자신청일, 최대 31일)</label>
           <div style="display:flex; align-items:center; gap:6px;">
             <input type="text"
                    name="date_from"
@@ -104,13 +104,17 @@
       <!-- 4행: 진행 상태값 -->
       <div style="display:flex; flex-wrap:wrap; gap:12px;">
         <div style="display:flex; flex-direction:column; font-size:13px;">
-          <label style="color:#64748b; margin-bottom:4px;">진행 상태값</label>
+          <label style="color:#64748b; margin-bottom:4px;">리포트 발송여부</label>
           <select name="status" style="width:200px; padding:8px 10px; border-radius:10px; border:1px solid #e5e7eb; font-size:14px;">
             <option value="" {{ 'selected' if not status }}>전체</option>
-            <option value="submitted" {{ 'selected' if status=='submitted' }}>신청완료</option>
-            <option value="accepted" {{ 'selected' if status=='accepted' }}>접수완료</option>
-            <option value="report_uploaded" {{ 'selected' if status=='report_uploaded' }}>리포트 업로드 완료</option>
+            <option value="unsent" {{ 'selected' if status=='unsent' }}>리포트 미발송</option>
+            <option value="sent" {{ 'selected' if status=='sent' }}>리포트 발송완료</option>
           </select>
+          <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+            <span style="color:#64748b; font-size:13px;">문진 미제출 인원만 보기</span>
+            <input type="checkbox" name="only_not_submitted" value="1"
+                  {{ 'checked' if only_not_submitted else '' }}>
+          </div>
         </div>
       </div>
 
@@ -185,12 +189,29 @@
             <!-- 진행 상태값 -->
             <td style="padding:10px 12px; font-size:14px; text-align:center;">
               {% set st = resp.status if resp else '' %}
-              {% if st == 'submitted' %}
-                <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#eef2ff; font-size:12px;">신청완료</span>
+              {% set has_client_submitted = (pcm.client_submitted_at is not none) %}
+              {% set has_partner_requested = (pcm.created_at is not none) %}
+
+              {% if st == 'report_sent' %}
+                <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#e0f2fe; font-size:12px;">리포트발송완료</span>
+
+              {% elif st == 'report_uploaded' %}
+                {# requests에서는 report_uploaded를 "리포트 발송대기"로 표시 #}
+                <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#fee2e2; font-size:12px;">리포트 발송대기</span>
+
               {% elif st == 'accepted' %}
                 <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#dcfce7; font-size:12px;">접수완료</span>
-              {% elif st == 'report_uploaded' %}
-                <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#fee2e2; font-size:12px;">리포트 업로드 완료</span>
+
+              {% elif st == 'submitted' %}
+                {# submitted에서 분석신청/문진제출/문진미제출을 파생 #}
+                {% if has_partner_requested and has_client_submitted %}
+                  <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#eef2ff; font-size:12px;">분석신청</span>
+                {% elif has_partner_requested and (not has_client_submitted) %}
+                  <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#fef9c3; font-size:12px;">문진 미제출</span>
+                {% else %}
+                  <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#eef2ff; font-size:12px;">문진제출</span>
+                {% endif %}
+
               {% else %}
                 <span style="font-size:12px; color:#6b7280;">{{ st or '-' }}</span>
               {% endif %}
@@ -198,7 +219,7 @@
 
             <!-- 리포트 발송여부 -->
             <td style="padding:10px 12px; font-size:14px; text-align:center;">
-              {% if rf %}
+              {% if resp and resp.status == 'report_sent' %}
                 <span style="color:#16a34a; font-weight:600;">발송</span>
               {% else %}
                 <span style="color:#6b7280;">미발송</span>
