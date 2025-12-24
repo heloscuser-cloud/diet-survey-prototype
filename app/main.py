@@ -1973,6 +1973,11 @@ def admin_responses(
     msg: Optional[str] = None,
     session: Session = Depends(get_session),
 ):
+    
+    # --- 첫 진입 기본값: from/to가 없으면 오늘(KST)로 세팅 ---
+    is_first_visit = (request.url.query == "")
+    today_str = now_kst().date().isoformat()
+    
     # 안전 파싱
     try:
         page = max(1, int(page))
@@ -2065,10 +2070,11 @@ def admin_responses(
     d_from = parse_date(from_)
     d_to = parse_date(to)
     start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
+    # 문진제출일(= SurveyResponse.submitted_at) 기준으로 필터
     if start_utc:
-        stmt = stmt.where(Respondent.created_at >= start_utc)
+        stmt = stmt.where(SurveyResponse.submitted_at >= start_utc)
     if end_utc:
-        stmt = stmt.where(Respondent.created_at < end_utc)
+        stmt = stmt.where(SurveyResponse.submitted_at < end_utc)
 
     # --- 상태 필터 ---
     # - 문진제출: Respondent.status == submitted AND 담당자신청일(created_at)이 없음
