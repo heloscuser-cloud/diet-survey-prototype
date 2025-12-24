@@ -144,7 +144,8 @@ a.pdf-link:hover{
           <button type="button" class="btn btn-sm btn-cyan" onclick="shiftDays(-1)">◀</button>
           <button type="button" class="btn btn-sm btn-cyan" onclick="shiftDays(1)">▶</button>
           <button type="button" class="btn btn-sm btn-cyan" onclick="setToday()">오늘</button>
-          <button type="button" class="btn btn-sm btn-cyan" onclick="setWeek()">일주일</button>
+          <button type="button" class="btn btn-sm btn-cyan" onclick="setWeek()">7일</button>
+          <button type="button" class="btn btn-sm btn-cyan" onclick="setMonth()">31일</button>
         </div>
       </div>
 
@@ -224,6 +225,7 @@ a.pdf-link:hover{
 <th>담당자 소속</th>
 <th>PDF 파일명</th>
 <th>업로드 날짜</th>
+<th>리포트발송일</th>
 <th>진행 상태값</th>
 <th>문진제출일</th>
 <th>담당자신청일</th>
@@ -277,6 +279,9 @@ a.pdf-link:hover{
 
   <!-- 업로드 날짜 -->
   <td>{{ to_kst_str(rf.uploaded_at) if rf else '' }}</td>
+
+  <!--리포트 발송일-->
+  <td>{{ to_kst_str(resp.report_sent_at) if resp and resp.report_sent_at else '' }}</td>
 
   <!-- 진행 상태값 -->
   <td>
@@ -354,6 +359,7 @@ function getDates(){const f=document.querySelector('input[name=from]');const t=d
 function shiftDays(n){let [f,t]=getDates();let fd=f.value?new Date(f.value):new Date();let td=t.value?new Date(t.value):new Date();fd.setDate(fd.getDate()+n);td.setDate(td.getDate()+n);f.value=fmt(fd);t.value=fmt(td)}
 function setToday(){let [f,t]=getDates();let d=new Date();f.value=fmt(d);t.value=fmt(d)}
 function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.setDate(td.getDate()-6);f.value=fmt(fd);t.value=fmt(td)}
+function setMonth(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.setDate(td.getDate()-31);f.value=fmt(fd);t.value=fmt(td)}
 
 // (교체) 검색 폼: 기본 GET 제출만
 (function(){

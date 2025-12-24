@@ -143,6 +143,7 @@
           <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">고객연락처</th>
           <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">진행 상태값</th>
           <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">리포트 발송여부</th>
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">리포트 발송일</th>
         </tr>
       </thead>
       <tbody>
@@ -192,7 +193,11 @@
               {% set has_client_submitted = (pcm.client_submitted_at is not none) %}
               {% set has_partner_requested = (pcm.created_at is not none) %}
 
-              {% if st == 'report_sent' %}
+              {# 문진 미제출: 담당자신청일은 있는데 고객신청일이 비어있으면 무조건 최우선 표시 #}
+              {% if has_partner_requested and (not has_client_submitted) %}
+                <span ...>문진 미제출</span>
+
+              {% elif st == 'report_sent' %}
                 <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#e0f2fe; font-size:12px;">리포트발송완료</span>
 
               {% elif st == 'report_uploaded' %}
@@ -206,8 +211,6 @@
                 {# submitted에서 분석신청/문진제출/문진미제출을 파생 #}
                 {% if has_partner_requested and has_client_submitted %}
                   <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#eef2ff; font-size:12px;">분석신청</span>
-                {% elif has_partner_requested and (not has_client_submitted) %}
-                  <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#fef9c3; font-size:12px;">문진 미제출</span>
                 {% else %}
                   <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#eef2ff; font-size:12px;">문진제출</span>
                 {% endif %}
@@ -224,6 +227,11 @@
               {% else %}
                 <span style="color:#6b7280;">미발송</span>
               {% endif %}
+            </td>
+
+            <!--리포트 발송일-->
+            <td style="padding:10px 12px; font-size:14px; text-align:center;">
+              {{ to_kst_str(resp.report_sent_at) if resp and resp.report_sent_at else '' }}
             </td>
           </tr>
         {% endfor %}

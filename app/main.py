@@ -312,6 +312,8 @@ class Respondent(SQLModel, table=True):
     #동의서 관련 필드
     agreement_all: bool = Field(default=False)
     agreement_at: datetime | None = None
+    report_sent_at: datetime = Field(default_factory=now_kst)
+
 
 class ReportFile(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -1641,14 +1643,11 @@ def partner_requests(
         # - pcm.created_at(담당자신청일)은 존재
         # - pcm.client_submitted_at(고객신청일)이 비어있음
         if only_not_submitted:
-            is_not_submitted = (
-                (resp is not None)
-                and (resp.status == "submitted")
-                and (pcm.created_at is not None)
-                and (pcm.client_submitted_at is None)
-            )
+            # resp가 없어도 pcm 기준으로 문진 미제출 판단 가능해야 누락이 없음
+            is_not_submitted = (pcm.created_at is not None) and (pcm.client_submitted_at is None)
             if not is_not_submitted:
                 continue
+
 
 
         # SurveyResponse / ReportFile
@@ -2329,6 +2328,7 @@ async def admin_send_reports(
 
         if ok:
             resp.status = "report_sent"
+            resp.report_sent_at = now_kst()
             session.add(resp)
             ok_cnt += 1
         else:
@@ -2372,6 +2372,7 @@ async def admin_upload_report(
     resp = session.get(Respondent, sr.respondent_id)
     if resp:
         resp.status = "report_uploaded"
+        resp.report_sent_at = None
         session.add(resp)
 
     session.commit()
