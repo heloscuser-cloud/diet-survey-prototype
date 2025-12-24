@@ -989,7 +989,7 @@ async def info_submit(
     return RedirectResponse(url="/survey", status_code=303)
 
 # --- Session (admin 인증 단일 쿠키) ---
-SESSION_MAX_AGE = 30 * 60  # 30분
+SESSION_MAX_AGE = 60 * 180  # 3시간
 
 app.add_middleware(
     SessionMiddleware,
@@ -1001,16 +1001,21 @@ app.add_middleware(
 
 @app.middleware("http")
 async def rolling_session_middleware(request: Request, call_next):
-    # 요청 처리
     response = await call_next(request)
 
-    # admin 세션이면 만료 임박 시 갱신(쿠키 재발급)
+    now = int(datetime.now(timezone.utc).timestamp())
+
+    # admin rolling
     if request.session.get("admin"):
-        now = int(datetime.now(timezone.utc).timestamp())
         issued_at = int(request.session.get("_iat", 0))
-        # 남은 시간 < 5분이면 갱신
         if now - issued_at > (SESSION_MAX_AGE - 300):
-            request.session["_iat"] = now  # 세션 값 변경 -> Set-Cookie 재발급
+            request.session["_iat"] = now  # Set-Cookie 재발급 유도
+
+    # partner rolling
+    if request.session.get("partner_id"):
+        issued_at_p = int(request.session.get("_iat_partner", 0))
+        if now - issued_at_p > (SESSION_MAX_AGE - 300):
+            request.session["_iat_partner"] = now
 
     return response
 
@@ -1044,7 +1049,8 @@ def partner_logout(request: Request):
     파트너 세션만 정리하고 /partner/login 으로 돌려보낸다.
     (사용자 설문용 AUTH 쿠키는 건드리지 않음)
     """
-    request.session.clear()
+    request.session.pop("partner_id", None)
+    request.session.pop("_iat_partner", None)
     return RedirectResponse(url="/partner/login", status_code=303)
 
 
@@ -1201,8 +1207,8 @@ def partner_login_post(
         })
 
     # 세션 값 등록 (관리자 세션과 충돌 방지)
-    request.session.clear()
     request.session["partner_id"] = user.id
+    request.session["_iat_partner"] = int(datetime.now(timezone.utc).timestamp())
 
     # 로그인 성공 → 파트너 대시보드로
     return RedirectResponse(url="/partner/dashboard", status_code=302)
@@ -2182,7 +2188,8 @@ async def admin_bulk_accept(
     if sent_cnt > 0:
         msg = (
             f"이미 리포트를 발송한 건 {sent_cnt}건이 포함되어있습니다.\n"
-            f"해당 건을 제외하고 접수완료 처리를 진행하였습니다. (접수완료 처리 {accepted_cnt}건)"
+            f"해당 건을 제외하고 접수완료 처리를 진행하였습니다.\n"
+            f"(접수완료 처리 {accepted_cnt}건)"
         )
         return _redirect_with_msg(next, msg)
 
@@ -2271,7 +2278,7 @@ async def admin_send_reports(
 
     if already_sent > 0:
         msg = (
-            f"이미 리포트 발송을 완료한 건 {already_sent}건이 포함되어있습니다.\n"
+            f"이미 리포트 발송을 완료한 {already_sent}건이 포함되어있습니다.\n"
             f"확인 후 다시 시도해주세요."
         )
         return _redirect_with_msg(next, msg)

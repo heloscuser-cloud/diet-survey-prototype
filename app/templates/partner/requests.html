@@ -195,14 +195,14 @@
 
               {# 문진 미제출: 담당자신청일은 있는데 고객신청일이 비어있으면 무조건 최우선 표시 #}
               {% if has_partner_requested and (not has_client_submitted) %}
-                <span ...>문진 미제출</span>
+                <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#fee2e2; font-size:12px;">문진미제출</span>
 
               {% elif st == 'report_sent' %}
                 <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#e0f2fe; font-size:12px;">리포트발송완료</span>
 
               {% elif st == 'report_uploaded' %}
                 {# requests에서는 report_uploaded를 "리포트 발송대기"로 표시 #}
-                <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#fee2e2; font-size:12px;">리포트 발송대기</span>
+                <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#dcfce7; font-size:12px;">리포트발송대기</span>
 
               {% elif st == 'accepted' %}
                 <span style="display:inline-block; padding:2px 8px; border-radius:999px; background:#dcfce7; font-size:12px;">접수완료</span>
@@ -237,7 +237,7 @@
         {% endfor %}
       {% else %}
         <tr>
-          <td colspan="7" style="padding:20px; text-align:center; font-size:14px; color:#6b7280;">
+          <td colspan="8" style="padding:20px; text-align:center; font-size:14px; color:#6b7280;">
             조회 결과가 없습니다.
           </td>
         </tr>

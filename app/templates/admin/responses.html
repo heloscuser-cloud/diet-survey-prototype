@@ -287,16 +287,16 @@ a.pdf-link:hover{
   <td>
     {% if resp.status=='submitted' %}
       {% if partner_requested_at %}
-        <span class="tag">분석신청</span>
+        <span class="tag" style="display:inline-block; padding:2px 8px; border-radius:999px; background:#eef2ff; font-size:12px;">분석신청</span>
       {% else %}
-        <span class="tag">문진제출</span>
+        <span class="tag" style="display:inline-block; padding:2px 8px; border-radius:999px; background:#eef2ff; font-size:12px;">문진제출</span>
       {% endif %}
     {% elif resp.status=='accepted' %}
-      <span class="tag">접수완료</span>
+      <span class="tag" style="display:inline-block; padding:2px 8px; border-radius:999px; background:#dcfce7; font-size:12px;">접수완료</span>
     {% elif resp.status=='report_uploaded' %}
-      <span class="tag">리포트 업로드 완료</span>
+      <span class="tag" style="display:inline-block; padding:2px 8px; border-radius:999px; background:#dcfce7; font-size:12px;">리포트 업로드 완료</span>
       {% elif resp.status=='report_sent' %}
-  <span class="tag">리포트 발송 완료</span>
+  <span class="tag" style="display:inline-block; padding:2px 8px; border-radius:999px; background:#e0f2fe; font-size:12px;">리포트 발송 완료</span>
 
     {% else %}
       <span class="muted">{{ resp.status }}</span>
