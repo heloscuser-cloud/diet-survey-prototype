@@ -1943,7 +1943,7 @@ async def admin_login(
         )
 
     # 4) 세션 발급 (기존 키 그대로)
-    request.session.clear()
+    # admin 세션만 설정 (partner 세션과 공존)
     request.session["admin"] = True
     request.session["_iat"] = int(datetime.now(timezone.utc).timestamp())
 
@@ -1952,12 +1952,11 @@ async def admin_login(
 
 @app.get("/admin/logout")
 def admin_logout(request: Request):
-    request.session.clear()
-    resp = RedirectResponse(url="/admin/login", status_code=303)
-    # 세션 쿠키 이름은 기본 "session"
-    resp.delete_cookie("session", path="/")
-    return resp
+    # admin 세션만 제거 (partner 세션 유지)
+    request.session.pop("admin", None)
+    request.session.pop("_iat", None)
 
+    return RedirectResponse(url="/admin/login", status_code=303)
 
 
 # 목록
