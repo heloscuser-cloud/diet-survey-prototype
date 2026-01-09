@@ -3803,6 +3803,8 @@ async def dh_simple_complete(
     want_all = ((request.query_params.get("all") or "").lower() in ("1", "true", "yes"))
 
     did_full = False
+    empty_income_streak = 0
+    tried_identity = 0
     while time.time() < deadline:
         attempt += 1
         try:
@@ -3861,18 +3863,68 @@ async def dh_simple_complete(
                 },
             )
 
-        # ★ errCode 0001: 사용자 입력/인증 미완료 상태
-        # 기존: 즉시 FAIL 반환
-        # 변경: 폴링 계속 (사용자가 인증을 막 끝냈거나, 데이터 준비가 늦는 케이스 대비)
-        if err2 == "0001":
-            # 내부 메세지는 로그로만 남기고, 사용자에게는 즉시 실패를 반환하지 않음
-            msg = (
-                data2.get("ERRMSG")
-                or (rsp2 or {}).get("errMsg")
-                or "휴대폰에서 인증을 완료하신 뒤 다시 \"인증완료\"를 눌러주세요."
-            )
-            logging.info("[DH-COMPLETE][FETCH][WAIT] err=0001 msg=%s", msg)
+        # ✅ callback 조회는 성공(0000)인데 INCOMELIST가 계속 비는 경우가 있음
+        #    이때만 identity 기반 조회를 "최대 2회" 제한적으로 fallback 시도
+        if err2 == "0000" and isinstance(income, list) and len(income) == 0:
+            empty_income_streak += 1
+        else:
+            empty_income_streak = 0
 
+        if (
+            err2 == "0000"
+            and isinstance(income, list)
+            and len(income) == 0
+            and empty_income_streak >= 5
+            and tried_identity < 2
+        ):
+            tried_identity += 1
+            logging.info("[DH-COMPLETE][FALLBACK] try identity fetch #%s (empty_income_streak=%s)", tried_identity, empty_income_streak)
+
+            # 시작 단계 값 복구(이미 위에서 SP/loginOption 등 복구하는 코드가 있으면 그걸 그대로 사용)
+            SP = (request.session or {}).get("nhis_start_payload") or {}
+            loginOption  = str(SP.get("LOGINOPTION", "")).strip()
+            userName     = str(SP.get("USERNAME", "")).strip()
+            hpNumber     = str(SP.get("HPNUMBER", "")).strip()
+            juminVal     = str(SP.get("JUMIN", "")).strip() or str(SP.get("JUMINNUM", "")).strip()
+            telecomGubun = str(SP.get("TELECOMGUBUN", "")).strip() if loginOption == "3" else None
+
+            try:
+                rsp_id = DATAHUB.medical_checkup_simple_with_identity(
+                    callback_id=cbid,
+                    callback_type=cbtp,
+                    login_option=loginOption,
+                    user_name=userName,
+                    hp_number=hpNumber,
+                    jumin_or_birth=juminVal,
+                    telecom_gubun=telecomGubun
+                )
+                err_id = str((rsp_id or {}).get("errCode") or "")
+                data_id = (rsp_id or {}).get("data") or {}
+                income_id = data_id.get("INCOMELIST") or []
+
+                logging.info("[DH-COMPLETE][FALLBACK] identity err=%s income_len=%s", err_id, (len(income_id) if isinstance(income_id, list) else "NA"))
+
+                # identity에서 0000 + income 있으면 그걸로 성공 처리
+                if err_id == "0000" and isinstance(income_id, list) and len(income_id) > 0:
+                    picked = pick_latest_general(rsp_id, mode=("all" if want_all else "latest"))
+                    request.session["nhis_latest"] = picked if isinstance(picked, dict) else {}
+                    try:
+                        picked_one = pick_latest_general(rsp_id, mode="latest")
+                        _save_nhis_to_db(session, request, picked_one, rsp_id)
+                        request.session["nhis_latest"] = picked_one or {}
+                    except Exception as e:
+                        logging.warning("[NHIS][DB][WARN][identity-save] %r", e)
+
+                    return JSONResponse({"ok": True, "errCode": "0000", "message": "OK", "data": picked}, status_code=200)
+
+                # identity에서 0001이면(추가 텍스트 요구) → fallback 중단하고 callback 폴링 계속
+                if err_id == "0001":
+                    logging.info("[DH-COMPLETE][FALLBACK] identity returned 0001; continue callback polling")
+
+            except Exception as e:
+                logging.warning("[DH-COMPLETE][FALLBACK][ERR] %r", e)
+
+            # fallback 이후에는 바로 다음 폴링 주기로
             time.sleep(NHIS_FETCH_INTERVAL)
             continue
 
