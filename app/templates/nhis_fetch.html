@@ -778,14 +778,13 @@
       }
     });
 
-    // ---------- 간편인증 완료 ----------
+  // ---------- 간편인증 완료 ----------
   btnComplete.addEventListener('click', async () => {
     if (!gStartDone) {
       alert('먼저 "간편인증 시작"을 진행해주세요.');
       return;
     }
     if (isCompleting) {
-      // 이미 진행 중이면 두 번째 클릭은 무시
       return;
     }
     isCompleting = true;
@@ -793,50 +792,78 @@
     setStatus('인증 완료 확인 중...');
     btnComplete.disabled = true;
 
-    try {
-      const rsp = await fetch('/api/dh/simple/complete?all=1', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(callbackId ? { callbackId } : {}),
-        credentials: 'include'
-      });
+    // ✅ 202(준비중) 대응: 자동 재시도
+    let tries = 0;
+    const MAX_TRIES = 30;        // 약 60초 (2초 간격)
+    const INTERVAL_MS = 2000;
 
-      const data = await rsp.json().catch(() => ({}));
-      console.log('[COMPLETE][rsp]', rsp.status, data);
+    async function runCompleteOnce() {
+      tries += 1;
 
-      // 1) 서버에서 ok == true → 성공 처리 + 다음 페이지 이동
-      if (rsp.status === 200 && data && data.ok) {
-        setStatus('인증 및 검진 데이터 수집이 완료되었습니다. 다음 단계로 이동합니다.', 'ok');
-        const fallbackNext = nextUrlEl?.value || '/info';
-        const goTo = data.next_url || fallbackNext;
-        if (goTo) {
-          window.location.href = goTo;
+      try {
+        const rsp = await fetch('/api/dh/simple/complete?all=1', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(callbackId ? { callbackId } : {}),
+          credentials: 'include'
+        });
+
+        const data = await rsp.json().catch(() => ({}));
+        console.log('[COMPLETE][rsp]', rsp.status, data);
+
+        // 1) 성공
+        if (rsp.status === 200 && data && data.ok) {
+          setStatus('인증 및 검진 데이터 수집이 완료되었습니다. 다음 단계로 이동합니다.', 'ok');
+          const fallbackNext = nextUrlEl?.value || '/info';
+          const goTo = data.next_url || fallbackNext;
+          if (goTo) window.location.href = goTo;
+          return;
         }
-        return;
-      }
 
-      // 2) 서버에서 ok == false + msg 전달 → 알림 + 버튼 재활성화
-      if (rsp.status === 200 && data && data.ok === false) {
-        const msg = data.msg || data.message || '인증 확인 중 문제를 확인했습니다. 다시 시도해주세요.';
-        alert(msg);
-        setStatus(msg, 'err');
+        // 2) ✅ 준비중(202) -> 재시도
+        // 서버가 202 + {errCode:"2020"} 형태로 내려보내는 케이스 처리
+        if (rsp.status === 202 || (data && (data.errCode === '2020' || data.errCode === 2020))) {
+          if (tries >= MAX_TRIES) {
+            const msg = '아직 인증이 완료되지 않았거나 데이터가 준비되지 않았습니다.\n잠시 후 다시 시도해주세요.';
+            alert(msg);
+            setStatus(msg, 'err');
+            btnComplete.disabled = false;
+            isCompleting = false;
+            return;
+          }
+
+          setStatus(`인증 완료 확인 중... (대기 ${tries}/${MAX_TRIES})`);
+          setTimeout(runCompleteOnce, INTERVAL_MS);
+          return;
+        }
+
+        // 3) 서버가 200으로 ok:false를 준 경우(명시적 실패/안내)
+        if (rsp.status === 200 && data && data.ok === false) {
+          const msg = data.msg || data.message || '인증 확인 중 문제를 확인했습니다. 다시 시도해주세요.';
+          alert(msg);
+          setStatus(msg, 'err');
+          btnComplete.disabled = false;
+          isCompleting = false;
+          return;
+        }
+
+        // 4) 기타(500 등)
+        alert('인증 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+        setStatus('인증 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.', 'err');
         btnComplete.disabled = false;
         isCompleting = false;
-        return;
-      }
 
-      // 3) 그 외 (500 등) → 일반 오류 처리
-      alert('인증 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
-      setStatus('인증 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.', 'err');
-      btnComplete.disabled = false;
-      isCompleting = false;
-    } catch (e) {
-      console.error(e);
-      alert('인증 확인 중 네트워크 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
-      setStatus('인증 확인 중 네트워크 오류가 발생했습니다.', 'err');
-      btnComplete.disabled = false;
-      isCompleting = false;
+      } catch (e) {
+        console.error(e);
+        alert('인증 확인 중 네트워크 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+        setStatus('인증 확인 중 네트워크 오류가 발생했습니다.', 'err');
+        btnComplete.disabled = false;
+        isCompleting = false;
+      }
     }
+
+    // 첫 실행
+    runCompleteOnce();
   });
 
 
