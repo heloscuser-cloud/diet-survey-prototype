@@ -63,6 +63,15 @@
       <!-- 2행: 빠른 기간 선택 -->
       <div style="display:flex; flex-wrap:wrap; gap:8px; font-size:13px;">
         <span style="color:#64748b; align-self:center;">빠른 기간 선택</span>
+        <button type="button" id="btnPrevRange"
+        style="cursor:pointer; border:none; border-radius:999px; padding:4px 12px; font-size:13px; background:#e5e7eb;">
+          ◀
+        </button>
+        <button type="button" id="btnNextRange"
+                style="cursor:pointer; border:none; border-radius:999px; padding:4px 12px; font-size:13px; background:#e5e7eb;">
+          ▶
+        </button>
+
         <button type="button" data-range="today"
                 style="cursor:pointer; border:none; border-radius:999px; padding:4px 12px; font-size:13px; background:#e5e7eb;">
           오늘
@@ -335,8 +344,74 @@ document.querySelectorAll('[data-range]').forEach(function(btn) {
   });
 });
 
+    function shiftRange(dir){
+      const fromInput = document.querySelector('input[name="date_from"]');
+      const toInput   = document.querySelector('input[name="date_to"]');
+      if(!fromInput || !toInput) return;
+
+      let fd = fromInput.value ? new Date(fromInput.value) : new Date();
+      let td = toInput.value ? new Date(toInput.value) : new Date();
+
+      if(fd > td){
+        alert("조회 기간이 유효하지 않습니다. 다시 확인해주세요");
+        return;
+      }
+
+      const span = Math.floor((td - fd) / (24*60*60*1000)) + 1;
+
+      if(dir > 0){
+        const newFrom = new Date(td); newFrom.setDate(newFrom.getDate() + 1);
+        const newTo   = new Date(newFrom); newTo.setDate(newTo.getDate() + span - 1);
+        fromInput.value = formatLocalYYYYMMDD(newFrom);
+        toInput.value   = formatLocalYYYYMMDD(newTo);
+      }else{
+        const newTo   = new Date(fd); newTo.setDate(newTo.getDate() - 1);
+        const newFrom = new Date(newTo); newFrom.setDate(newFrom.getDate() - (span - 1));
+        fromInput.value = formatLocalYYYYMMDD(newFrom);
+        toInput.value   = formatLocalYYYYMMDD(newTo);
+      }
+    }
+
+    // ◀ ▶ 버튼 연결
+    const prevBtn = document.getElementById("btnPrevRange");
+    const nextBtn = document.getElementById("btnNextRange");
+    if(prevBtn) prevBtn.addEventListener("click", function(){ shiftRange(-1); });
+    if(nextBtn) nextBtn.addEventListener("click", function(){ shiftRange(1); });
+
+    // 조회 버튼(폼 submit) 시 날짜 검증
+    const form = document.querySelector('form[action="/partner/requests"]');
+    if(form){
+      form.addEventListener("submit", function(e){
+        const fv = (fromInput && fromInput.value) ? fromInput.value.trim() : "";
+        const tv = (toInput && toInput.value) ? toInput.value.trim() : "";
+
+        if(fv && tv){
+          const fd = new Date(fv);
+          const td = new Date(tv);
+
+          if(fd > td){
+            alert("조회 기간이 유효하지 않습니다. 다시 확인해주세요");
+            e.preventDefault();
+            return;
+          }
+
+          const diff = Math.floor((td - fd) / (24*60*60*1000));
+          if(diff > 30){
+            alert("최대 조회 가능 일수는 31일입니다.");
+            e.preventDefault();
+            return;
+          }
+        }
+      });
+    }
 
   });
+
+  (function(){
+  const msg = "{{ msg or '' }}";
+  if (msg) alert(msg);
+})();
+
 </script>
 
 {% endblock %}

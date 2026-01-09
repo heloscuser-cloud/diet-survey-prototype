@@ -1545,11 +1545,53 @@ def partner_requests(
     d_from = parse_date(date_from_str)
     d_to = parse_date(date_to_str)
 
-    # 기간 최대 31일 제한 (둘 다 있는 경우만)
+    # 기간 검사 (둘 다 있는 경우만)
     if d_from and d_to:
+        if d_from > d_to:
+            return templates.TemplateResponse(
+                "partner/requests.html",
+                {
+                    "request": request,
+                    "rows": [],
+                    "page": page,
+                    "page_size": PAGE_SIZE,
+                    "total": 0,
+                    "total_pages": 1,
+                    "date_from": date_from_str,
+                    "date_to": date_to_str,
+                    "client_name": client_name,
+                    "client_phone_suffix": client_phone_suffix,
+                    "status": status,
+                    "partner_id": partner_id,
+                    "partner_name": partner_name_val if 'partner_name_val' in locals() else None,
+                    "to_kst_str": lambda dt: to_kst(dt).strftime("%Y-%m-%d %H:%M") if dt else "",
+                    "msg": "조회 기간이 유효하지 않습니다. 다시 확인해주세요",
+                },
+            )
+
         diff_days = (d_to - d_from).days
-        if diff_days > 31:
-            d_from = d_to - timedelta(days=31)
+        if diff_days > 30:  # 포함 31일 초과
+            return templates.TemplateResponse(
+                "partner/requests.html",
+                {
+                    "request": request,
+                    "rows": [],
+                    "page": page,
+                    "page_size": PAGE_SIZE,
+                    "total": 0,
+                    "total_pages": 1,
+                    "date_from": date_from_str,
+                    "date_to": date_to_str,
+                    "client_name": client_name,
+                    "client_phone_suffix": client_phone_suffix,
+                    "status": status,
+                    "partner_id": partner_id,
+                    "partner_name": partner_name_val if 'partner_name_val' in locals() else None,
+                    "to_kst_str": lambda dt: to_kst(dt).strftime("%Y-%m-%d %H:%M") if dt else "",
+                    "msg": "최대 조회 가능 일수는 31일입니다.",
+                },
+            )
+
 
     # KST → UTC 변환
     start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
@@ -2069,6 +2111,14 @@ def admin_responses(
 
     d_from = parse_date(from_)
     d_to = parse_date(to)
+    # 기간 검사 (둘 다 있는 경우만)
+    if d_from and d_to:
+        if d_from > d_to:
+            return _redirect_with_msg(request.url.path + (("?" + request.url.query) if request.url.query else ""), "조회 기간이 유효하지 않습니다. 다시 확인해주세요")
+        diff_days = (d_to - d_from).days
+        if diff_days > 30:  # 포함 31일 초과
+            return _redirect_with_msg(request.url.path + (("?" + request.url.query) if request.url.query else ""), "최대 조회 가능 일수는 31일입니다.")
+
     start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
     # 문진제출일(= SurveyResponse.submitted_at) 기준으로 필터
     if start_utc:
@@ -3756,24 +3806,11 @@ async def dh_simple_complete(
     while time.time() < deadline:
         attempt += 1
         try:
-            if attempt <= NHIS_MAX_LIGHT_FETCH:
-                # ➊ light 1회만
-                fetch_body = {"CALLBACKID": cbid, "CALLBACKTYPE": cbtp}
-                rsp2 = DATAHUB.medical_checkup_simple(fetch_body)
-                kind = "light"
-            else:
-                # ➋ 이후는 계속 full
-                rsp2 = DATAHUB.medical_checkup_simple_with_identity(
-                    callback_id=cbid,
-                    callback_type=cbtp,
-                    login_option=loginOption,
-                    user_name=userName,
-                    hp_number=hpNumber,
-                    jumin_or_birth=juminVal,
-                    telecom_gubun=telecomGubun
-                )
-                kind = "full"
-                did_full = True
+            # ✅ 가이드에 맞게: Step2 이후 재조회도 callback 기반(light)만 사용
+            #    (full=신상정보 포함 재요청은 Step1 성격이라 0001 재발 가능)
+            fetch_body = {"CALLBACKID": cbid, "CALLBACKTYPE": cbtp}
+            rsp2 = DATAHUB.medical_checkup_simple(fetch_body)
+            kind = "light"
         except Exception as e:
             logging.warning("[DH-COMPLETE][FETCH][ERR] %r", e)
             time.sleep(NHIS_FETCH_INTERVAL)
@@ -3824,23 +3861,21 @@ async def dh_simple_complete(
                 },
             )
 
-        # ★ errCode 0001: 사용자 입력/인증 미완료 상태 → 폴링 중단하고 안내 메시지 반환
+        # ★ errCode 0001: 사용자 입력/인증 미완료 상태
+        # 기존: 즉시 FAIL 반환
+        # 변경: 폴링 계속 (사용자가 인증을 막 끝냈거나, 데이터 준비가 늦는 케이스 대비)
         if err2 == "0001":
+            # 내부 메세지는 로그로만 남기고, 사용자에게는 즉시 실패를 반환하지 않음
             msg = (
                 data2.get("ERRMSG")
                 or (rsp2 or {}).get("errMsg")
                 or "휴대폰에서 인증을 완료하신 뒤 다시 \"인증완료\"를 눌러주세요."
             )
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "ok": False,
-                    "errCode": err2,
-                    "msg": msg,
-                    "message": msg,
-                    "data": data2,
-                },
-            )
+            logging.info("[DH-COMPLETE][FETCH][WAIT] err=0001 msg=%s", msg)
+
+            time.sleep(NHIS_FETCH_INTERVAL)
+            continue
+
 
 
         if err2 == "0000" and isinstance(income, list) and len(income) > 0:

@@ -141,8 +141,8 @@ a.pdf-link:hover{
           <input class="w-date date-ymd" type="text" name="to" inputmode="numeric" placeholder="YYYY-MM-DD" value="{{ to or '' }}"/>
         </div>
         <div>
-          <button type="button" class="btn btn-sm btn-cyan" onclick="shiftDays(-1)">◀</button>
-          <button type="button" class="btn btn-sm btn-cyan" onclick="shiftDays(1)">▶</button>
+          <button type="button" class="btn btn-sm btn-cyan" onclick="shiftRange(-1)">◀</button>
+          <button type="button" class="btn btn-sm btn-cyan" onclick="shiftRange(1)">▶</button>
           <button type="button" class="btn btn-sm btn-cyan" onclick="setToday()">오늘</button>
           <button type="button" class="btn btn-sm btn-cyan" onclick="setWeek()">7일</button>
           <button type="button" class="btn btn-sm btn-cyan" onclick="setMonth()">31일</button>
@@ -356,8 +356,37 @@ a.pdf-link:hover{
 function z(n){return String(n).padStart(2,'0')}
 function fmt(d){return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`}
 function getDates(){const f=document.querySelector('input[name=from]');const t=document.querySelector('input[name=to]');return [f,t]}
-function shiftDays(n){let [f,t]=getDates();let fd=f.value?new Date(f.value):new Date();let td=t.value?new Date(t.value):new Date();fd.setDate(fd.getDate()+n);td.setDate(td.getDate()+n);f.value=fmt(fd);t.value=fmt(td)}
-function setToday(){let [f,t]=getDates();let d=new Date();f.value=fmt(d);t.value=fmt(d)}
+function shiftRange(dir){
+  let [f,t]=getDates();
+  if(!f || !t) return;
+
+  // 값이 없으면 오늘로 초기화
+  let fd = f.value ? new Date(f.value) : new Date();
+  let td = t.value ? new Date(t.value) : new Date();
+
+  // 잘못된 기간이면 먼저 정리(동작은 유지하되 튕김 방지)
+  if(fd > td){
+    alert("조회 기간이 유효하지 않습니다. 다시 확인해주세요");
+    return;
+  }
+
+  // 기간(포함) 길이만큼 이동: (to-from)+1
+  const span = Math.floor((td - fd) / (24*60*60*1000)) + 1;
+
+  if(dir > 0){
+    // ▶ : 다음 구간
+    const newFrom = new Date(td); newFrom.setDate(newFrom.getDate() + 1);
+    const newTo   = new Date(newFrom); newTo.setDate(newTo.getDate() + span - 1);
+    f.value = fmt(newFrom);
+    t.value = fmt(newTo);
+  }else{
+    // ◀ : 이전 구간
+    const newTo   = new Date(fd); newTo.setDate(newTo.getDate() - 1);
+    const newFrom = new Date(newTo); newFrom.setDate(newFrom.getDate() - (span - 1));
+    f.value = fmt(newFrom);
+    t.value = fmt(newTo);
+  }
+}
 function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.setDate(td.getDate()-6);f.value=fmt(fd);t.value=fmt(td)}
 function setMonth(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.setDate(td.getDate()-31);f.value=fmt(fd);t.value=fmt(td)}
 
@@ -365,8 +394,33 @@ function setMonth(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.
 (function(){
   const f = document.getElementById("searchForm");
   if (!f) return;
-  f.addEventListener("submit", function(){
+  f.addEventListener("submit", function(event){
     // hidden page=1은 그대로, 추가 작업 없음
+        // --- 날짜 유효성 검사 (최대 31일, from<=to) ---
+    const fromEl = document.querySelector('input[name="from"]');
+    const toEl   = document.querySelector('input[name="to"]');
+
+    const fv = (fromEl && fromEl.value) ? fromEl.value.trim() : "";
+    const tv = (toEl && toEl.value) ? toEl.value.trim() : "";
+
+    if(fv && tv){
+      const fd = new Date(fv);
+      const td = new Date(tv);
+
+      if(fd > td){
+        alert("조회 기간이 유효하지 않습니다. 다시 확인해주세요");
+        event.preventDefault();
+        return;
+      }
+
+      const diff = Math.floor((td - fd) / (24*60*60*1000)); // 날짜 차이(일)
+      if(diff > 30){ // 포함 31일 초과 = diff 31 이상 → diff>30
+        alert("최대 조회 가능 일수는 31일입니다.");
+        event.preventDefault();
+        return;
+      }
+    }
+
   });
 })();
 
