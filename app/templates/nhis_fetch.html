@@ -797,6 +797,11 @@
     const MAX_TRIES = 30;        // 약 60초 (2초 간격)
     const INTERVAL_MS = 2000;
 
+    const MAX_NET_RETRY = 3;      // 일시적 오류 최대 3회 재시도
+    const NET_RETRY_MS = 5000;    // 5초 대기 후 재시도
+    let netRetry = 0;
+
+    
     async function runCompleteOnce() {
       tries += 1;
 
@@ -847,19 +852,38 @@
           return;
         }
 
-        // 4) 기타(500 등)
+        // 4) 기타(500/404 등) -> 일시적 오류면 5초 후 최대 3회 재시도
+        if ([404, 408, 429, 500, 502, 503, 504].includes(rsp.status)) {
+          if (netRetry < MAX_NET_RETRY) {
+            netRetry += 1;
+            setStatus(`인증 확인 중 일시적 오류가 발생했습니다. 잠시 후 자동 재시도합니다. (${netRetry}/${MAX_NET_RETRY})`, 'err');
+            setTimeout(runCompleteOnce, NET_RETRY_MS);
+            return;
+          }
+        }
+
         alert('인증 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
         setStatus('인증 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.', 'err');
         btnComplete.disabled = false;
         isCompleting = false;
 
+
       } catch (e) {
         console.error(e);
+
+        if (netRetry < MAX_NET_RETRY) {
+          netRetry += 1;
+          setStatus(`인증 확인 중 네트워크 오류가 발생했습니다. 잠시 후 자동 재시도합니다. (${netRetry}/${MAX_NET_RETRY})`, 'err');
+          setTimeout(runCompleteOnce, NET_RETRY_MS);
+          return;
+        }
+
         alert('인증 확인 중 네트워크 오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
         setStatus('인증 확인 중 네트워크 오류가 발생했습니다.', 'err');
         btnComplete.disabled = false;
         isCompleting = false;
       }
+
     }
 
     // 첫 실행

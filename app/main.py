@@ -3836,6 +3836,32 @@ async def dh_simple_complete(
         data2  = (rsp2 or {}).get("data") or {}
         income = data2.get("INCOMELIST") or []
 
+        # ✅ 10년 중 데이터 없음 케이스: errCode=0000 success인데 INCOMELIST가 끝까지 비는 경우
+        # 가이드 예시처럼 data.RESULT가 FAIL로 내려오는 패턴을 "데이터 없음"으로 간주
+        try:
+            result_flag = str(data2.get("RESULT") or "").upper()
+        except Exception:
+            result_flag = ""
+
+        if (
+            err2 == "0000"
+            and isinstance(income, list)
+            and len(income) == 0
+            and result_flag == "FAIL"
+        ):
+            msg = "과거 10년 중 국가건강검진 데이터가 존재하지 않습니다. 담당자에게 문의해주세요"
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "ok": False,
+                    "errCode": "NO_DATA",
+                    "msg": msg,
+                    "message": msg,
+                    "data": data2,
+                },
+            )
+
+
         # 내부 에러 힌트만 DEBUG로
         inner_ecode  = data2.get("ECODE")
         inner_errmsg = data2.get("ERRMSG")
