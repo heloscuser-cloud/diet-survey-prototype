@@ -20,14 +20,12 @@
 
   <form method="post" action="/partner/signup" style="display:flex; flex-direction:column; gap:10px;">
 
-    <!-- 사번(필수, 숫자만) -->
+    <!-- 사번(필수) -->
     <label style="display:flex; flex-direction:column; font-size:14px;">
       <span>사번 <span style="color:#ef4444;">*</span></span>
       <input type="text" name="emp_no" required
              value="{{ emp_no or '' }}"
-             inputmode="numeric"
-             pattern="[0-9]+"
-             placeholder="숫자만 입력"
+             placeholder="사번 입력"
              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
     </label>
 

@@ -312,7 +312,7 @@ class Respondent(SQLModel, table=True):
     #동의서 관련 필드
     agreement_all: bool = Field(default=False)
     agreement_at: datetime | None = None
-    report_sent_at: datetime = Field(default_factory=now_kst)
+    report_sent_at: datetime | None = None
 
 
 class ReportFile(SQLModel, table=True):
@@ -1375,10 +1375,12 @@ def partner_mapping_get(
 @app.post("/partner/mapping", response_class=HTMLResponse)
 async def partner_mapping_post(
     request: Request,
+    background_tasks: BackgroundTasks,
     client_name: str = Form(...),
     client_phone: str = Form(...),
     session: Session = Depends(get_session),
 ):
+
     partner_id = request.session.get("partner_id")
     if not partner_id:
         return RedirectResponse(url="/partner/login", status_code=302)
@@ -1454,11 +1456,52 @@ async def partner_mapping_post(
         message = "고객 매핑 요청을 등록했습니다."
 
     # 👉 이 시점에, 이미 존재하는 respondent와 자동 매핑 시도
+    prev_is_mapped = bool(getattr(mapping, "is_mapped", False))
     try_auto_map_respondent_for_mapping(session, mapping)
 
     # 매핑 성공 여부에 따라 메시지 보완 (선택)
     if mapping.is_mapped:
         message = "고객 매핑 요청을 등록했고, 기존 문진과 자동으로 매칭되었습니다."
+
+    # ── 알림메일: '매핑이 새로 완료' 되었고, 고객 문진이 이미 제출된 경우에만 발송 ──
+    try:
+        if mapping and mapping.is_mapped and (not prev_is_mapped):
+            client_name_norm = (mapping.client_name or "").strip()
+            client_phone_digits = "".join(c for c in (mapping.client_phone or "") if c.isdigit())
+
+            resp = session.exec(
+                select(Respondent)
+                .where(
+                    Respondent.applicant_name == client_name_norm,
+                    Respondent.client_phone == client_phone_digits,
+                    Respondent.partner_id == mapping.partner_id,
+                )
+                .order_by(Respondent.created_at.desc())
+            ).first()
+
+            sr = None
+            if resp:
+                sr = session.exec(
+                    select(SurveyResponse)
+                    .where(SurveyResponse.respondent_id == resp.id)
+                    .order_by(SurveyResponse.submitted_at.desc())
+                ).first()
+
+            # 제출(문진 완료) 여부는 SurveyResponse.submitted_at 기준으로 판단
+            if resp and sr and sr.submitted_at and (resp.serial_no or 0) > 0:
+                created_at_kst_str = (
+                    to_kst(resp.created_at).strftime("%Y-%m-%d %H:%M")
+                    if resp.created_at else now_kst().strftime("%Y-%m-%d %H:%M")
+                )
+                background_tasks.add_task(
+                    send_submission_email,
+                    resp.serial_no or 0,
+                    (resp.applicant_name or ""),
+                    created_at_kst_str,
+                )
+    except Exception as e:
+        print("[EMAIL][ERR][PARTNER-MAP]", repr(e))
+
 
     return templates.TemplateResponse(
         "partner/mapping.html",
@@ -3144,25 +3187,31 @@ def survey_finish(
     if resp:
         try_auto_map_partner_for_respondent(session, resp)
 
-    # ── 알림메일 비동기 발송 ───────────────────────────────
+    # ── 알림메일: 매핑 완료된 경우에만 비동기 발송 ───────────────────────────────
     try:
-        applicant_name = (
-            (resp.applicant_name or (user.name_enc if user else ""))
-            if resp else ""
-        )
-        created_at_kst_str = (
-            to_kst(resp.created_at).strftime("%Y-%m-%d %H:%M")
-            if resp and resp.created_at else now_kst().strftime("%Y-%m-%d %H:%M")
-        )
-        serial_no_val = resp.serial_no or 0
-        background_tasks.add_task(
-            send_submission_email,
-            serial_no_val,
-            applicant_name,
-            created_at_kst_str,
-        )
+        if resp and bool(getattr(resp, "is_mapped", False)):
+            applicant_name = (
+                (resp.applicant_name or (user.name_enc if user else ""))
+                if resp else ""
+            )
+            created_at_kst_str = (
+                to_kst(resp.created_at).strftime("%Y-%m-%d %H:%M")
+                if resp and resp.created_at else now_kst().strftime("%Y-%m-%d %H:%M")
+            )
+            serial_no_val = resp.serial_no or 0
+
+            background_tasks.add_task(
+                send_submission_email,
+                serial_no_val,
+                applicant_name,
+                created_at_kst_str,
+            )
+        else:
+            # 매핑 전이면 메일 발송하지 않음 (매핑 완료 시점에 /partner/mapping에서 발송될 수 있음)
+            print("[EMAIL] skip submission mail (not mapped yet): resp_id=", getattr(resp, "id", None))
     except Exception as e:
         print("[EMAIL][ERR]", repr(e))
+
 
     # 세션 정리 (작은 dict만 보관했었다면 이제 비워도 OK)
     request.session.pop("nhis_latest", None)
@@ -3208,9 +3257,11 @@ async def admin_export_xlsx(
         """
         - 최우선: nhis_json(표준화된 최근 1건)에서 바로 꺼낸다.
         - 보조: nhis_raw.data.INCOMELIST가 있으면, 최신년도 1건으로 보강.
-        - 결과: 엑셀 병합용 dict 리턴 (검진년도만 사용, 기관은 공란)
-        - 반환 키(영문): exam_year,height,weight,bmi,bp,vision,hearing,hemoglobin,fbs,tc,hdl,ldl,tg,
-                        gfr,creatinine,ast,alt,ggt,urine_protein,chest,judgment
+        - 결과: 엑셀 병합용 dict 리턴
+        - 반환 키(영문):
+          exam_year, exam_date, waist, osteoporosis,
+          height, weight, bmi, bp, vision, hearing, hemoglobin, fbs, tc, hdl, ldl, tg,
+          gfr, creatinine, ast, alt, ggt, urine_protein, chest, judgment
         """
         nj = nhis_json or {}
 
@@ -3229,7 +3280,15 @@ async def admin_export_xlsx(
                     return v[:4]
             return ""
 
-        # 원본에서 최신 1건 추출
+        def _mmdd_to_mm_dd(v) -> str:
+            if v is None:
+                return ""
+            s = "".join(ch for ch in str(v) if ch.isdigit())
+            if len(s) >= 4:
+                return f"{s[:2]}-{s[2:4]}"
+            return ""
+
+        # 원본에서 최신 1건 추출 (INCOMELIST)
         raw_item = None
         if nhis_raw and isinstance(nhis_raw, dict):
             data = nhis_raw.get("data") or {}
@@ -3257,10 +3316,27 @@ async def admin_export_xlsx(
                         return str(v)
             return ""
 
-        exam_year = _year_of(nj) or _year_of(raw_item or {})
+        # (요구사항) 검진년도: INCOMELIST.GUNYEAR 우선
+        exam_year = ""
+        if raw_item and raw_item.get("GUNYEAR") not in (None, "", []):
+            exam_year = str(raw_item.get("GUNYEAR"))
+        if not exam_year:
+            exam_year = _year_of(nj) or _year_of(raw_item or {})
+
+        # (요구사항) 검진일자: INCOMELIST.GUNDATE(mmdd) → "mm-dd"
+        exam_date = ""
+        if raw_item and raw_item.get("GUNDATE") not in (None, "", []):
+            exam_date = _mmdd_to_mm_dd(raw_item.get("GUNDATE"))
+        if not exam_date:
+            exam_date = _mmdd_to_mm_dd(nj.get("GUNDATE") or nj.get("EXAMDATE") or nj.get("EXAM_DATE"))
 
         out = {
-            "exam_year":      exam_year,            # 검진년도(연도만)
+            "exam_year":      exam_year,
+            "exam_date":      exam_date,
+            "waist":          pick("WAIST", "WAISTCIRCUMFERENCE", "WAIST_CIRCUMFERENCE", "ABDOMINALCIRCUMFERENCE"),
+            "osteoporosis":   pick("OSTEOPOROSIS"),
+
+            # 기존 항목들
             "height":         pick("HEIGHT"),
             "weight":         pick("WEIGHT"),
             "bmi":            pick("BODYMASS", "BMI"),
@@ -3283,6 +3359,7 @@ async def admin_export_xlsx(
             "judgment":       pick("JUDGMENT"),
         }
         return out
+
 
     def fmt(v):
         if isinstance(v, list):
@@ -3363,19 +3440,41 @@ async def admin_export_xlsx(
 
     today = now_kst().date()
 
-    fixed_headers = ["no.", "신청번호", "이름", "생년월일", "나이(만)", "성별"]
-    nhis_headers  = [
-        "검진년도","신장(NHIS)","체중(NHIS)","BMI",
-        "혈압","시력","청력","혈색소","공복혈당",
-        "총콜레스테롤","HDL","LDL","중성지방",
-        "GFR","크레아티닌","AST","ALT","GGT",
-        "요단백","흉부소견","종합판정",
+    base_headers = [
+        "신청번호", "검진년도", "검진일자", "이름", "생년월일", "나이", "성별",
+        "키", "체중", "BMI", "허리둘레", "혈압", "공복혈당", "총콜레스테롤", "중성지방",
+        "HDL", "LDL", "혈색소(헤모글로빈)", "크레아티닌", "GFR", "AST", "ALT", "GGT",
     ]
-    ws.append(fixed_headers + nhis_headers + questions)
+    tail_headers = ["시력", "청력", "요단백", "흉부소견", "골밀도", "종합판정"]
+
+    # 숫자 표시형식 적용 범위(키 ~ 문진 마지막)
+    num_start_col = base_headers.index("키") + 1
+    num_end_col = len(base_headers) + len(questions)
+
+    ws.append(base_headers + questions + tail_headers)
 
     # ---------------------------
     # 4) 데이터 행
     # ---------------------------
+    def to_number_cell(v):
+        """가능하면 숫자 타입으로 변환(표시형식=숫자 적용 대상)"""
+        if v is None or v == "":
+            return ""
+        if isinstance(v, bool):
+            return int(v)
+        if isinstance(v, (int, float)):
+            return v
+        if isinstance(v, list):
+            if len(v) == 1:
+                return to_number_cell(v[0])
+            # 다중선택은 그대로 문자열(숫자형 강제 변환 불가)
+            return ",".join(str(to_number_cell(x)) for x in v if to_number_cell(x) != "")
+        if isinstance(v, str):
+            s = v.strip()
+            if re.fullmatch(r"-?\d+(\.\d+)?", s):
+                return float(s) if "." in s else int(s)
+        return v
+
     for idx, rid in enumerate(id_list, start=1):
         sr = session.get(SurveyResponse, rid)
         if not sr:
@@ -3408,38 +3507,51 @@ async def admin_export_xlsx(
         )
 
         row = [
-            idx,
             serial_no,
+            nhis_std.get("exam_year", ""),
+            nhis_std.get("exam_date", ""),
             name,
             (bd.isoformat() if bd else ""),
             age,
             gender,
 
-            # NHIS 열들 (검진년도만, 기관 없음)
-            nhis_std.get("exam_year", ""),
-            nhis_std.get("height", ""),
-            nhis_std.get("weight", ""),
-            nhis_std.get("bmi", ""),
-            nhis_std.get("bp", ""),
+            # 키 ~ GGT (숫자 표시형식 대상)
+            to_number_cell(height),
+            to_number_cell(weight),
+            to_number_cell(nhis_std.get("bmi", "")),
+            to_number_cell(nhis_std.get("waist", "")),
+            to_number_cell(nhis_std.get("bp", "")),
+            to_number_cell(nhis_std.get("fbs", "")),
+            to_number_cell(nhis_std.get("tc", "")),
+            to_number_cell(nhis_std.get("tg", "")),
+            to_number_cell(nhis_std.get("hdl", "")),
+            to_number_cell(nhis_std.get("ldl", "")),
+            to_number_cell(nhis_std.get("hemoglobin", "")),
+            to_number_cell(nhis_std.get("creatinine", "")),
+            to_number_cell(nhis_std.get("gfr", "")),
+            to_number_cell(nhis_std.get("ast", "")),
+            to_number_cell(nhis_std.get("alt", "")),
+            to_number_cell(nhis_std.get("ggt", "")),
+        ] + [to_number_cell(v) for v in answers] + [
+            # 꼬리 열
             nhis_std.get("vision", ""),
             nhis_std.get("hearing", ""),
-            nhis_std.get("hemoglobin", ""),
-            nhis_std.get("fbs", ""),
-            nhis_std.get("tc", ""),
-            nhis_std.get("hdl", ""),
-            nhis_std.get("ldl", ""),
-            nhis_std.get("tg", ""),
-            nhis_std.get("gfr", ""),
-            nhis_std.get("creatinine", ""),
-            nhis_std.get("ast", ""),
-            nhis_std.get("alt", ""),
-            nhis_std.get("ggt", ""),
             nhis_std.get("urine_protein", ""),
             nhis_std.get("chest", ""),
+            nhis_std.get("osteoporosis", ""),
             nhis_std.get("judgment", ""),
-        ] + [fmt(v) for v in answers]
+        ]
 
         ws.append(row)
+
+    # (요구사항) "키" 열부터 "문진 마지막" 열까지 표시형식 = 숫자
+    number_format = "0.########"
+    max_r = ws.max_row
+    if max_r >= 2:
+        for r in range(2, max_r + 1):
+            for c in range(num_start_col, num_end_col + 1):
+                ws.cell(row=r, column=c).number_format = number_format
+
 
     # ---------------------------
     # 5) 바이너리 응답
@@ -3504,7 +3616,7 @@ async def dh_simple_start(
     if not juminOrBirth:                               missing.append("birth(YYYYMMDD)")
     elif not re.fullmatch(r"\d{8}", juminOrBirth):     missing.append("birth(YYYYMMDD 8자리)") 
     if loginOption == "3" and not telecom:
-        missing.append("telecom(PASS: 1~6, SKT|KT|LGU+ 등)")
+        missing.append("telecom(PASS: 1~3, SKT|KT|LGU+)")
 
     if missing:
         logging.warning("[DH-START][VALIDATION] missing=%s", missing)
@@ -3525,7 +3637,7 @@ async def dh_simple_start(
         "JUMIN":       juminOrBirth,
     }
     if loginOption == "3" and telecom:
-        dh_body["TELECOMGUBUN"] = telecom  # 1~6
+        dh_body["TELECOMGUBUN"] = telecom  # 1~3
     
     # (선택) 민감값 마스킹 로그
     _safe = {**dh_body, "HPNUMBER": _mask_phone(dh_body.get("HPNUMBER","")), "JUMIN": _mask_birth(dh_body.get("JUMIN",""))}

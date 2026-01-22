@@ -281,7 +281,8 @@ a.pdf-link:hover{
   <td>{{ to_kst_str(rf.uploaded_at) if rf else '' }}</td>
 
   <!--리포트 발송일-->
-  <td>{{ to_kst_str(resp.report_sent_at) if resp and resp.report_sent_at else '' }}</td>
+  <td>{{ to_kst_str(resp.report_sent_at) if resp and resp.status == 'report_sent' and resp.report_sent_at else '' }}</td>
+
 
   <!-- 진행 상태값 -->
   <td>

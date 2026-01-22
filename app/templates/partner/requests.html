@@ -240,7 +240,8 @@
 
             <!--리포트 발송일-->
             <td style="padding:10px 12px; font-size:14px; text-align:center;">
-              {{ to_kst_str(resp.report_sent_at) if resp and resp.report_sent_at else '' }}
+              {{ to_kst_str(resp.report_sent_at) if resp and resp.status == 'report_sent' and resp.report_sent_at else '' }}
+
             </td>
           </tr>
         {% endfor %}
