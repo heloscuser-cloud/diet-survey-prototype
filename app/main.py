@@ -3333,7 +3333,7 @@ async def admin_export_xlsx(
         out = {
             "exam_year":      exam_year,
             "exam_date":      exam_date,
-            "waist":          pick("WAIST", "WAISTCIRCUMFERENCE", "WAIST_CIRCUMFERENCE", "ABDOMINALCIRCUMFERENCE"),
+            "waist":          pick("WAISTSIZE"),
             "osteoporosis":   pick("OSTEOPOROSIS"),
 
             # 기존 항목들
@@ -3346,8 +3346,8 @@ async def admin_export_xlsx(
             "hemoglobin":     pick("HEMOGLOBIN"),
             "fbs":            pick("BLOODSUGAR"),   # 공복혈당
             "tc":             pick("TOTCHOLESTEROL"),
-            "hdl":            pick("HDLCHOLESTEROL", "HDL_CHOLESTEROL"),
-            "ldl":            pick("LDLCHOLESTEROL", "LDL_CHOLESTEROL"),
+            "hdl":            pick("HDLCHOLESTEROL"),
+            "ldl":            pick("LDLCHOLESTEROL"),
             "tg":             pick("TRIGLYCERIDE"),
             "gfr":            pick("GFR"),
             "creatinine":     pick("SERUMCREATININE"),
@@ -3457,23 +3457,54 @@ async def admin_export_xlsx(
     # 4) 데이터 행
     # ---------------------------
     def to_number_cell(v):
-        """가능하면 숫자 타입으로 변환(표시형식=숫자 적용 대상)"""
+        """가능하면 숫자 타입으로 변환 (정수는 int로 유지해서 17. 같은 표시 방지)"""
         if v is None or v == "":
-            return ""
+            return None
+
         if isinstance(v, bool):
             return int(v)
-        if isinstance(v, (int, float)):
+
+        if isinstance(v, int):
             return v
+
+        if isinstance(v, float):
+            return int(v) if v.is_integer() else v
+
         if isinstance(v, list):
+            if len(v) == 0:
+                return None
             if len(v) == 1:
                 return to_number_cell(v[0])
-            # 다중선택은 그대로 문자열(숫자형 강제 변환 불가)
-            return ",".join(str(to_number_cell(x)) for x in v if to_number_cell(x) != "")
+            # 다중선택은 숫자 강제 불가 -> 문자열
+            parts = []
+            for x in v:
+                xx = to_number_cell(x)
+                if xx is None:
+                    continue
+                parts.append(str(xx))
+            return ",".join(parts)
+
         if isinstance(v, str):
             s = v.strip()
-            if re.fullmatch(r"-?\d+(\.\d+)?", s):
-                return float(s) if "." in s else int(s)
+
+            # "17." 같은 형태 -> 정수로
+            if s.endswith(".") and s[:-1].isdigit():
+                return int(s[:-1])
+
+            # "17.0", "17.00" -> 정수로
+            if re.fullmatch(r"-?\d+(\.0+)", s):
+                return int(s.split(".")[0])
+
+            # 정수/소수
+            if re.fullmatch(r"-?\d+", s):
+                return int(s)
+
+            if re.fullmatch(r"-?\d+\.\d+", s):
+                f = float(s)
+                return int(f) if f.is_integer() else f
+
         return v
+
 
     for idx, rid in enumerate(id_list, start=1):
         sr = session.get(SurveyResponse, rid)
@@ -3488,8 +3519,6 @@ async def admin_export_xlsx(
         bd = resp.birth_date if (resp and resp.birth_date) else (getattr(user, "birth_date", None) if user else None)
         age = calc_age(bd, today) if bd else ""
         gender = (resp.gender if resp and resp.gender else (user.gender if user and user.gender else "")) or ""
-        height = (getattr(resp, "height_cm", None) if resp else None) or (getattr(user, "height_cm", None) if user else None)
-        weight = (getattr(resp, "weight_kg", None) if resp else None) or (getattr(user, "weight_kg", None) if user else None)
         serial_no = resp.serial_no if (resp and resp.serial_no is not None) else ""
 
         # 답 추출
@@ -3516,8 +3545,8 @@ async def admin_export_xlsx(
             gender,
 
             # 키 ~ GGT (숫자 표시형식 대상)
-            to_number_cell(height),
-            to_number_cell(weight),
+            to_number_cell(nhis_std.get("height", "")),
+            to_number_cell(nhis_std.get("weight", "")),
             to_number_cell(nhis_std.get("bmi", "")),
             to_number_cell(nhis_std.get("waist", "")),
             to_number_cell(nhis_std.get("bp", "")),
@@ -3545,12 +3574,28 @@ async def admin_export_xlsx(
         ws.append(row)
 
     # (요구사항) "키" 열부터 "문진 마지막" 열까지 표시형식 = 숫자
-    number_format = "0.########"
     max_r = ws.max_row
     if max_r >= 2:
         for r in range(2, max_r + 1):
             for c in range(num_start_col, num_end_col + 1):
-                ws.cell(row=r, column=c).number_format = number_format
+                cell = ws.cell(row=r, column=c)
+
+                # 빈 값도 '숫자' 서식을 주되, 값 타입에 따라 표시형식 분기
+                v = cell.value
+                if isinstance(v, int):
+                    cell.number_format = "0"
+                elif isinstance(v, float):
+                    if v.is_integer():
+                        cell.value = int(v)
+                        cell.number_format = "0"
+                    else:
+                        cell.number_format = "0.########"
+                else:
+                    # 숫자가 아닌 문자열(예: "120/80" 같은 혈압 문자열, 다중선택 "1,2")은 값 유지
+                    # 그래도 요구사항상 범위는 숫자 열이므로, 빈칸(None)은 기본 숫자형 포맷을 줌
+                    if v is None:
+                        cell.number_format = "0"
+
 
 
     # ---------------------------
