@@ -1092,7 +1092,7 @@ def home(request: Request):
     # 기존 사용자용 홈 유지
     return templates.TemplateResponse("index.html", {"request": request, "apply_url": "/login"})
 
-@app.get("/c/{co_campaign_id}", response_class=HTMLResponse)
+@app.get("/{co_campaign_id}", response_class=HTMLResponse)
 def co_home(
     request: Request,
     co_campaign_id: str,
@@ -4557,6 +4557,11 @@ def audit_nhis(stage, err_code, callback_id, rsp_json=None, user_mask=None):
         print("[NHIS][AUDIT][ERR]", repr(e))
 
 
+@app.get("/_routes")
+def _routes():
+    return [{"path": r.path, "methods": list(r.methods)} for r in app.routes if isinstance(r, APIRoute)]
+
+
 #슬러그 기반 랜딩 라우트 추가: /globalfm, /globalfm/start. 파일 가장 아래(라우트들의 가장 마지막)에 두는게 안전.
 #그래야 /login, /partner/login 같은 고정 라우트가 먼저 매칭돼서 충돌이 안 남)
 # =========================================================
@@ -4638,9 +4643,3 @@ def partner_landing_start(
 
     request.session["respondent_id"] = r.id
     return resp
-
-
-
-@app.get("/_routes")
-def _routes():
-    return [{"path": r.path, "methods": list(r.methods)} for r in app.routes if isinstance(r, APIRoute)]
