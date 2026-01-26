@@ -4562,7 +4562,7 @@ def _routes():
     return [{"path": r.path, "methods": list(r.methods)} for r in app.routes if isinstance(r, APIRoute)]
 
 
-#슬러그 기반 랜딩 라우트 추가: /globalfm, /globalfm/start. 파일 가장 아래(라우트들의 가장 마지막)에 두는게 안전.
+#슬러그 기반 랜딩 라우트 추가: 파일 가장 아래(라우트들의 가장 마지막)에 두는게 안전.
 #그래야 /login, /partner/login 같은 고정 라우트가 먼저 매칭돼서 충돌이 안 남)
 # =========================================================
 # Partner slug landing routes (MUST be the LAST routes)
