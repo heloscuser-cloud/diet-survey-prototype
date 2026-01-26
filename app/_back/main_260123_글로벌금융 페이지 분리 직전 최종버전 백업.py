@@ -339,9 +339,6 @@ class UserAdmin(SQLModel, table=True):
 
     is_active: bool = True                  # boolean, default true
 
-    # ✅ 추가
-    supervisor: bool = Field(default=False) # boolean, default false
-
     created_at: Optional[datetime] = None   # DB에서 now()로 채움
     updated_at: Optional[datetime] = None   # DB에서 now()로 채움
 
@@ -381,23 +378,6 @@ def init_db():
 @app.on_event("startup")
 def on_startup():
     init_db()
-
-# partner, signup_partner 연계
-class Partner(SQLModel, table=True):
-    __tablename__ = "partner"
-    __table_args__ = {"extend_existing": True}
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-    created_at: datetime = Field(default_factory=now_kst)
-
-    p_name: str
-    p_slug: Optional[str] = None  # ✅ 추가: URL용 slug (예: globalfm, koreafm)
-    is_active: bool = True
-
-    p_num: Optional[str] = None
-    p_mail: Optional[str] = None
-    p_admin: Optional[str] = None
-    p_admin_num: Optional[str] = None
 
 
 # --- NHIS 저장 헬퍼 (rtoken 없이 rid가 확실할 때) ---
@@ -917,51 +897,6 @@ def _host(request: Request) -> str:
     return (request.headers.get("host") or "").split(":")[0].lower()
 
 ADMIN_HOST = "admin.gaonnsurvey.store"
-DEFAULT_CAMPAIGN_ID = "demo"
-
-def get_partner_list(session: Session) -> list[str]:
-    rows = session.exec(
-        sa_text("SELECT p_name FROM partner WHERE is_active = TRUE ORDER BY p_name ASC")
-    ).all()
-    out: list[str] = []
-    for r in rows:
-        if not r:
-            continue
-        nm = (r[0] or "").strip()
-        if nm:
-            out.append(nm)
-    return out
-
-
-def get_partner_by_slug(session: Session, p_slug: str) -> dict | None:
-    row = session.exec(
-        sa_text("""
-            SELECT p_name, p_slug
-              FROM partner
-             WHERE p_slug = :s
-               AND is_active = TRUE
-             LIMIT 1
-        """).bindparams(s=p_slug)
-    ).first()
-    if not row:
-        return None
-    return {"p_name": (row[0] or "").strip(), "p_slug": (row[1] or "").strip()}
-
-
-def get_partner_slug_by_name(session: Session, p_name: str) -> str | None:
-    row = session.exec(
-        sa_text("""
-            SELECT p_slug
-              FROM partner
-             WHERE p_name = :n
-             LIMIT 1
-        """).bindparams(n=p_name)
-    ).first()
-    if not row:
-        return None
-    slug = (row[0] or "").strip()
-    return slug or None
-
 
 @app.get("/info", response_class=HTMLResponse)
 def info_form(request: Request, auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME)):
@@ -1090,86 +1025,7 @@ def home(request: Request):
         # 관리자 서브도메인으로 들어오면 관리자 로그인으로 보냄
         return RedirectResponse(url="/admin-portal", status_code=302)
     # 기존 사용자용 홈 유지
-    return templates.TemplateResponse("index.html", {"request": request, "apply_url": "/login"})
-
-@app.get("/c/{co_campaign_id}", response_class=HTMLResponse)
-def co_home(
-    request: Request,
-    co_campaign_id: str,
-    session: Session = Depends(get_session),
-):
-    partner_list = get_partner_list(session)
-    CO_CAMPAIGN_ID = (co_campaign_id or "").strip()
-
-    if CO_CAMPAIGN_ID not in partner_list:
-        return templates.TemplateResponse(
-            "error.html",
-            {"request": request, "message": "유효하지 않은 캠페인 경로입니다."},
-            status_code=404,
-        )
-
-    return templates.TemplateResponse(
-        "index.html",
-        {"request": request, "apply_url": f"/{urllib.parse.quote(CO_CAMPAIGN_ID)}/start"},
-    )
-
-
-@app.get("/{co_campaign_id}/start")
-def co_start(
-    request: Request,
-    co_campaign_id: str,
-    session: Session = Depends(get_session),
-):
-    partner_list = get_partner_list(session)
-    CO_CAMPAIGN_ID = (co_campaign_id or "").strip()
-
-    if CO_CAMPAIGN_ID not in partner_list:
-        return templates.TemplateResponse(
-            "error.html",
-            {"request": request, "message": "유효하지 않은 캠페인 경로입니다."},
-            status_code=404,
-        )
-
-    # 기존 코드/담당자 유입 흔적 제거 (혼선 방지)
-    request.session.pop("partner_id", None)
-    request.session.pop("admin_phone", None)
-
-    # 캠페인 세션 저장 (survey_root에서 읽어 respondent.campaign_id로 저장)
-    request.session["campaign_id"] = CO_CAMPAIGN_ID
-
-    # AUTH 쿠키 발급용 임시 유저 생성
-    ph = f"campaign_{secrets.token_hex(16)}"
-    user = User(phone_hash=ph)
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-
-    SECURE_COOKIE = bool(int(os.getenv("SECURE_COOKIE", "1")))
-    resp = RedirectResponse(url="/nhis", status_code=303)
-    resp.set_cookie(
-        AUTH_COOKIE_NAME,
-        sign_user(user.id),
-        httponly=True,
-        secure=SECURE_COOKIE,
-        samesite="lax",
-        max_age=AUTH_MAX_AGE,
-    )
-    resp.delete_cookie("survey_completed")
-
-    # respondent를 미리 1개 생성해두고, /survey에서 재사용하도록 respondent_id 저장
-    r = Respondent(
-        user_id=user.id,
-        campaign_id=CO_CAMPAIGN_ID,
-        status="started",
-        partner_id=None,
-    )
-    session.add(r)
-    session.commit()
-    session.refresh(r)
-
-    request.session["respondent_id"] = r.id
-    return resp
-
+    return templates.TemplateResponse("index.html", {"request": request})
 
 #portal_home 렌더
 @app.get("/admin-portal", response_class=HTMLResponse)
@@ -1200,28 +1056,23 @@ def partner_logout(request: Request):
 
 
 @app.get("/partner/signup", response_class=HTMLResponse)
-def partner_signup_form(
-    request: Request,
-    session: Session = Depends(get_session),
-):
-    partner_list = get_partner_list(session)
+def partner_signup_form(request: Request):
+    
+    
+    # 단순 렌더링 (에러/메시지는 기본 None)
     return templates.TemplateResponse(
         "partner/signup.html",
         {
             "request": request,
             "error": None,
-            "message": None,
-            "partner_list": partner_list,
         },
     )
-
-
 
 # -- 파트너 회원가입 라우트 POST -- #
 @app.post("/partner/signup", response_class=HTMLResponse)
 async def partner_signup_submit(
     request: Request,
-    emp_no: str = Form(...),
+    emp_no: str = Form(...),          # 사번 -> user_admin.co_num
     name: str = Form(...),
     phone: str = Form(...),
     email: str = Form(...),
@@ -1232,8 +1083,7 @@ async def partner_signup_submit(
     password_confirm: str = Form(...),
     session: Session = Depends(get_session),
 ):
-    partner_list = get_partner_list(session)
-
+    # 1) 기본 검증
     emp_no = (emp_no or "").strip()
     name = (name or "").strip()
     phone_raw = "".join(c for c in (phone or "") if c.isdigit())
@@ -1244,14 +1094,11 @@ async def partner_signup_submit(
     password = (password or "").strip()
     password_confirm = (password_confirm or "").strip()
 
-    #필수값 체크
     error = None
+
+    # 필수값 체크
     if not emp_no or not name or not phone_raw or not email or not password or not password_confirm:
         error = "필수 항목을 모두 입력해주세요."
-    elif not division:
-        error = "소속(회사명 등)을 선택해주세요."
-    elif division not in partner_list:
-        error = "유효하지 않은 소속(회사명)입니다."
     elif email != email_confirm:
         error = "이메일주소를 확인해주세요"
     elif password != password_confirm:
@@ -1261,7 +1108,7 @@ async def partner_signup_submit(
     elif len(phone_raw) < 10 or len(phone_raw) > 11:
         error = "전화번호는 숫자 10~11자리로 입력해주세요."
 
-    #입력값 유지 렌더
+    # 입력값 유지하면서 렌더
     if error:
         return templates.TemplateResponse(
             "partner/signup.html",
@@ -1269,7 +1116,8 @@ async def partner_signup_submit(
                 "request": request,
                 "error": error,
                 "message": None,
-                "partner_list": partner_list,
+
+                # ✅ 입력값 유지용
                 "emp_no": emp_no,
                 "name": name,
                 "phone": phone_raw,
@@ -1280,14 +1128,17 @@ async def partner_signup_submit(
             },
         )
 
-    #전화번호 체크
+
+    # 2) 중복 전화번호 체크 (user_admin.phone UNIQUE)
     row = session.exec(
-        sa_text("""
+        sa_text(
+            """
             SELECT id
               FROM user_admin
              WHERE phone = :p
              LIMIT 1
-        """).bindparams(p=phone_raw)
+            """
+        ).bindparams(p=phone_raw)
     ).first()
 
     if row:
@@ -1297,28 +1148,22 @@ async def partner_signup_submit(
                 "request": request,
                 "error": "이미 등록된 전화번호입니다. 로그인을 시도해 주세요.",
                 "message": None,
-                "partner_list": partner_list,
-                "emp_no": emp_no,
-                "name": name,
-                "phone": phone_raw,
-                "email": email,
-                "email_confirm": email_confirm,
-                "division": division,
-                "department": department,
             },
         )
 
-    #비밀번호 처리
+    # 3) 비밀번호 해시 생성 (verify_partner_password에서 쓴 방식과 동일하게)
     SALT = "partner_salt_v1"
     password_p = hashlib.sha256((SALT + password).encode("utf-8")).hexdigest()
 
     session.exec(
-        sa_text("""
+        sa_text(
+            """
             INSERT INTO user_admin
                 (division, department, co_num, name, phone, mail, is_active, password_p)
             VALUES
                 (:division, :department, :co_num, :name, :phone, :mail, TRUE, :password_p)
-        """).bindparams(
+            """
+        ).bindparams(
             division=division,
             department=department,
             co_num=emp_no,
@@ -1330,28 +1175,15 @@ async def partner_signup_submit(
     )
     session.commit()
 
-    #가입 성공, 리다이렉트
-    return RedirectResponse(url="/partner/login?msg=signup_ok", status_code=303)
-
-@app.get("/{p_slug}", response_class=HTMLResponse)
-def partner_landing(
-    request: Request,
-    p_slug: str,
-    session: Session = Depends(get_session),
-):
-    # slug는 영문/숫자/하이픈 정도만 허용(권장)
-    if not re.fullmatch(r"[a-z0-9-]{2,80}", p_slug or ""):
-        raise HTTPException(status_code=404)
-
-    p = get_partner_by_slug(session, p_slug)
-    if not p or not p.get("p_name"):
-        raise HTTPException(status_code=404)
-
-    # index.html 재사용 (외형 동일) - 버튼만 start로 연결
-    return templates.TemplateResponse(
-        "index.html",
-        {"request": request, "apply_url": f"/{p_slug}/start"},
+    # 5) 가입 성공 → 로그인 화면으로 안내
+    #   - 여기서는 단순 Redirect + 쿼리스트링으로 메시지를 넘겨도 되고,
+    #   - 바로 로그인 폼을 렌더해도 됨. (이 예시는 redirect 사용)
+    return RedirectResponse(
+        url="/partner/login?msg=signup_ok",
+        status_code=303,
     )
+
+
 
 # ---------------------------
 # 파트너 로그인 (POST)
@@ -1996,6 +1828,7 @@ def login_verify_phone(
     phone: str = Form(...),
     session: Session = Depends(get_session),
 ):
+    # 1) 폰번호 정규화
     phone_digits = "".join(c for c in (phone or "") if c.isdigit())
     if len(phone_digits) < 10 or len(phone_digits) > 11:
         return templates.TemplateResponse(
@@ -2004,10 +1837,10 @@ def login_verify_phone(
             status_code=400,
         )
 
-    # division까지 조회해서 campaign_id로 사용
+    # 2) user_admin에서 코드(=phone) 존재/활성 확인
     row = session.exec(
         sa_text("""
-            SELECT id, name, phone, is_active, division
+            SELECT id, name, phone, is_active
             FROM user_admin
             WHERE phone = :p AND is_active = TRUE
             LIMIT 1
@@ -2020,11 +1853,7 @@ def login_verify_phone(
             status_code=401,
         )
 
-    admin_id = int(row[0])
-    division = (row[4] or "").strip()
-    campaign_id_value = division or DEFAULT_CAMPAIGN_ID
-
-    # User 조회/생성
+    # 3) User 조회/생성 (기존 방식 유지: phone_hash 기반)
     ph = hash_phone(phone_digits)
     user = session.exec(select(User).where(User.phone_hash == ph)).first()
     if not user:
@@ -2033,7 +1862,7 @@ def login_verify_phone(
         session.commit()
         session.refresh(user)
 
-    # AUTH 쿠키 발급
+    # 4) AUTH 쿠키 발급 (기존 방식 그대로)
     SECURE_COOKIE = bool(int(os.getenv("SECURE_COOKIE", "1")))
     resp = RedirectResponse(url="/nhis", status_code=303)
     resp.set_cookie(
@@ -2044,35 +1873,51 @@ def login_verify_phone(
         samesite="lax",
         max_age=AUTH_MAX_AGE,
     )
+    # 혹시 남아있을 수도 있는 완료 쿠키 제거(새 설문 방해 방지)
     resp.delete_cookie("survey_completed")
 
-    # 세션 저장 (survey_root에서 그대로 사용)
-    request.session["partner_id"] = admin_id
-    request.session["admin_phone"] = phone_digits
-    request.session["campaign_id"] = campaign_id_value
-
-    # respondent를 미리 1개 생성해두고 /survey에서 재사용
-    rid = session.exec(
-        sa_text("""
-            INSERT INTO respondent (user_id, campaign_id, status, partner_id, created_at, updated_at)
-            VALUES (:uid, :cid, 'started', :pid, (now() AT TIME ZONE 'Asia/Seoul'), (now() AT TIME ZONE 'Asia/Seoul'))
-            RETURNING id
-        """).bindparams(uid=user.id, cid=campaign_id_value, pid=admin_id)
-    ).first()[0]
-
-    request.session["respondent_id"] = int(rid)
-
-    # (안전) rtoken을 꼭 써야 한다면 숫자만 서명하도록
+    # 5) Respondent 생성 + rtoken 쿠키(설문 접근/후속 저장에 필요)
     try:
-        tok = signer.sign(str(rid)).decode("utf-8")
+        # user_admin에서 조회한 담당자 id (위에서 SELECT 했던 row)
+        admin_id = row[0]  # user_admin.id
+
+        rid = session.exec(
+            sa_text("""
+                INSERT INTO respondent (status, partner_id, updated_at)
+                VALUES ('started', :pid, (now() AT TIME ZONE 'Asia/Seoul'))
+                RETURNING id
+            """).bindparams(pid=admin_id)
+        ).first()[0]
+        
+        #임시로그
+        logging.info("[RESP][CREATE] rid=%s partner_id=%s", rid, admin_id)
+        request.session["partner_id"] = admin_id    
+
+
+        logging.info(
+            "[SESSION][SET] partner_id=%s admin_phone=%s (login_verify)",
+            admin_id,
+            phone_digits,
+        )
+        request.session["partner_id"] = admin_id
+
+        # 프로젝트에 이미 있는 signer를 재사용해 rtoken 생성 (verify_token과 호환)
+        try:
+            tok = signer.sign(f"rid:{rid}").decode("utf-8")
+        except Exception:
+            tok = str(rid)  # 임시(가능하면 signer 사용 권장)
+
         request.session["rtoken"] = tok
         resp.set_cookie("rtoken", tok, max_age=1800, httponly=True, samesite="Lax", secure=SECURE_COOKIE)
     except Exception as e:
+        # rtoken 발급 실패해도 로그인은 진행되지만, /survey 접근 가드에서 막힐 수 있음
+        # 문제 시 로그만 남기고 그대로 진행
         logging.debug("[LOGIN][RTOKEN][WARN] %r", e)
 
-    logging.info("[RESP][CREATE][LOGIN] rid=%s partner_id=%s campaign_id=%s", rid, admin_id, campaign_id_value)
-    return resp
+    # 6) 감사용 세션 마크(선택)
+    request.session["admin_phone"] = phone_digits
 
+    return resp
 
 
 @app.get("/logout")
@@ -2880,7 +2725,9 @@ def admin_response_two_rows_csv(
 app.include_router(admin_router)
 
 #---- 문진 가져오기 ----#
+
 @app.get("/survey")
+
 def survey_root(
     request: Request,
     auth: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
@@ -2892,19 +2739,27 @@ def survey_root(
 
     user = session.get(User, user_id)
 
+    # 임시로그. 문진 정상 동작시 삭제 (251024)
+    print("SURVEY GUARD",
+      "name=", bool(user and user.name_enc),
+      "gender=", bool(user and user.gender),
+      "birth_date=", bool(user and getattr(user, "birth_date", None)),
+      "birth_year=", bool(user and user.birth_year))
+
+    # 필수 인적사항: 이름/성별 + (birth_date 또는 birth_year)
     has_birth = bool(getattr(user, "birth_date", None) or getattr(user, "birth_year", None))
     if not user or not user.name_enc or not user.gender or not has_birth:
         return RedirectResponse(url="/info", status_code=303)
+
+    # ── partner_id 결정: 세션 → user_admin(phone) 순으로 시도 ──
+    partner_id_value: int | None = None
 
     try:
         sess = request.session or {}
     except Exception:
         sess = {}
 
-    campaign_id_value = (str(sess.get("campaign_id") or "").strip() or DEFAULT_CAMPAIGN_ID)
-
-    # partner_id 결정
-    partner_id_value: int | None = None
+    # 1) /login/verify 에서 직접 넣어둔 partner_id 우선 사용
     raw_pid = sess.get("partner_id")
     if raw_pid is not None:
         try:
@@ -2912,68 +2767,81 @@ def survey_root(
         except (TypeError, ValueError):
             partner_id_value = None
 
+    # 2) 없으면 admin_phone 기반으로 user_admin에서 다시 찾기
     if partner_id_value is None:
         admin_phone = sess.get("admin_phone")
         if admin_phone:
-            row = session.exec(
-                sa_text("""
-                    SELECT id
-                      FROM user_admin
-                     WHERE phone = :p
-                       AND is_active = TRUE
-                     LIMIT 1
-                """).bindparams(p=admin_phone)
-            ).first()
-            if row:
-                partner_id_value = int(row[0])
+            try:
+                row = session.exec(
+                    sa_text("""
+                        SELECT id
+                          FROM user_admin
+                         WHERE phone = :p
+                           AND is_active = TRUE
+                         LIMIT 1
+                    """).bindparams(p=admin_phone)
+                ).first()
+                if row:
+                    partner_id_value = int(row[0])
+            except Exception as e:
+                logging.warning("[SURVEY][PID][LOOKUP-FAIL] phone=%s err=%r", admin_phone, e)
 
-    # ✅ login/캠페인 start에서 미리 만든 respondent 재사용
-    resp: Respondent | None = None
-    existing_rid = sess.get("respondent_id")
-    if existing_rid is not None:
-        try:
-            rid_int = int(existing_rid)
-            cand = session.get(Respondent, rid_int)
-            if cand and cand.user_id == user.id and cand.status != "submitted":
-                resp = cand
-        except Exception:
-            resp = None
-
-    if resp:
-        resp.campaign_id = campaign_id_value
-        resp.partner_id = partner_id_value
-        if resp.status == "started":
-            resp.status = "draft"
-        resp.updated_at = now_kst()
-    else:
+    # 3) Respondent 생성 (partner_id 있으면 같이 저장)
+    if partner_id_value is not None:
         resp = Respondent(
             user_id=user.id,
-            campaign_id=campaign_id_value,
+            campaign_id="demo",
             status="draft",
             partner_id=partner_id_value,
         )
-        session.add(resp)
-        session.commit()
-        session.refresh(resp)
-        request.session["respondent_id"] = resp.id
+        logging.info(
+            "[SURVEY][RESP-CREATE] user_id=%s partner_id=%s",
+            user.id,
+            partner_id_value,
+        )
+    else:
+        resp = Respondent(
+            user_id=user.id,
+            campaign_id="demo",
+            status="draft",
+        )
+        logging.info(
+            "[SURVEY][RESP-CREATE] user_id=%s partner_id=None",
+            user.id,
+        )
 
-    # User 스냅샷
-    bd = getattr(user, "birth_date", None)
-    if not bd and getattr(user, "birth_year", None):
+    session.add(resp)
+    session.commit()
+    session.refresh(resp)
+    # User 정보 스냅샷을 Respondent에 저장(관리자 테이블 출력용)
+
+    # 실제 생년월일 우선 스냅샷
+    bd = None
+    try:
+        bd = user.birth_date
+    except Exception:
+        pass
+    if not bd and user.birth_year:
         bd = date(user.birth_year, 1, 1)
-
     resp.applicant_name = user.name_enc
     resp.birth_date = bd
     resp.gender = user.gender
-
+    # 있으면 스냅샷
+    try:
+        if getattr(user, "height_cm", None) is not None:
+            resp.height_cm = float(user.height_cm)
+        if getattr(user, "weight_kg", None) is not None:
+            resp.weight_kg = float(user.weight_kg)
+    except Exception:
+        pass
     session.add(resp)
     session.commit()
 
     rtoken = signer.sign(str(resp.id)).decode("utf-8")
+    # 새 설문 시작: 완료 쿠키 제거
     redirect = RedirectResponse(url=f"/survey/step/1?rtoken={rtoken}", status_code=303)
     redirect.delete_cookie("survey_completed")
     return redirect
-
 
 
 @app.get("/survey/step/{step}", response_class=HTMLResponse)
@@ -4575,65 +4443,6 @@ def audit_nhis(stage, err_code, callback_id, rsp_json=None, user_mask=None):
             s.commit()
     except Exception as e:
         print("[NHIS][AUDIT][ERR]", repr(e))
-
-
-#슬러그 기반 랜딩 라우트 추가: /globalfm, /globalfm/start. 파일 가장 아래(라우트들의 가장 마지막)에 두는게 안전.
-#그래야 /login, /partner/login 같은 고정 라우트가 먼저 매칭돼서 충돌이 안 남)
-@app.get("/{p_slug}/start")
-def partner_landing_start(
-    request: Request,
-    p_slug: str,
-    session: Session = Depends(get_session),
-):
-    if not re.fullmatch(r"[a-z0-9-]{2,80}", p_slug or ""):
-        raise HTTPException(status_code=404)
-
-    p = get_partner_by_slug(session, p_slug)
-    if not p or not p.get("p_name"):
-        raise HTTPException(status_code=404)
-
-    CO_CAMPAIGN_ID = p["p_name"]  # ✅ campaign_id는 partner.p_name과 동일
-
-    # 기존 코드/담당자 유입 세션 흔적 제거
-    request.session.pop("partner_id", None)
-    request.session.pop("admin_phone", None)
-
-    # campaign_id 세션 저장 (survey_root에서 respondent.campaign_id로 저장됨)
-    request.session["campaign_id"] = CO_CAMPAIGN_ID
-
-    # AUTH 쿠키 발급용 임시 유저 생성
-    ph = f"campaign_{secrets.token_hex(16)}"
-    user = User(phone_hash=ph)
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-
-    SECURE_COOKIE = bool(int(os.getenv("SECURE_COOKIE", "1")))
-    resp = RedirectResponse(url="/nhis", status_code=303)
-    resp.set_cookie(
-        AUTH_COOKIE_NAME,
-        sign_user(user.id),
-        httponly=True,
-        secure=SECURE_COOKIE,
-        samesite="lax",
-        max_age=AUTH_MAX_AGE,
-    )
-    resp.delete_cookie("survey_completed")
-
-    # respondent 미리 생성 + partner_id는 매핑 전이므로 None
-    r = Respondent(
-        user_id=user.id,
-        campaign_id=CO_CAMPAIGN_ID,
-        status="started",
-        partner_id=None,
-    )
-    session.add(r)
-    session.commit()
-    session.refresh(r)
-
-    request.session["respondent_id"] = r.id
-    return resp
-
 
 
 @app.get("/_routes")
