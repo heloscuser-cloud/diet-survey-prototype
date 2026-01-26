@@ -38,7 +38,7 @@
 
     {# 4) /partner/* (로그인 이후 화면들): 대시보드 + 로그아웃 #}
     {% elif request.url.path.startswith('/partner') %}
-      <a href="/partner/dashboard">대시보드</a>
+      <a href="/partner/dashboard">대시보드 홈</a>
       <a href="/partner/logout" onclick="return confirm('로그아웃 하시겠어요?')">로그아웃</a>
 
     {# 5) /admin/responses*: 로그아웃만 #}
@@ -47,7 +47,7 @@
 
     {# 6) /partner/signup : 대시보드 #}
     {% elif request.url.path.startswith('/partner/signup') %}
-      <a href="/partner/dashboard">대시보드</a>
+      <a href="/partner/dashboard">대시보드 홈</a>
 
     {# 7) 나머지 /admin/*: 응답 목록 + 로그아웃 (기존 동작 유지) #}
     {% else %}
