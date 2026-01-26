@@ -1333,26 +1333,6 @@ async def partner_signup_submit(
     #가입 성공, 리다이렉트
     return RedirectResponse(url="/partner/login?msg=signup_ok", status_code=303)
 
-@app.get("/{p_slug}", response_class=HTMLResponse)
-def partner_landing(
-    request: Request,
-    p_slug: str,
-    session: Session = Depends(get_session),
-):
-    # slug는 영문/숫자/하이픈 정도만 허용(권장)
-    if not re.fullmatch(r"[a-z0-9-]{2,80}", p_slug or ""):
-        raise HTTPException(status_code=404)
-
-    p = get_partner_by_slug(session, p_slug)
-    if not p or not p.get("p_name"):
-        raise HTTPException(status_code=404)
-
-    # index.html 재사용 (외형 동일) - 버튼만 start로 연결
-    return templates.TemplateResponse(
-        "index.html",
-        {"request": request, "apply_url": f"/{p_slug}/start"},
-    )
-
 # ---------------------------
 # 파트너 로그인 (POST)
 # ---------------------------
@@ -4579,6 +4559,31 @@ def audit_nhis(stage, err_code, callback_id, rsp_json=None, user_mask=None):
 
 #슬러그 기반 랜딩 라우트 추가: /globalfm, /globalfm/start. 파일 가장 아래(라우트들의 가장 마지막)에 두는게 안전.
 #그래야 /login, /partner/login 같은 고정 라우트가 먼저 매칭돼서 충돌이 안 남)
+# =========================================================
+# Partner slug landing routes (MUST be the LAST routes)
+# =========================================================
+
+@app.get("/{p_slug}", response_class=HTMLResponse)
+def partner_landing(
+    request: Request,
+    p_slug: str,
+    session: Session = Depends(get_session),
+):
+    # slug 형식 제한 (운영 안전)
+    if not re.fullmatch(r"[a-z0-9-]{2,80}", p_slug or ""):
+        raise HTTPException(status_code=404)
+
+    p = get_partner_by_slug(session, p_slug)  # 내부에서 is_active=TRUE 조건 적용
+    if not p or not p.get("p_name"):
+        raise HTTPException(status_code=404)
+
+    # index.html 재사용 (외형 동일) - 버튼만 start로 연결
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request, "apply_url": f"/{p_slug}/start"},
+    )
+
+
 @app.get("/{p_slug}/start")
 def partner_landing_start(
     request: Request,
@@ -4588,17 +4593,17 @@ def partner_landing_start(
     if not re.fullmatch(r"[a-z0-9-]{2,80}", p_slug or ""):
         raise HTTPException(status_code=404)
 
-    p = get_partner_by_slug(session, p_slug)
+    p = get_partner_by_slug(session, p_slug)  # 내부에서 is_active=TRUE 조건 적용
     if not p or not p.get("p_name"):
         raise HTTPException(status_code=404)
 
-    CO_CAMPAIGN_ID = p["p_name"]  # ✅ campaign_id는 partner.p_name과 동일
+    CO_CAMPAIGN_ID = p["p_name"]  # campaign_id는 partner.p_name
 
     # 기존 코드/담당자 유입 세션 흔적 제거
     request.session.pop("partner_id", None)
     request.session.pop("admin_phone", None)
 
-    # campaign_id 세션 저장 (survey_root에서 respondent.campaign_id로 저장됨)
+    # 캠페인 세션 저장 (survey_root에서 respondent.campaign_id로 저장)
     request.session["campaign_id"] = CO_CAMPAIGN_ID
 
     # AUTH 쿠키 발급용 임시 유저 생성
