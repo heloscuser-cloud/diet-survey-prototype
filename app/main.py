@@ -4534,7 +4534,7 @@ def partner_landing_start(
     request.session["campaign_id"] = CO_CAMPAIGN_ID
 
     # AUTH 쿠키 발급용 임시 유저 생성
-    ph = f"campaign_{secrets.token_hex(16)}"
+    ph = f"{p_slug}_{secrets.token_hex(16)}"
     user = User(phone_hash=ph)
     session.add(user)
     session.commit()
