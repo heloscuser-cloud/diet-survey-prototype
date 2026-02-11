@@ -1,0 +1,427 @@
+{% extends "admin/base_admin.html" %}
+{% block title %}파트너 관리자페이지{% endblock %}
+
+{% block content %}
+<style>
+  :root{
+    --bg:#f6f7fb;
+    --card:#fff;
+    --border:#e5e7eb;
+    --text:#111827;
+    --muted:#6b7280;
+    --btn1:#1e40af; /* 조회 */
+    --btn3:#0ea5e9; /* 엑셀 */
+  }
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .page{width:100%; max-width:1366px; margin:0 auto; padding:20px}
+  .card{background:var(--card); border:1px solid var(--border); border-radius:16px; box-shadow:0 6px 18px rgba(0,0,0,.04)}
+  .search-card{padding:16px 16px 8px 16px; margin-bottom:10px;}
+  .row{display:flex; gap:12px; flex-wrap:wrap; align-items:center}
+  .row>div{display:flex; gap:8px; align-items:center}
+  label{font-size:12px; color:#64748b}
+  input, select{padding:8px 10px; border:1px solid var(--border); border-radius:10px; background:#fff; font-size:14px}
+  .w-date{width:150px}
+  .w-status{width:210px}
+  .w-text{ width:360px }
+
+  .control-bar{display:flex; justify-content:flex-start; gap:8px; padding:8px 12px; margin-bottom:10px; position:relative; z-index:50;}
+  .control-bar.card{border-radius:12px}
+
+  .table-card{padding:0; overflow:auto;}
+  table{width:100%; border-collapse:collapse; table-layout:auto; background:#fff}
+  th, td{padding:10px 12px; border-bottom:1px solid var(--border); font-size:14px; text-align:center}
+  th{background:#f3f4f6;}
+  .nowrap{white-space:nowrap}
+  .tag{display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:#eef2ff}
+  .muted{color:var(--muted)}
+  table thead th, table tbody td { text-align: center !important; }
+
+  body > .wrap { background: transparent; box-shadow: none; padding: 0; }
+
+  /* 툴팁(담당자/메모 공용) */
+  .info-icon{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:18px; height:18px; margin-left:6px;
+    border-radius:999px; font-size:12px; font-weight:800;
+    line-height:1; border:1px solid var(--border); background:#fff;
+    cursor:pointer; user-select:none;
+  }
+  .tooltip{
+    position:absolute; z-index:9999; min-width:240px;
+    background:#fff; border:1px solid var(--border); border-radius:12px;
+    box-shadow:0 10px 24px rgba(0,0,0,.12);
+    padding:10px 12px; font-size:13px; text-align:left; display:none;
+  }
+  .tooltip .rowline{display:flex; gap:8px; margin:4px 0}
+  .tooltip .k{width:70px; color:var(--muted)}
+  .tooltip .v{flex:1; color:var(--text); word-break:break-all; white-space:pre-line;}
+
+  /* 버튼 */
+  .btn{cursor:pointer; border:none; border-radius:999px; color:#fff; padding:.5rem 1rem; font-weight:600}
+  .btn:hover{opacity:.95}
+  .btn:active{opacity:.9}
+  .btn-primary{background:var(--btn1)}
+  .btn-sky{background:var(--btn3)}
+  .btn-sm{padding:.4rem .8rem; font-weight:600;}
+
+  .pagination{display:flex; justify-content:center; gap:6px; margin:16px 0}
+  .pagination a, .pagination span{
+    display:inline-block; min-width:28px; padding:6px 10px; border-radius:8px; text-decoration:none
+  }
+  .pagination a{ background:#e5e7eb; color:#1e293b}
+  .pagination span{ background:#1e40af; color:#fff; font-weight:700}
+
+  /* 메모 표시 폭(30자 정도 느낌) */
+  .memo-cell{
+    max-width:260px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    display:inline-block;
+    vertical-align:middle;
+  }
+
+  /* 메모편집 아이콘(기존 plus.svg 느낌 재사용) */
+  .iconbtn{
+    width:28px; height:28px; border:none; border-radius:8px;
+    display:inline-flex; align-items:center; justify-content:center;
+    background:#7ED2FF; cursor:pointer;
+  }
+  .iconbtn:hover{opacity:.9}
+  .ico{width:16px; height:16px}
+
+  /* 모달 */
+  .modal-backdrop{
+    position:fixed; inset:0; background:rgba(0,0,0,.35);
+    display:none; align-items:center; justify-content:center; z-index:10000;
+  }
+  .modal{
+    width:560px; max-width:92vw; background:#fff; border:1px solid var(--border);
+    border-radius:16px; box-shadow:0 10px 30px rgba(0,0,0,.18);
+    padding:16px;
+  }
+  .modal h3{margin:0 0 10px 0; font-size:16px}
+  .grid2{
+    display:grid;
+    grid-template-columns: 100px 1fr;
+    gap:10px 12px;
+    align-items:start;
+  }
+  .modal textarea{
+    width:100%;
+    min-height:90px;
+    padding:8px 10px;
+    border:1px solid var(--border);
+    border-radius:10px;
+    font-size:14px;
+    resize:none;
+  }
+  .modal textarea[readonly]{background:#f3f4f6}
+  .modal-actions{
+    display:flex; justify-content:flex-end; gap:8px; margin-top:12px;
+  }
+  .btn-gray{
+    background:#6b7280;
+  }
+</style>
+
+<div class="page">
+
+  <!-- 검색 조건 -->
+  <div class="card search-card">
+    <form id="searchForm" method="get" action="/partner/supervisor">
+      <div class="row" style="margin-bottom:8px;">
+        <div>
+          <label>문진제출일</label>
+          <input class="w-date date-ymd" type="text" name="from" inputmode="numeric" placeholder="YYYY-MM-DD" value="{{ from or '' }}"/>
+          <span>~</span>
+          <input class="w-date date-ymd" type="text" name="to" inputmode="numeric" placeholder="YYYY-MM-DD" value="{{ to or '' }}"/>
+        </div>
+        <div>
+          <button type="button" class="btn btn-sm btn-gray" onclick="shiftRange(-1)">◀</button>
+          <button type="button" class="btn btn-sm btn-gray" onclick="shiftRange(1)">▶</button>
+          <button type="button" class="btn btn-sm btn-gray" onclick="setToday()">오늘</button>
+          <button type="button" class="btn btn-sm btn-gray" onclick="setWeek()">7일</button>
+          <button type="button" class="btn btn-sm btn-gray" onclick="setMonth()">31일</button>
+        </div>
+      </div>
+
+      <div class="row" style="margin-bottom:8px;">
+        <div>
+          <label>진행 상태</label>
+          <select name="status" class="w-status">
+            <option value="" {{ 'selected' if not status }}>전체</option>
+            <option value="submitted" {{ 'selected' if status=='submitted' }}>문진제출</option>
+            <option value="analysis_requested" {{ 'selected' if status=='analysis_requested' }}>분석신청</option>
+            <option value="accepted" {{ 'selected' if status=='accepted' }}>접수완료</option>
+            <option value="report_uploaded" {{ 'selected' if status=='report_uploaded' }}>리포트 업로드 완료</option>
+            <option value="report_sent" {{ 'selected' if status=='report_sent' }}>리포트 발송 완료</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row" style="margin-bottom:4px;">
+        <div>
+          <label>텍스트 검색</label>
+          <input type="text" name="q" class="w-text" value="{{ q or '' }}" placeholder="신청자 이름, 생년월일(YYYY-MM-DD), 신청번호"/>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:4px;">
+        <div>
+          <label for="page_size">페이지당 조회 수</label>
+          <select name="page_size" id="page_size" style="width:120px;">
+            <option value="50"  {{ 'selected' if (page_size or '50') == '50'  }}>50</option>
+            <option value="100" {{ 'selected' if page_size == '100' }}>100</option>
+            <option value="all" {{ 'selected' if page_size == 'all' }}>전체</option>
+          </select>
+        </div>
+
+        <button class="btn btn-primary" type="submit" style="width:200px;">조회</button>
+        <input type="hidden" name="page" value="1">
+      </div>
+    </form>
+  </div>
+
+  <!-- 버튼 구역: 엑셀만 -->
+  <div class="card control-bar">
+    <button class="btn btn-sky btn-sm" type="button" onclick="downloadXlsx()" style="width:140px;">엑셀 다운로드</button>
+  </div>
+
+  <!-- 테이블 -->
+  <div class="card table-card">
+    <table>
+      <thead>
+        <tr>
+          <th>신청번호</th>
+          <th>신청자</th>
+          <th>담당자</th>
+          <th>진행상태값</th>
+          <th>문진제출일</th>
+          <th>담당자신청일</th>
+          <th>메모</th>
+          <th>메모편집</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for sr, resp, user, ua, partner_requested_at in rows %}
+        <tr>
+          <td class="nowrap">{{ resp.serial_no or '' }}</td>
+          <td>{{ resp.applicant_name or user.name_enc or '-' }}</td>
+
+          <!-- 담당자 + 툴팁 -->
+          <td class="nowrap" style="position:relative;">
+            {% set partner_name = (ua.name if ua and ua.name else '') %}
+            {{ partner_name }}
+            {% if partner_name %}
+              <span class="info-icon" data-tip-id="ptip-{{ sr.id }}">ⓘ</span>
+              <div class="tooltip" id="ptip-{{ sr.id }}">
+                <div class="rowline"><div class="k">소속</div><div class="v">{{ ua.division if ua else '' }}</div></div>
+                <div class="rowline"><div class="k">부서</div><div class="v">{{ ua.department if ua else '' }}</div></div>
+                <div class="rowline"><div class="k">이름</div><div class="v">{{ ua.name if ua else '' }}</div></div>
+                <div class="rowline"><div class="k">전화</div><div class="v">{{ ua.phone if ua else '' }}</div></div>
+                <div class="rowline"><div class="k">메일</div><div class="v">{{ ua.mail if ua else '' }}</div></div>
+              </div>
+            {% endif %}
+          </td>
+
+          <!-- 진행상태값 -->
+          <td>
+            {% if resp.status=='submitted' %}
+              {% if partner_requested_at %}
+                <span class="tag">분석신청</span>
+              {% else %}
+                <span class="tag">문진제출</span>
+              {% endif %}
+            {% elif resp.status=='accepted' %}
+              <span class="tag" style="background:#dcfce7;">접수완료</span>
+            {% elif resp.status=='report_uploaded' %}
+              <span class="tag" style="background:#dcfce7;">리포트 업로드 완료</span>
+            {% elif resp.status=='report_sent' %}
+              <span class="tag" style="background:#e0f2fe;">리포트 발송 완료</span>
+            {% else %}
+              <span class="muted">{{ resp.status }}</span>
+            {% endif %}
+          </td>
+
+          <td>{{ to_kst_str(sr.submitted_at) if sr and sr.submitted_at else '' }}</td>
+          <td>{{ to_kst_str(partner_requested_at) if partner_requested_at else '' }}</td>
+
+          <!-- 메모 + 툴팁 -->
+          <td class="nowrap" style="position:relative;">
+            {% set memo = (resp.sv_memo or '') %}
+            <span class="memo-cell">
+              {{ memo[:30] }}{% if memo|length > 30 %}…{% endif %}
+            </span>
+            {% if memo %}
+              <span class="info-icon" data-tip-id="mtip-{{ resp.id }}">ⓘ</span>
+              <div class="tooltip" id="mtip-{{ resp.id }}">
+                <div class="rowline">
+                  <div class="k">메모</div>
+                  <div class="v">{{ memo }}</div>
+                </div>
+              </div>
+            {% endif %}
+          </td>
+
+          <!-- 메모편집 -->
+          <td class="nowrap">
+            <button type="button" class="iconbtn" title="메모편집"
+              onclick='openMemoModal({{ resp.id }}, {{ (resp.sv_memo or "")|tojson }})'>
+              <img class="ico" src="/static/icons/plus.svg" alt="편집"/>
+            </button>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- 페이지네이션 -->
+  <div class="pagination">
+    {% if total_pages > 1 %}
+      {% for p in range(1, total_pages + 1) %}
+        {% if p == page %}
+          <span>{{ p }}</span>
+        {% else %}
+          <a href="/partner/supervisor?page={{ p }}&page_size={{ page_size or '50' }}&from={{ from }}&to={{ to }}&status={{ status }}&q={{ q }}">{{ p }}</a>
+        {% endif %}
+      {% endfor %}
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- 메모 모달 -->
+<div class="modal-backdrop" id="memoModal">
+  <div class="modal">
+    <h3>메모편집</h3>
+
+    <form id="memoForm" method="post" action="/partner/supervisor/memo" style="margin:0;">
+      <input type="hidden" name="respondent_id" id="memoRespondentId">
+      <input type="hidden" name="next" id="memoNext">
+
+      <div class="grid2">
+        <div class="muted" style="font-size:13px; padding-top:6px;">기존메모</div>
+        <div>
+          <textarea id="memoOld" readonly></textarea>
+        </div>
+
+        <div class="muted" style="font-size:13px; padding-top:6px;">신규메모</div>
+        <div>
+          <textarea id="memoNew" name="new_memo" maxlength="60" placeholder="최대 60자까지 입력할 수 있어요."></textarea>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn btn-gray btn-sm" onclick="closeMemoModal()">편집취소</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="saveMemo()">저장</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function z(n){return String(n).padStart(2,'0')}
+function fmt(d){return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`}
+function getDates(){const f=document.querySelector('input[name=from]');const t=document.querySelector('input[name=to]');return [f,t]}
+function shiftRange(dir){
+  let [f,t]=getDates();
+  if(!f || !t) return;
+  let fd = f.value ? new Date(f.value) : new Date();
+  let td = t.value ? new Date(t.value) : new Date();
+  if(fd > td){ alert("조회 기간이 유효하지 않습니다. 다시 확인해주세요"); return; }
+  const span = Math.floor((td - fd) / (24*60*60*1000)) + 1;
+  if(dir > 0){
+    const newFrom = new Date(td); newFrom.setDate(newFrom.getDate() + 1);
+    const newTo   = new Date(newFrom); newTo.setDate(newTo.getDate() + span - 1);
+    f.value = fmt(newFrom); t.value = fmt(newTo);
+  }else{
+    const newTo   = new Date(fd); newTo.setDate(newTo.getDate() - 1);
+    const newFrom = new Date(newTo); newFrom.setDate(newFrom.getDate() - (span - 1));
+    f.value = fmt(newFrom); t.value = fmt(newTo);
+  }
+}
+function setToday(){let [f,t]=getDates();let d=new Date();f.value=fmt(d);t.value=fmt(d)}
+function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.setDate(td.getDate()-6);f.value=fmt(fd);t.value=fmt(td)}
+function setMonth(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.setDate(td.getDate()-31);f.value=fmt(fd);t.value=fmt(td)}
+
+document.querySelectorAll('.date-ymd').forEach(inp=>{
+  inp.addEventListener('input', e=>{
+    let v = e.target.value.replace(/[^\d]/g,'').slice(0,8);
+    if (v.length>=5) v = v.slice(0,4)+'-'+v.slice(4);
+    if (v.length>=8) v = v.slice(0,7)+'-'+v.slice(7);
+    e.target.value = v;
+  });
+});
+
+function downloadXlsx(){
+  const u = new URL(window.location.href);
+  u.pathname = "/partner/supervisor/export.xlsx";
+  window.location.href = u.pathname + (u.search ? u.search : "");
+}
+
+// 툴팁: ⓘ 클릭 토글, 바깥 클릭/ESC 닫기
+(function(){
+  function hideAll(){ document.querySelectorAll('.tooltip').forEach(t => t.style.display = 'none'); }
+  document.addEventListener('click', function(e){
+    const icon = e.target.closest('.info-icon');
+    if (icon){
+      e.preventDefault(); e.stopPropagation();
+      const id = icon.getAttribute('data-tip-id');
+      const tip = document.getElementById(id);
+      if (!tip) return;
+      const isOpen = (tip.style.display === 'block');
+      hideAll();
+      tip.style.display = isOpen ? 'none' : 'block';
+      return;
+    }
+    if (e.target.closest('.tooltip')) return;
+    hideAll();
+  });
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') hideAll();
+  });
+})();
+
+// 메모 모달
+function openMemoModal(respondentId, oldMemo){
+  document.getElementById("memoRespondentId").value = respondentId;
+  document.getElementById("memoOld").value = oldMemo || "";
+  document.getElementById("memoNew").value = "";
+
+  const u = new URL(window.location.href);
+  u.searchParams.delete("msg");
+  document.getElementById("memoNext").value = u.pathname + (u.search ? u.search : "");
+
+  document.getElementById("memoModal").style.display = "flex";
+}
+function closeMemoModal(){
+  document.getElementById("memoModal").style.display = "none";
+}
+function saveMemo(){
+  const v = (document.getElementById("memoNew").value || "").trim();
+  if(!v){
+    alert("신규작성 내용이 없습니다.");
+    return;
+  }
+  if(!confirm("기존메모의 내용을 대체하여 신규메모 내용으로 저장하시겠습니까?")) return;
+  document.getElementById("memoForm").submit();
+}
+document.getElementById("memoModal").addEventListener("click", function(e){
+  if(e.target.id === "memoModal") closeMemoModal();
+});
+
+// msg alert
+(function(){
+  const msg = {{ (msg or "") | tojson }};
+  if (!msg) return;
+  alert(msg);
+  const u = new URL(window.location.href);
+  u.searchParams.delete("msg");
+  history.replaceState({}, "", u.pathname + (u.search ? u.search : ""));
+})();
+</script>
+
+{% endblock %}

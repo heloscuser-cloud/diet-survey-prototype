@@ -17,8 +17,9 @@ from datetime import datetime, timedelta, date, timezone
 from starlette.responses import RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 from random import randint
-from sqlalchemy import func, Column, LargeBinary, Integer, text, and_
+from sqlalchemy import func, Column, LargeBinary, Integer, text, and_, or_
 from sqlalchemy import text as sa_text
+import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 from itsdangerous import (
     TimestampSigner, BadSignature, SignatureExpired,
@@ -38,6 +39,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from io import StringIO, BytesIO
 from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
 import secrets
 import json
 from pathlib import Path
@@ -313,6 +315,8 @@ class Respondent(SQLModel, table=True):
     agreement_all: bool = Field(default=False)
     agreement_at: datetime | None = None
     report_sent_at: datetime | None = None
+    sv_memo: str | None = None
+    sv_memo_at: datetime | None = None
 
 
 class ReportFile(SQLModel, table=True):
@@ -1882,6 +1886,389 @@ def partner_requests(
             "to_kst_str": to_kst_str,
         },
     )
+
+# 파트너 관리자페이지 기능
+@app.get("/partner/supervisor", response_class=HTMLResponse)
+def partner_supervisor(
+    request: Request,
+    session: Session = Depends(get_session),
+    page: int = 1,
+    page_size: str = "50",
+    from_: str | None = None,
+    to: str | None = None,
+    status: str | None = None,
+    q: str | None = None,
+    msg: str | None = None,
+):
+    # 로그인 체크
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=303)
+
+    ua_me = session.get(UserAdmin, int(partner_id))
+    if not ua_me:
+        return RedirectResponse(url="/partner/login", status_code=303)
+
+    # supervisor 권한 체크
+    if not bool(getattr(ua_me, "supervisor", False)):
+        return templates.TemplateResponse(
+            "error.html",
+            {
+                "request": request,
+                "message": "진입 권한이 없습니다.\n가온앤 관리자에게 문의해주세요.",
+            },
+            status_code=403,
+        )
+
+    # ✅ 매우 중요한 기본 조건: 같은 division(=업체명)만 노출
+    my_division = (ua_me.division or "").strip()
+    if not my_division:
+        return templates.TemplateResponse(
+            "error.html",
+            {
+                "request": request,
+                "message": "소속(division) 정보가 없어 조회할 수 없습니다.\n가온앤 관리자에게 문의해주세요.",
+            },
+            status_code=400,
+        )
+
+    # 날짜 필터(기존 responses 흐름과 동일하게 KST->UTC 변환 헬퍼 사용)
+    utc_from = utc_to = None
+    if from_ and to:
+        try:
+            utc_from, utc_to = kst_date_range_to_utc_datetimes(from_, to)
+        except Exception:
+            utc_from = utc_to = None
+
+    # pcm_latest: (partner_id, client_phone)별 최신 created_at (responses와 동일 패턴)
+    pcm_latest = (
+        select(
+            PartnerClientMapping.partner_id.label("partner_id"),
+            PartnerClientMapping.client_phone.label("client_phone"),
+            func.max(PartnerClientMapping.created_at).label("created_at"),
+        )
+        .group_by(PartnerClientMapping.partner_id, PartnerClientMapping.client_phone)
+        .subquery()
+    )
+
+    stmt = (
+        select(
+            SurveyResponse,
+            Respondent,
+            User,
+            UserAdmin,
+            pcm_latest.c.created_at.label("partner_requested_at"),
+        )
+        .join(Respondent, Respondent.id == SurveyResponse.respondent_id)
+        .join(User, User.id == Respondent.user_id)
+        .outerjoin(UserAdmin, UserAdmin.id == Respondent.partner_id)
+        .outerjoin(
+            pcm_latest,
+            (pcm_latest.c.partner_id == Respondent.partner_id)
+            & (pcm_latest.c.client_phone == Respondent.client_phone),
+        )
+        .where(Respondent.campaign_id == my_division)
+    )
+
+    # 문진제출일 범위
+    if utc_from and utc_to:
+        stmt = stmt.where(SurveyResponse.submitted_at >= utc_from, SurveyResponse.submitted_at <= utc_to)
+
+    # 진행상태 필터 (responses와 동일 UX)
+    if status:
+        status = status.strip()
+        if status == "analysis_requested":
+            stmt = stmt.where(Respondent.status == "submitted", pcm_latest.c.created_at.is_not(None))
+        elif status == "submitted":
+            stmt = stmt.where(Respondent.status == "submitted", pcm_latest.c.created_at.is_(None))
+        else:
+            stmt = stmt.where(Respondent.status == status)
+
+    # 텍스트 검색 (이름/생년월일/신청번호 일부)
+    if q and q.strip():
+        qq = q.strip()
+        conds = [
+            Respondent.applicant_name.ilike(f"%{qq}%"),
+            func.cast(Respondent.birth_date, sa.String).ilike(f"%{qq}%"),
+            func.cast(Respondent.serial_no, sa.String).ilike(f"%{qq}%"),
+        ]
+        stmt = stmt.where(or_(*conds))
+
+    # 정렬: 제출일 최신 우선
+    stmt = stmt.order_by(SurveyResponse.submitted_at.desc())
+
+    # 페이지 사이즈
+    if page_size == "all":
+        limit = None
+    else:
+        try:
+            limit = int(page_size)
+        except Exception:
+            limit = 50
+
+    # 전체 개수
+    count_stmt = (
+        select(func.count())
+        .select_from(stmt.subquery())
+    )
+    total = session.exec(count_stmt).one()
+    total = int(total or 0)
+
+    # 페이징 적용
+    if page < 1:
+        page = 1
+    if limit:
+        stmt = stmt.offset((page - 1) * limit).limit(limit)
+
+    rows = session.exec(stmt).all()
+
+    total_pages = 1
+    if limit and limit > 0:
+        total_pages = (total + limit - 1) // limit
+
+    return templates.TemplateResponse(
+        "partner/supervisor.html",
+        {
+            "request": request,
+            "rows": rows,
+            "page": page,
+            "total_pages": total_pages,
+            "page_size": page_size,
+            "from": from_ or "",
+            "to": to or "",
+            "status": status or "",
+            "q": q or "",
+            "msg": msg or "",
+        },
+    )
+
+
+#관리자페이지 엑셀다운로드 기능
+@app.get("/partner/supervisor/export.xlsx")
+def partner_supervisor_export_xlsx(
+    request: Request,
+    session: Session = Depends(get_session),
+    page: int = 1,
+    page_size: str = "50",
+    from_: str | None = None,
+    to: str | None = None,
+    status: str | None = None,
+    q: str | None = None,
+):
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=303)
+
+    ua_me = session.get(UserAdmin, int(partner_id))
+    if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
+        return RedirectResponse(url="/partner/dashboard?msg=권한이 없습니다.", status_code=303)
+    
+    #로그추가 임시
+    logging.info("[SVX][AUTH] ua_id=%s supervisor=%s division=%s qs=%s",
+             getattr(ua_me, "id", None),
+             getattr(ua_me, "supervisor", None),
+             getattr(ua_me, "division", None),
+             str(request.query_params))
+
+    my_division = (ua_me.division or "").strip()
+    if not my_division:
+        return RedirectResponse(url="/partner/dashboard?msg=소속정보가 없습니다.", status_code=303)
+
+    utc_from = utc_to = None
+    if from_ and to:
+        try:
+            utc_from, utc_to = kst_date_range_to_utc_datetimes(from_, to)
+        except Exception:
+            utc_from = utc_to = None
+
+    pcm_latest = (
+        select(
+            PartnerClientMapping.partner_id.label("partner_id"),
+            PartnerClientMapping.client_phone.label("client_phone"),
+            func.max(PartnerClientMapping.created_at).label("created_at"),
+        )
+        .group_by(PartnerClientMapping.partner_id, PartnerClientMapping.client_phone)
+        .subquery()
+    )
+
+    stmt = (
+        select(
+            SurveyResponse,
+            Respondent,
+            User,
+            UserAdmin,
+            pcm_latest.c.created_at.label("partner_requested_at"),
+        )
+        .join(Respondent, Respondent.id == SurveyResponse.respondent_id)
+        .join(User, User.id == Respondent.user_id)
+        .outerjoin(UserAdmin, UserAdmin.id == Respondent.partner_id)
+        .outerjoin(
+            pcm_latest,
+            (pcm_latest.c.partner_id == Respondent.partner_id)
+            & (pcm_latest.c.client_phone == Respondent.client_phone),
+        )
+        .where(Respondent.campaign_id == my_division)
+        .order_by(SurveyResponse.submitted_at.desc())
+    )
+
+    if utc_from and utc_to:
+        stmt = stmt.where(SurveyResponse.submitted_at >= utc_from, SurveyResponse.submitted_at <= utc_to)
+
+    if status:
+        status = status.strip()
+        if status == "analysis_requested":
+            stmt = stmt.where(Respondent.status == "submitted", pcm_latest.c.created_at.is_not(None))
+        elif status == "submitted":
+            stmt = stmt.where(Respondent.status == "submitted", pcm_latest.c.created_at.is_(None))
+        else:
+            stmt = stmt.where(Respondent.status == status)
+
+    if q and q.strip():
+        qq = q.strip()
+        stmt = stmt.where(
+            or_(
+                Respondent.applicant_name.ilike(f"%{qq}%"),
+                func.cast(Respondent.birth_date, sa.String).ilike(f"%{qq}%"),
+                func.cast(Respondent.serial_no, sa.String).ilike(f"%{qq}%"),
+            )
+        )
+
+    # 화면에 "보이는 테이블" 그대로 export (page/page_size 반영)
+    if page_size == "all":
+        limit = None
+    else:
+        try:
+            limit = int(page_size)
+        except Exception:
+            limit = 50
+
+    if page < 1:
+        page = 1
+    if limit:
+        stmt = stmt.offset((page - 1) * limit).limit(limit)
+
+    rows = session.exec(stmt).all()
+    #로그추가 임시
+    logging.info("[SVX][ROWS] division=%s rows=%s page=%s page_size=%s",
+             my_division, len(rows), page, page_size)
+
+    
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Supervisor"
+
+    headers = ["신청번호", "신청자", "담당자", "진행상태값", "문진제출일", "담당자신청일", "메모"]
+    ws.append(headers)
+
+    def status_label(resp_status: str, partner_requested_at) -> str:
+        if resp_status == "submitted":
+            return "분석신청" if partner_requested_at else "문진제출"
+        if resp_status == "accepted":
+            return "접수완료"
+        if resp_status == "report_uploaded":
+            return "리포트 업로드 완료"
+        if resp_status == "report_sent":
+            return "리포트 발송 완료"
+        return resp_status or ""
+
+    for sr, resp, user, ua, partner_requested_at in rows:
+        applicant = (resp.applicant_name or user.name_enc or "-")
+        담당자 = (ua.name if ua and ua.name else "")
+        memo = (resp.sv_memo or "")
+
+        ws.append([
+            resp.serial_no or "",
+            applicant,
+            담당자,
+            status_label(resp.status, partner_requested_at),
+            to_kst(sr.submitted_at) if sr and sr.submitted_at else "",
+            to_kst(partner_requested_at) if partner_requested_at else "",
+            memo,
+        ])
+
+    # 열 너비(대충) + 메모는 넓게
+    widths = [10, 22, 14, 14, 16, 16, 60]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    import io
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+
+    filename = "partner_supervisor.xlsx"
+    return Response(
+        content=bio.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+#관리자페이지 메모 저장기능
+@app.post("/partner/supervisor/memo")
+def partner_supervisor_save_memo(
+    request: Request,
+    respondent_id: int = Form(...),
+    new_memo: str = Form(""),
+    next: str = Form("/partner/supervisor"),
+    session: Session = Depends(get_session),
+):
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=303)
+
+    ua_me = session.get(UserAdmin, int(partner_id))
+    if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
+        return RedirectResponse(url=f"{next}?msg=권한이 없습니다.", status_code=303)
+
+    my_division = (ua_me.division or "").strip()
+    if not my_division:
+        return RedirectResponse(url=f"{next}?msg=소속정보가 없습니다.", status_code=303)
+
+    resp = session.get(Respondent, int(respondent_id))
+    if not resp:
+        return RedirectResponse(url=f"{next}?msg=대상이 존재하지 않습니다.", status_code=303)
+    
+    #로그 추가 임시
+    logging.info("[SVM][TRY] ua_id=%s ua_name=%s division=%s respondent_id=%s next=%s",
+             getattr(ua_me, "id", None),
+             getattr(ua_me, "name", None),
+             my_division,
+             respondent_id,
+             next)
+
+
+    # ✅ 보안: 같은 campaign_id(=division)만 수정 가능
+    if (resp.campaign_id or "").strip() != my_division:
+        return RedirectResponse(url=f"{next}?msg=대상 접근 권한이 없습니다.", status_code=303)
+
+    nm = (new_memo or "").strip()
+    if not nm:
+        return RedirectResponse(url=f"{next}?msg=신규작성 내용이 없습니다.", status_code=303)
+
+    # 신규 입력은 60자 제한
+    if len(nm) > 60:
+        return RedirectResponse(url=f"{next}?msg=신규메모는 최대 60자까지 입력할 수 있습니다.", status_code=303)
+
+    now = now_kst()
+    tail = f"최종수정자: {(ua_me.name or '').strip()} / 최종수정일시: {to_kst(now)}"
+    final = nm + "\n" + tail
+
+    # DB 저장은 100자 제한 (varchar(100))
+    if len(final) > 100:
+        return RedirectResponse(url=f"{next}?msg=메모 저장 길이를 초과했습니다. (최대 100자)", status_code=303)
+
+    resp.sv_memo = final
+    resp.sv_memo_at = now
+    resp.updated_at = now_kst()
+    session.add(resp)
+    session.commit()
+    #저장 로그 임시
+    logging.info("[SVM][SAVED] respondent_id=%s memo_len=%s memo_at=%s",
+             resp.id, len(resp.sv_memo or ""), to_kst(resp.sv_memo_at) if resp.sv_memo_at else "")
+
+
+    return RedirectResponse(url=f"{next}?msg=저장되었습니다.", status_code=303)
 
 
 
