@@ -1991,14 +1991,8 @@ def partner_supervisor(
             stmt = stmt.where(Respondent.status == status)
 
     # 텍스트 검색 (이름/생년월일/신청번호 일부)
-    if q and q.strip():
-        qq = q.strip()
-        conds = [
-            Respondent.applicant_name.ilike(f"%{qq}%"),
-            func.cast(Respondent.birth_date, sa.String).ilike(f"%{qq}%"),
-            func.cast(Respondent.serial_no, sa.String).ilike(f"%{qq}%"),
-        ]
-        stmt = stmt.where(or_(*conds))
+    # --- 검색어 필터 (admin_responses와 동일 UX) ---
+    stmt = _apply_supervisor_q_filter(stmt, q)
 
     # 정렬: 제출일 최신 우선
     stmt = stmt.order_by(SurveyResponse.submitted_at.desc())
@@ -2129,15 +2123,9 @@ def partner_supervisor_export_xlsx(
         else:
             stmt = stmt.where(Respondent.status == status)
 
-    if q and q.strip():
-        qq = q.strip()
-        stmt = stmt.where(
-            or_(
-                Respondent.applicant_name.ilike(f"%{qq}%"),
-                func.cast(Respondent.birth_date, sa.String).ilike(f"%{qq}%"),
-                func.cast(Respondent.serial_no, sa.String).ilike(f"%{qq}%"),
-            )
-        )
+    # --- 검색어 필터 (admin_responses와 동일 UX) ---
+    stmt = _apply_supervisor_q_filter(stmt, q)
+
 
     # 화면에 "보이는 테이블" 그대로 export (page/page_size 반영)
     if page_size == "all":
@@ -2424,6 +2412,44 @@ def _normalize_date_str(s: str) -> str | None:
         return f"{int(y):04d}-{int(mm):02d}-{int(dd):02d}"
     except ValueError:
         return None
+
+#생년월일 날짜검색 헬퍼
+def _apply_supervisor_q_filter(stmt, q: str | None):
+    """
+    admin_responses의 검색 UX와 동일:
+    - q가 생년월일(yyyy-mm-dd / yyyymmdd 등)로 인식되면: '정확 일자 매칭(=)' + 기타 like
+    - 아니면: 일반 like 검색(생년월일도 부분검색 허용)
+    """
+    if not q:
+        return stmt
+
+    like = f"%{q}%"
+    q_birth = _normalize_date_str(q)
+
+    if q_birth:
+        # 정확 일자 매칭(=) + 기타 like
+        return stmt.where(
+            (func.to_char(User.birth_date, "YYYY-MM-DD") == q_birth)
+            | (func.to_char(Respondent.birth_date, "YYYY-MM-DD") == q_birth)
+            | (Respondent.applicant_name.ilike(like))
+            | (User.name_enc.ilike(like))
+            | (func.cast(Respondent.serial_no, sa.String).ilike(like))
+            | (UserAdmin.name.ilike(like))
+            | (Respondent.sv_memo.ilike(like))
+            | (func.to_char(Respondent.created_at, "YYYY-MM-DD").ilike(like))
+        )
+    else:
+        # 일반 텍스트 검색: 생년월일도 부분검색 허용
+        return stmt.where(
+            (Respondent.applicant_name.ilike(like))
+            | (User.name_enc.ilike(like))
+            | (func.cast(Respondent.serial_no, sa.String).ilike(like))
+            | (UserAdmin.name.ilike(like))
+            | (Respondent.sv_memo.ilike(like))
+            | (func.to_char(User.birth_date, "YYYY-MM-DD").ilike(like))
+            | (func.to_char(Respondent.birth_date, "YYYY-MM-DD").ilike(like))
+            | (func.to_char(Respondent.created_at, "YYYY-MM-DD").ilike(like))
+        )
 
 
 

@@ -10,7 +10,8 @@
   <div class="container">
     <h1>문제가 발생했어요</h1>
     <p>{{ message }}</p>
-    <a class="button" href="/">처음으로</a>
+    <a class="button" href="{% if request.url.path.startswith('/partner') %}/partner/dashboard{% else %}/{% endif %}">처음으로</a>
+
   </div>
 </body>
 </html>
