@@ -39,6 +39,10 @@
     {# 4) /partner/* (로그인 이후 화면들): 대시보드 + 로그아웃 #}
     {% elif request.url.path.startswith('/partner') %}
       <a href="/partner/dashboard">대시보드 홈</a>
+      {% if request.url.path.startswith('/partner/dashboard') %}
+        <a href="/partner/supervisor">관리자페이지</a>
+      {% if request.url.path.startswith('/partner/supervisor') %}
+      {% endif %}
       <a href="/partner/logout" onclick="return confirm('로그아웃 하시겠어요?')">로그아웃</a>
 
     {# 5) /admin/responses*: 로그아웃만 #}
