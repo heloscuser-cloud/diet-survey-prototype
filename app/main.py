@@ -140,7 +140,13 @@ os.makedirs(os.path.join(ROOT_DIR, "app", "data"), exist_ok=True)
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DB_PATH}")
 engine = create_engine(
     DATABASE_URL, echo=False, pool_pre_ping=True, pool_recycle=300,
-    )
+    connect_args={
+    "keepalives": 1,
+    "keepalives_idle": 30,
+    "keepalives_interval": 10,
+    "keepalives_count": 5,
+    },
+)
 
 
 app = FastAPI(title="Diet Survey Prototype")
@@ -2918,7 +2924,8 @@ async def admin_upload_report(
     session.add(rf)
 
     # 상태 업데이트
-    resp = session.get(Respondent, sr.respondent_id)
+    with session.no_autoflush:
+        resp = session.get(Respondent, sr.respondent_id)
     if resp:
         resp.status = "report_uploaded"
         resp.report_sent_at = None
