@@ -2697,14 +2697,17 @@ def admin_responses(
 
     d_from = parse_date(from_)
     d_to = parse_date(to)
-
     # 기간 검사 (둘 다 있는 경우만)
     if d_from and d_to:
         if d_from > d_to:
-            return _redirect_with_msg(
-                request.url.path + (("?" + request.url.query) if request.url.query else ""),
-                "조회 기간이 유효하지 않습니다. 다시 확인해주세요"
-            )
+            return _redirect_with_msg(request.url.path + (("?" + request.url.query) if request.url.query else ""), "조회 기간이 유효하지 않습니다. 다시 확인해주세요")
+        def _add_months(d: date, months: int) -> date:
+            y = d.year + (d.month - 1 + months) // 12
+            m = (d.month - 1 + months) % 12 + 1
+            last_day = (date(y, m, 28) + timedelta(days=4))
+            last_day = last_day - timedelta(days=last_day.day)
+            day = min(d.day, last_day.day)
+            return date(y, m, day)
 
         # ✅ to 기준 최근 3개월
         min_from = _add_months(d_to, -3)
@@ -2713,7 +2716,6 @@ def admin_responses(
                 request.url.path + (("?" + request.url.query) if request.url.query else ""),
                 "최대 조회 가능 기간은 3개월입니다."
             )
-
 
     start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
     # 문진제출일(= SurveyResponse.submitted_at) 기준으로 필터
