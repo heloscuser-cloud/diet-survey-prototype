@@ -185,6 +185,11 @@
         </div>
       </div>
 
+      <label class="chk" style="display:inline-flex; align-items:center; gap:6px; margin-left:10px;">
+        <input type="checkbox" name="only_unassigned" value="1" {% if only_unassigned %}checked{% endif %}>
+        담당자 미지정 인원만 보기
+      </label>
+
       <div class="row" style="margin-top:4px;">
         <div>
           <label for="page_size">페이지당 조회 수</label>
@@ -213,6 +218,7 @@
         <tr>
           <th>신청번호</th>
           <th>신청자</th>
+          <th>신청자연락처</th>
           <th>담당자</th>
           <th>진행상태값</th>
           <th>문진제출일</th>
@@ -227,7 +233,7 @@
         <tr>
           <td class="nowrap">{{ resp.serial_no or '' }}</td>
           <td>{{ resp.applicant_name or user.name_enc or '-' }}</td>
-
+          <td>{{ resp.client_phone or '' }}</td>
           <!-- 담당자 + 툴팁 -->
           <td class="nowrap" style="position:relative;">
             {% set partner_name = (ua.name if ua and ua.name else '') %}
@@ -304,7 +310,7 @@
         {% if p == page %}
           <span>{{ p }}</span>
         {% else %}
-          <a href="/partner/supervisor?page={{ p }}&page_size={{ page_size or '50' }}&from={{ from }}&to={{ to }}&status={{ status }}&q={{ q }}">{{ p }}</a>
+          <a href="/partner/supervisor?page={{ p }}&page_size={{ page_size or '50' }}&from={{ from }}&to={{ to }}&status={{ status }}&q={{ q }}{% if only_unassigned %}&only_unassigned=1{% endif %}">{{ p }}</a>
         {% endif %}
       {% endfor %}
     {% endif %}
@@ -436,7 +442,8 @@ document.querySelectorAll('.date-ymd').forEach(inp=>{
 function downloadXlsx(){
   const u = new URL(window.location.href);
   u.pathname = "/partner/supervisor/export.xlsx";
-  window.location.href = u.pathname + (u.search ? u.search : "");
+  // 현재 페이지의 쿼리스트링(from/to/status/q/page_size/only_unassigned 등)을 그대로 유지
+  window.location.href = u.toString();
 }
 
 // 툴팁: ⓘ 클릭 토글, 바깥 클릭/ESC 닫기

@@ -1910,6 +1910,7 @@ def partner_supervisor(
     to: str | None = None,
     status: str | None = None,
     q: str | None = None,
+    only_unassigned: str | None = None,  # ✅ 담당자 미지정 인원만 보기(checkbox)
     msg: str | None = None,
 ):
     # 로그인 체크
@@ -2029,6 +2030,11 @@ def partner_supervisor(
     if end_utc:
         stmt = stmt.where(SurveyResponse.submitted_at < end_utc)
 
+    # --- 담당자 미지정 인원만 보기 필터 ---
+    only_unassigned_bool = str(only_unassigned or "").lower() in ("1", "true", "on", "yes")
+    if only_unassigned_bool:
+        stmt = stmt.where(Respondent.partner_id.is_(None))
+
     # --- 상태 필터 (responses와 동일 UX) ---
     if status:
         status = status.strip()
@@ -2100,6 +2106,7 @@ def partner_supervisor(
             "to": to or "",
             "status": status or "",
             "q": q or "",
+            "only_unassigned": only_unassigned_bool,
             "msg": msg or "",
             "to_kst_str": to_kst_str,
         },
@@ -2117,6 +2124,7 @@ def partner_supervisor_export_xlsx(
     to: str | None = None,
     status: str | None = None,
     q: str | None = None,
+    only_unassigned: str | None = None,
 ):
     partner_id = request.session.get("partner_id")
     if not partner_id:
@@ -2189,6 +2197,9 @@ def partner_supervisor_export_xlsx(
     # --- 검색어 필터 (admin_responses와 동일 UX) ---
     stmt = _apply_supervisor_q_filter(stmt, q)
 
+    only_unassigned_bool = str(only_unassigned or "").lower() in ("1", "true", "on", "yes")
+    if only_unassigned_bool:
+        stmt = stmt.where(Respondent.partner_id.is_(None))
 
     # 화면에 "보이는 테이블" 그대로 export (page/page_size 반영)
     if page_size == "all":
