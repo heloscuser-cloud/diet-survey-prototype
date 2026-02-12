@@ -88,7 +88,7 @@
 
   /* 메모 표시 폭(30자 정도 느낌) */
   .memo-cell{
-    max-width:260px;
+    max-width:600px;
     white-space:nowrap;
     overflow:hidden;
     text-overflow:ellipsis;
@@ -111,7 +111,7 @@
     display:none; align-items:center; justify-content:center; z-index:10000;
   }
   .modal{
-    width:560px; max-width:92vw; background:#fff; border:1px solid var(--border);
+    width:600px; max-width:92vw; background:#fff; border:1px solid var(--border);
     border-radius:16px; box-shadow:0 10px 30px rgba(0,0,0,.18);
     padding:16px;
   }
@@ -217,8 +217,9 @@
           <th>진행상태값</th>
           <th>문진제출일</th>
           <th>담당자신청일</th>
-          <th>메모</th>
-          <th>메모편집</th>
+          <th>리포트발송일</th>
+          <th class="memo-col">메모</th>
+          <th>메모보기/편집</th>
         </tr>
       </thead>
       <tbody>
@@ -264,6 +265,7 @@
 
           <td>{{ to_kst_str(sr.submitted_at) if sr and sr.submitted_at else '' }}</td>
           <td>{{ to_kst_str(partner_requested_at) if partner_requested_at else '' }}</td>
+          <td>{{ to_kst_str(resp.report_sent_at) if resp and resp.status == 'report_sent' and resp.report_sent_at else '' }}</td>
 
           <!-- 메모 + 툴팁 -->
           <td class="nowrap" style="position:relative;">

@@ -2209,7 +2209,7 @@ def partner_supervisor_export_xlsx(
     ws = wb.active
     ws.title = "Supervisor"
 
-    headers = ["신청번호", "신청자", "담당자", "진행상태값", "문진제출일", "담당자신청일", "메모"]
+    headers = ["신청번호", "신청자", "담당자", "진행상태값", "문진제출일", "담당자신청일", "리포트발송일", "메모"]
     ws.append(headers)
 
     def status_label(resp_status: str, partner_requested_at) -> str:
@@ -2235,6 +2235,7 @@ def partner_supervisor_export_xlsx(
             status_label(resp.status, partner_requested_at),
             to_kst_str(sr.submitted_at) if sr and sr.submitted_at else "",
             to_kst_str(partner_requested_at) if partner_requested_at else "",
+            to_kst_str(resp.report_sent_at) if (resp and resp.status == "report_sent" and resp.report_sent_at) else "",
             memo,
         ])
 
@@ -2303,7 +2304,7 @@ def partner_supervisor_save_memo(
         return RedirectResponse(url=f"{next}?msg=신규메모는 최대 60자까지 입력할 수 있습니다.", status_code=303)
 
     now = now_kst()
-    tail = f"최종수정자: {(ua_me.name or '').strip()} / 최종수정일시: {to_kst_str(now)}"
+    tail = f"[최종수정자: {(ua_me.name or '').strip()} / 최종수정일시: {to_kst_str(now)}]"
     final = nm + "\n" + tail
 
     # DB 저장은 100자 제한 (varchar(100))
