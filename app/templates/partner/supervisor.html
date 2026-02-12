@@ -245,8 +245,8 @@
             {% endif %}
           </td>
 
-          <td>{{ to_kst_str(sr.submitted_at) if sr and sr.submitted_at else '' }}</td>
-          <td>{{ to_kst_str(partner_requested_at) if partner_requested_at else '' }}</td>
+          <td>{{ to_kst(sr.submitted_at) if sr and sr.submitted_at else '' }}</td>
+          <td>{{ to_kst(partner_requested_at) if partner_requested_at else '' }}</td>
 
           <!-- 메모 + 툴팁 -->
           <td class="nowrap" style="position:relative;">
