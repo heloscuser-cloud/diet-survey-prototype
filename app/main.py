@@ -92,6 +92,11 @@ def to_kst(dt: datetime) -> datetime:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(KST)
 
+def to_kst_str(dt):
+    if not dt:
+        return ""
+    return to_kst(dt).strftime("%Y-%m-%d %H:%M")
+
 KST = timezone(timedelta(hours=9))
 def now_kst():
     return datetime.now(tz=KST)
@@ -2039,6 +2044,7 @@ def partner_supervisor(
             "status": status or "",
             "q": q or "",
             "msg": msg or "",
+            "to_kst_str": to_kst_str,
         },
     )
 
@@ -2175,8 +2181,8 @@ def partner_supervisor_export_xlsx(
             applicant,
             담당자,
             status_label(resp.status, partner_requested_at),
-            to_kst(sr.submitted_at) if sr and sr.submitted_at else "",
-            to_kst(partner_requested_at) if partner_requested_at else "",
+            to_kst_str(sr.submitted_at) if sr and sr.submitted_at else "",
+            to_kst_str(partner_requested_at) if partner_requested_at else "",
             memo,
         ])
 
@@ -2245,7 +2251,7 @@ def partner_supervisor_save_memo(
         return RedirectResponse(url=f"{next}?msg=신규메모는 최대 60자까지 입력할 수 있습니다.", status_code=303)
 
     now = now_kst()
-    tail = f"최종수정자: {(ua_me.name or '').strip()} / 최종수정일시: {to_kst(now)}"
+    tail = f"최종수정자: {(ua_me.name or '').strip()} / 최종수정일시: {to_kst_str(now)}"
     final = nm + "\n" + tail
 
     # DB 저장은 100자 제한 (varchar(100))
@@ -2259,7 +2265,7 @@ def partner_supervisor_save_memo(
     session.commit()
     #저장 로그 임시
     logging.info("[SVM][SAVED] respondent_id=%s memo_len=%s memo_at=%s",
-             resp.id, len(resp.sv_memo or ""), to_kst(resp.sv_memo_at) if resp.sv_memo_at else "")
+             resp.id, len(resp.sv_memo or ""), to_kst_str(resp.sv_memo_at) if resp.sv_memo_at else "")
 
 
     return RedirectResponse(url=f"{next}?msg=저장되었습니다.", status_code=303)
