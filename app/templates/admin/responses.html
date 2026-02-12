@@ -428,8 +428,8 @@ function setMonths(n){let [f,t]=getDates();let td=new Date();let fd=addMonthsSaf
         return;
       }
 
-const maxTo = addMonthsSafe(fd, 3);
-if(td > maxTo){
+const minFrom = addMonthsSafe(td, -3);
+if(fd < minFrom){
   alert("최대 조회 가능 기간은 3개월입니다.");
   event.preventDefault();
   return;

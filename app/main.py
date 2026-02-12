@@ -1969,19 +1969,23 @@ def partner_supervisor(
     d_from = _parse_date(from_)
     d_to = _parse_date(to)
 
-    # 기간 검사: from<=to, 최대 6개월
+
+    # 기간 검사: from<=to, 최대 6개월 (to 기준 최근 6개월)
     if d_from and d_to:
         if d_from > d_to:
             return _redirect_with_msg(
                 request.url.path + (("?" + request.url.query) if request.url.query else ""),
                 "조회 기간이 유효하지 않습니다. 다시 확인해주세요",
             )
-        max_to = _add_months(d_from, 6)
-        if d_to > max_to:
+
+        # ✅ to 기준으로 6개월 전(말일 보정 포함)보다 from이 더 과거면 초과
+        min_from = _add_months(d_to, -6)
+        if d_from < min_from:
             return _redirect_with_msg(
                 request.url.path + (("?" + request.url.query) if request.url.query else ""),
                 "최대 조회 가능 기간은 6개월입니다.",
             )
+
 
     start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
 
@@ -2240,7 +2244,7 @@ def partner_supervisor_export_xlsx(
         ])
 
     # 열 너비(대충) + 메모는 넓게
-    widths = [10, 22, 14, 14, 16, 16, 60]
+    widths = [10, 14, 14, 22, 20, 20, 20, 60]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -2693,24 +2697,23 @@ def admin_responses(
 
     d_from = parse_date(from_)
     d_to = parse_date(to)
+
     # 기간 검사 (둘 다 있는 경우만)
     if d_from and d_to:
         if d_from > d_to:
-            return _redirect_with_msg(request.url.path + (("?" + request.url.query) if request.url.query else ""), "조회 기간이 유효하지 않습니다. 다시 확인해주세요")
-        def _add_months(d: date, months: int) -> date:
-            y = d.year + (d.month - 1 + months) // 12
-            m = (d.month - 1 + months) % 12 + 1
-            last_day = (date(y, m, 28) + timedelta(days=4))
-            last_day = last_day - timedelta(days=last_day.day)
-            day = min(d.day, last_day.day)
-            return date(y, m, day)
+            return _redirect_with_msg(
+                request.url.path + (("?" + request.url.query) if request.url.query else ""),
+                "조회 기간이 유효하지 않습니다. 다시 확인해주세요"
+            )
 
-        max_to = _add_months(d_from, 3)
-        if d_to > max_to:
+        # ✅ to 기준 최근 3개월
+        min_from = _add_months(d_to, -3)
+        if d_from < min_from:
             return _redirect_with_msg(
                 request.url.path + (("?" + request.url.query) if request.url.query else ""),
                 "최대 조회 가능 기간은 3개월입니다."
             )
+
 
     start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
     # 문진제출일(= SurveyResponse.submitted_at) 기준으로 필터
