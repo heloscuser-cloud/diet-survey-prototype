@@ -1943,13 +1943,54 @@ def partner_supervisor(
             status_code=400,
         )
 
-    # 날짜 필터(기존 responses 흐름과 동일하게 KST->UTC 변환 헬퍼 사용)
-    utc_from = utc_to = None
-    if from_ and to:
+    # --- 첫 진입 기본값: from/to가 없으면 오늘(KST)로 세팅 (/partner/requests와 동일 UX) ---
+    is_first_visit = (request.url.query == "")
+    today_str = now_kst().date().isoformat()
+    if is_first_visit:
+        from_ = today_str
+        to = today_str
+
+    def _parse_date(s: str | None):
         try:
-            utc_from, utc_to = kst_date_range_to_utc_datetimes(from_, to)
+            return datetime.strptime((s or "").strip(), "%Y-%m-%d").date()
         except Exception:
-            utc_from = utc_to = None
+            return None
+
+    def _add_months(d: date, months: int) -> date:
+        # 표준 라이브러리만 사용: 말일 처리 포함
+        y = d.year + (d.month - 1 + months) // 12
+        m = (d.month - 1 + months) % 12 + 1
+        # 대상 월의 마지막 날짜
+        last_day = (date(y, m, 28) + timedelta(days=4))
+        last_day = last_day - timedelta(days=last_day.day)
+        day = min(d.day, last_day.day)
+        return date(y, m, day)
+
+    d_from = _parse_date(from_)
+    d_to = _parse_date(to)
+
+    # 기간 검사: from<=to, 최대 6개월
+    if d_from and d_to:
+        if d_from > d_to:
+            return _redirect_with_msg(
+                request.url.path + (("?" + request.url.query) if request.url.query else ""),
+                "조회 기간이 유효하지 않습니다. 다시 확인해주세요"
+            )
+        max_to = _add_months(d_from, 6)
+        if d_to > max_to:
+            return _redirect_with_msg(
+                request.url.path + (("?" + request.url.query) if request.url.query else ""),
+                "최대 조회 가능 기간은 6개월입니다."
+            )
+
+    start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
+
+    # 문진제출일(=SurveyResponse.submitted_at) 기준으로 필터 (admin/responses와 동일: end_utc는 <)
+    if start_utc:
+        stmt = stmt.where(SurveyResponse.submitted_at >= start_utc)
+    if end_utc:
+        stmt = stmt.where(SurveyResponse.submitted_at < end_utc)
+
 
     # pcm_latest: (partner_id, client_phone)별 최신 created_at (responses와 동일 패턴)
     pcm_latest = (
@@ -1981,10 +2022,7 @@ def partner_supervisor(
         .where(Respondent.campaign_id == my_division)
     )
 
-    # 문진제출일 범위
-    if utc_from and utc_to:
-        stmt = stmt.where(SurveyResponse.submitted_at >= utc_from, SurveyResponse.submitted_at <= utc_to)
-
+       
     # 진행상태 필터 (responses와 동일 UX)
     if status:
         status = status.strip()
@@ -2545,6 +2583,10 @@ def admin_responses(
     is_first_visit = (request.url.query == "")
     today_str = now_kst().date().isoformat()
     
+    if is_first_visit:
+        from_ = today_str
+        to = today_str
+    
     # 안전 파싱
     try:
         page = max(1, int(page))
@@ -2640,9 +2682,20 @@ def admin_responses(
     if d_from and d_to:
         if d_from > d_to:
             return _redirect_with_msg(request.url.path + (("?" + request.url.query) if request.url.query else ""), "조회 기간이 유효하지 않습니다. 다시 확인해주세요")
-        diff_days = (d_to - d_from).days
-        if diff_days > 30:  # 포함 31일 초과
-            return _redirect_with_msg(request.url.path + (("?" + request.url.query) if request.url.query else ""), "최대 조회 가능 일수는 31일입니다.")
+        def _add_months(d: date, months: int) -> date:
+            y = d.year + (d.month - 1 + months) // 12
+            m = (d.month - 1 + months) % 12 + 1
+            last_day = (date(y, m, 28) + timedelta(days=4))
+            last_day = last_day - timedelta(days=last_day.day)
+            day = min(d.day, last_day.day)
+            return date(y, m, day)
+
+        max_to = _add_months(d_from, 3)
+        if d_to > max_to:
+            return _redirect_with_msg(
+                request.url.path + (("?" + request.url.query) if request.url.query else ""),
+                "최대 조회 가능 기간은 3개월입니다."
+            )
 
     start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
     # 문진제출일(= SurveyResponse.submitted_at) 기준으로 필터

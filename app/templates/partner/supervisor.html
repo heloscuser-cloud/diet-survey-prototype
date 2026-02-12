@@ -37,6 +37,20 @@
   .muted{color:var(--muted)}
   table thead th, table tbody td { text-align: center !important; }
 
+  /* 테이블만 화면폭에 가깝게 확장(FHD 기준). 필터/검색 영역(.page)은 기존 유지 */
+.table-wide{
+  width: calc(100vw - 40px);
+  margin-left: 50%;
+  transform: translateX(-50%);
+}
+@media (max-width: 768px){
+  .table-wide{
+    width: 100%;
+    margin-left: 0;
+    transform: none;
+  }
+}
+
   body > .wrap { background: transparent; box-shadow: none; padding: 0; }
 
   /* 툴팁(담당자/메모 공용) */
@@ -142,8 +156,11 @@
           <button type="button" class="btn btn-sm btn-gray" onclick="shiftRange(-1)">◀</button>
           <button type="button" class="btn btn-sm btn-gray" onclick="shiftRange(1)">▶</button>
           <button type="button" class="btn btn-sm btn-gray" onclick="setToday()">오늘</button>
-          <button type="button" class="btn btn-sm btn-gray" onclick="setWeek()">7일</button>
-          <button type="button" class="btn btn-sm btn-gray" onclick="setMonth()">31일</button>
+          <button type="button" class="btn btn-sm btn-gray" onclick="setWeek()">일주일</button>
+          <button type="button" class="btn btn-sm btn-gray" onclick="setMonths(1)">1개월</button>
+          <button type="button" class="btn btn-sm btn-gray" onclick="setMonths(3)">3개월</button>
+          <button type="button" class="btn btn-sm btn-gray" onclick="setMonths(6)">6개월</button>
+
         </div>
       </div>
 
@@ -190,7 +207,7 @@
   </div>
 
   <!-- 테이블 -->
-  <div class="card table-card">
+  <div class="card table-card table-wide">
     <table>
       <thead>
         <tr>
@@ -343,9 +360,66 @@ function shiftRange(dir){
     f.value = fmt(newFrom); t.value = fmt(newTo);
   }
 }
-function setToday(){let [f,t]=getDates();let d=new Date();f.value=fmt(d);t.value=fmt(d)}
-function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.setDate(td.getDate()-6);f.value=fmt(fd);t.value=fmt(td)}
-function setMonth(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.setDate(td.getDate()-31);f.value=fmt(fd);t.value=fmt(td)}
+function z(n){return String(n).padStart(2,'0')}
+function fmt(d){return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`}
+function getDates(){const f=document.querySelector('input[name=from]');const t=document.querySelector('input[name=to]');return [f,t]}
+
+function daysInMonth(y,m){ return new Date(y, m+1, 0).getDate(); } // m:0~11
+function addMonthsSafe(d, delta){
+  const y = d.getFullYear();
+  const m = d.getMonth();
+  const day = d.getDate();
+  const target = new Date(y, m + delta, 1);
+  const last = daysInMonth(target.getFullYear(), target.getMonth());
+  target.setDate(Math.min(day, last));
+  return target;
+}
+
+function setToday(){
+  let [f,t]=getDates(); let d=new Date();
+  f.value=fmt(d); t.value=fmt(d);
+}
+function setWeek(){
+  let [f,t]=getDates();
+  let td=new Date();
+  let fd=new Date(td); fd.setDate(td.getDate()-6);
+  f.value=fmt(fd); t.value=fmt(td);
+}
+function setMonths(n){
+  let [f,t]=getDates();
+  let td=new Date();
+  let fd=addMonthsSafe(td, -n);
+  f.value=fmt(fd); t.value=fmt(td);
+}
+
+// --- 폼 제출 시 기간 검증: 최대 6개월 ---
+(function(){
+  const form = document.getElementById("searchForm");
+  if(!form) return;
+  form.addEventListener("submit", function(e){
+    const fromEl = document.querySelector('input[name="from"]');
+    const toEl   = document.querySelector('input[name="to"]');
+    const fv = (fromEl && fromEl.value) ? fromEl.value.trim() : "";
+    const tv = (toEl && toEl.value) ? toEl.value.trim() : "";
+
+    if(fv && tv){
+      const fd = new Date(fv);
+      const td = new Date(tv);
+
+      if(fd > td){
+        alert("조회 기간이 유효하지 않습니다. 다시 확인해주세요");
+        e.preventDefault();
+        return;
+      }
+      const maxTo = addMonthsSafe(fd, 6);
+      if(td > maxTo){
+        alert("최대 조회 가능 기간은 6개월입니다.");
+        e.preventDefault();
+        return;
+      }
+    }
+  });
+})();
 
 document.querySelectorAll('.date-ymd').forEach(inp=>{
   inp.addEventListener('input', e=>{

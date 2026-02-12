@@ -144,8 +144,10 @@ a.pdf-link:hover{
           <button type="button" class="btn btn-sm btn-cyan" onclick="shiftRange(-1)">◀</button>
           <button type="button" class="btn btn-sm btn-cyan" onclick="shiftRange(1)">▶</button>
           <button type="button" class="btn btn-sm btn-cyan" onclick="setToday()">오늘</button>
-          <button type="button" class="btn btn-sm btn-cyan" onclick="setWeek()">7일</button>
-          <button type="button" class="btn btn-sm btn-cyan" onclick="setMonth()">31일</button>
+          <button type="button" class="btn btn-sm btn-cyan" onclick="setWeek()">일주일</button>
+          <button type="button" class="btn btn-sm btn-cyan" onclick="setMonths(1)">1개월</button>
+          <button type="button" class="btn btn-sm btn-cyan" onclick="setMonths(3)">3개월</button>
+
         </div>
       </div>
 
@@ -388,10 +390,22 @@ function shiftRange(dir){
     t.value = fmt(newTo);
   }
 }
-function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.setDate(td.getDate()-6);f.value=fmt(fd);t.value=fmt(td)}
-function setMonth(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.setDate(td.getDate()-31);f.value=fmt(fd);t.value=fmt(td)}
+function daysInMonth(y,m){ return new Date(y, m+1, 0).getDate(); } // m:0~11
+function addMonthsSafe(d, delta){
+  const y = d.getFullYear();
+  const m = d.getMonth();
+  const day = d.getDate();
+  const target = new Date(y, m + delta, 1);
+  const last = daysInMonth(target.getFullYear(), target.getMonth());
+  target.setDate(Math.min(day, last));
+  return target;
+}
 
-// (교체) 검색 폼: 기본 GET 제출만
+function setToday(){let [f,t]=getDates();let d=new Date();f.value=fmt(d);t.value=fmt(d)}
+function setWeek(){let [f,t]=getDates();let td=new Date();let fd=new Date(td);fd.setDate(td.getDate()-6);f.value=fmt(fd);t.value=fmt(td)}
+function setMonths(n){let [f,t]=getDates();let td=new Date();let fd=addMonthsSafe(td, -n);f.value=fmt(fd);t.value=fmt(td)}
+
+// 검색 폼: 기본 GET 제출만
 (function(){
   const f = document.getElementById("searchForm");
   if (!f) return;
@@ -414,12 +428,13 @@ function setMonth(){let [f,t]=getDates();let td=new Date();let fd=new Date();fd.
         return;
       }
 
-      const diff = Math.floor((td - fd) / (24*60*60*1000)); // 날짜 차이(일)
-      if(diff > 30){ // 포함 31일 초과 = diff 31 이상 → diff>30
-        alert("최대 조회 가능 일수는 31일입니다.");
-        event.preventDefault();
-        return;
-      }
+const maxTo = addMonthsSafe(fd, 3);
+if(td > maxTo){
+  alert("최대 조회 가능 기간은 3개월입니다.");
+  event.preventDefault();
+  return;
+}
+
     }
 
   });
