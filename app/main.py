@@ -31,6 +31,7 @@ from email.message import EmailMessage
 import zipfile
 import csv
 import itsdangerous
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 import urllib.parse
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -2276,15 +2277,15 @@ def partner_supervisor_save_memo(
 
     ua_me = session.get(UserAdmin, int(partner_id))
     if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
-        return RedirectResponse(url=f"{next}?msg=권한이 없습니다.", status_code=303)
+        return _redirect_partner_with_msg(next, "권한이 없습니다.")
 
     my_division = (ua_me.division or "").strip()
     if not my_division:
-        return RedirectResponse(url=f"{next}?msg=소속정보가 없습니다.", status_code=303)
+        return _redirect_partner_with_msg(next, "소속정보가 없습니다.")
 
     resp = session.get(Respondent, int(respondent_id))
     if not resp:
-        return RedirectResponse(url=f"{next}?msg=대상이 존재하지 않습니다.", status_code=303)
+        return _redirect_partner_with_msg(next, "대상이 존재하지 않습니다.")
     
     #로그 추가 임시
     logging.info("[SVM][TRY] ua_id=%s ua_name=%s division=%s respondent_id=%s next=%s",
@@ -2297,15 +2298,15 @@ def partner_supervisor_save_memo(
 
     # ✅ 보안: 같은 campaign_id(=division)만 수정 가능
     if (resp.campaign_id or "").strip() != my_division:
-        return RedirectResponse(url=f"{next}?msg=대상 접근 권한이 없습니다.", status_code=303)
+        return _redirect_partner_with_msg(next, "대상 접근 권한이 없습니다.")
 
     nm = (new_memo or "").strip()
     if not nm:
-        return RedirectResponse(url=f"{next}?msg=신규작성 내용이 없습니다.", status_code=303)
+        return _redirect_partner_with_msg(next, "신규작성 내용이 없습니다.")
 
     # 신규 입력은 60자 제한
     if len(nm) > 60:
-        return RedirectResponse(url=f"{next}?msg=신규메모는 최대 60자까지 입력할 수 있습니다.", status_code=303)
+        return _redirect_partner_with_msg(next, "신규메모는 최대 60자까지 입력할 수 있습니다.")
 
     now = now_kst()
     tail = f"[최종수정자: {(ua_me.name or '').strip()} / 최종수정일시: {to_kst_str(now)}]"
@@ -2313,7 +2314,7 @@ def partner_supervisor_save_memo(
 
     # DB 저장은 100자 제한 (varchar(100))
     if len(final) > 100:
-        return RedirectResponse(url=f"{next}?msg=메모 저장 길이를 초과했습니다. (최대 100자)", status_code=303)
+        return _redirect_partner_with_msg(next, "메모 저장 길이를 초과했습니다. (최대 100자)")
 
     resp.sv_memo = final
     resp.sv_memo_at = now
@@ -2325,7 +2326,7 @@ def partner_supervisor_save_memo(
              resp.id, len(resp.sv_memo or ""), to_kst_str(resp.sv_memo_at) if resp.sv_memo_at else "")
 
 
-    return RedirectResponse(url=f"{next}?msg=저장되었습니다.", status_code=303)
+    return _redirect_partner_with_msg(next, "저장되었습니다.")
 
 
 
@@ -2787,7 +2788,7 @@ def admin_responses(
         },
     )
 
-#responses 페이지 안전 리다이렉트 헬퍼
+#responses 페이지 전용 안전 리다이렉트 헬퍼
 def _safe_next_url(next_url: str | None) -> str:
     if not next_url:
         return "/admin/responses"
@@ -2799,13 +2800,35 @@ def _safe_next_url(next_url: str | None) -> str:
         return "/admin/responses"
     return "/admin/responses"
 
-#리포트 발송 안내 문자열에서 "기호 제거
+#responses 페이지 전용 리포트 발송 안내 문자열에서 "기호 제거
 def _redirect_with_msg(next_url: str | None, msg: str) -> RedirectResponse:
     url = _safe_next_url(next_url)
     if msg:
         url = url + ("&" if "?" in url else "?") + "msg=" + urllib.parse.quote(msg)
     return RedirectResponse(url=url, status_code=303)
 
+# partner supervisor 전용 안전 next
+def _safe_partner_next_url(next_url: str | None) -> str:
+    if not next_url:
+        return "/partner/supervisor"
+    # 외부 URL 오픈리다이렉트 방지: partner supervisor 내부만 허용
+    if next_url.startswith("/partner/supervisor"):
+        return next_url
+    return "/partner/supervisor"
+
+# partner supervisor 전용 msg 포함 리다이렉트 (기존 쿼리 유지 + msg만 교체/추가)
+def _redirect_partner_with_msg(next_url: str | None, msg: str) -> RedirectResponse:
+    url = _safe_partner_next_url(next_url)
+    if not msg:
+        return RedirectResponse(url=url, status_code=303)
+
+    parts = urlsplit(url)
+    q = dict(parse_qsl(parts.query, keep_blank_values=True))
+    q["msg"] = msg  # 기존 msg가 있으면 덮어씀
+    new_query = urlencode(q, doseq=True)
+
+    new_url = urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
+    return RedirectResponse(url=new_url, status_code=303)
 
 # 접수완료 처리 (POST + Form)
 @admin_router.post("/responses/accept")
