@@ -271,7 +271,7 @@
           <td class="nowrap" style="position:relative;">
             {% set memo = (resp.sv_memo or '') %}
             <span class="memo-cell">
-              {{ memo[:40] }}{% if memo|length > 40 %}…{% endif %}
+              {{ memo[:50] }}{% if memo|length > 50 %}…{% endif %}
             </span>
             {% if memo %}
               <span class="info-icon" data-tip-id="mtip-{{ resp.id }}">ⓘ</span>
