@@ -2521,6 +2521,7 @@ def _apply_supervisor_q_filter(stmt, q: str | None):
             | (func.cast(Respondent.serial_no, sa.String).ilike(like))
             | (UserAdmin.name.ilike(like))
             | (Respondent.sv_memo.ilike(like))
+            | (Respondent.client_phone.ilike(like))
             | (func.to_char(User.birth_date, "YYYY-MM-DD").ilike(like))
             | (func.to_char(Respondent.birth_date, "YYYY-MM-DD").ilike(like))
             | (func.to_char(Respondent.created_at, "YYYY-MM-DD").ilike(like))
