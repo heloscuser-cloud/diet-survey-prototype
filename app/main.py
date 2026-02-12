@@ -1974,23 +1974,16 @@ def partner_supervisor(
         if d_from > d_to:
             return _redirect_with_msg(
                 request.url.path + (("?" + request.url.query) if request.url.query else ""),
-                "조회 기간이 유효하지 않습니다. 다시 확인해주세요"
+                "조회 기간이 유효하지 않습니다. 다시 확인해주세요",
             )
         max_to = _add_months(d_from, 6)
         if d_to > max_to:
             return _redirect_with_msg(
                 request.url.path + (("?" + request.url.query) if request.url.query else ""),
-                "최대 조회 가능 기간은 6개월입니다."
+                "최대 조회 가능 기간은 6개월입니다.",
             )
 
     start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
-
-    # 문진제출일(=SurveyResponse.submitted_at) 기준으로 필터 (admin/responses와 동일: end_utc는 <)
-    if start_utc:
-        stmt = stmt.where(SurveyResponse.submitted_at >= start_utc)
-    if end_utc:
-        stmt = stmt.where(SurveyResponse.submitted_at < end_utc)
-
 
     # pcm_latest: (partner_id, client_phone)별 최신 created_at (responses와 동일 패턴)
     pcm_latest = (
@@ -2003,6 +1996,7 @@ def partner_supervisor(
         .subquery()
     )
 
+    # --- 기본 쿼리: stmt는 반드시 먼저 생성 ---
     stmt = (
         select(
             SurveyResponse,
@@ -2019,47 +2013,62 @@ def partner_supervisor(
             (pcm_latest.c.partner_id == Respondent.partner_id)
             & (pcm_latest.c.client_phone == Respondent.client_phone),
         )
-        .where(Respondent.campaign_id == my_division)
+        # ✅ 고정 조건: 소속(division) == campaign_id
+        # 공백/표기 흔들림 대비 trim 권장
+        .where(func.trim(Respondent.campaign_id) == my_division)
     )
 
-       
-    # 진행상태 필터 (responses와 동일 UX)
+    # --- 날짜 필터: 문진제출일(SurveyResponse.submitted_at) ---
+    if start_utc:
+        stmt = stmt.where(SurveyResponse.submitted_at >= start_utc)
+    if end_utc:
+        stmt = stmt.where(SurveyResponse.submitted_at < end_utc)
+
+    # --- 상태 필터 (responses와 동일 UX) ---
     if status:
         status = status.strip()
         if status == "analysis_requested":
-            stmt = stmt.where(Respondent.status == "submitted", pcm_latest.c.created_at.is_not(None))
+            stmt = stmt.where(
+                (Respondent.status == "submitted") &
+                (pcm_latest.c.created_at.is_not(None))
+            )
         elif status == "submitted":
-            stmt = stmt.where(Respondent.status == "submitted", pcm_latest.c.created_at.is_(None))
+            stmt = stmt.where(
+                (Respondent.status == "submitted") &
+                (pcm_latest.c.created_at.is_(None))
+            )
         else:
             stmt = stmt.where(Respondent.status == status)
 
-    # 텍스트 검색 (이름/생년월일/신청번호 일부)
     # --- 검색어 필터 (admin_responses와 동일 UX) ---
     stmt = _apply_supervisor_q_filter(stmt, q)
 
-    # 정렬: 제출일 최신 우선
-    stmt = stmt.order_by(SurveyResponse.submitted_at.desc())
-
-    # 페이지 사이즈
-    if page_size == "all":
-        limit = None
-    else:
-        try:
-            limit = int(page_size)
-        except Exception:
-            limit = 50
-
-    # 전체 개수
-    count_stmt = (
-        select(func.count())
-        .select_from(stmt.subquery())
+    # --- 정렬: 최신 제출일 우선 ---
+    stmt = stmt.order_by(
+        SurveyResponse.submitted_at.desc(),
+        SurveyResponse.id.desc(),
     )
+
+    # --- page_size 해석 ---
+    page_size_norm = (page_size or "50").lower()
+    if page_size_norm == "all":
+        limit = None
+    elif page_size_norm == "100":
+        limit = 100
+    else:
+        limit = 50
+
+    # --- 전체 개수 ---
+    count_stmt = select(func.count()).select_from(stmt.subquery())
     total = session.exec(count_stmt).one()
     total = int(total or 0)
 
-    # 페이징 적용
-    if page < 1:
+    # --- 페이징 ---
+    try:
+        page = max(1, int(page))
+    except Exception:
         page = 1
+
     if limit:
         stmt = stmt.offset((page - 1) * limit).limit(limit)
 
@@ -2069,6 +2078,11 @@ def partner_supervisor(
     if limit and limit > 0:
         total_pages = (total + limit - 1) // limit
 
+    logging.info(
+        "[SV][RESULT] division=%s total=%s page=%s page_size=%s rows=%s from=%s to=%s status=%s q=%s",
+        my_division, total, page, page_size_norm, len(rows), from_ or "", to or "", status or "", q or ""
+    )
+
     return templates.TemplateResponse(
         "partner/supervisor.html",
         {
@@ -2076,7 +2090,7 @@ def partner_supervisor(
             "rows": rows,
             "page": page,
             "total_pages": total_pages,
-            "page_size": page_size,
+            "page_size": page_size_norm,
             "from": from_ or "",
             "to": to or "",
             "status": status or "",
