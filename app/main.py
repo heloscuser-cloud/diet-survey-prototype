@@ -136,6 +136,27 @@ def get_questions_for_step(step: int):
     start_id, end_id = SURVEY_STEPS[step-1]
     return [q for q in ALL_QUESTIONS if start_id <= q["id"] <= end_id]
 
+#관리자페이지 리포트 다운로드 시 리포트 파일명 인코딩 헬퍼
+def _content_disposition_attachment(filename: str) -> str:
+    """
+    Starlette 헤더는 latin-1 인코딩만 허용 → 한글 파일명은 RFC5987 filename*로 전달.
+    filename에는 ASCII fallback을 넣고, filename*에 UTF-8 퍼센트 인코딩을 넣는다.
+    """
+    fn = (filename or "").strip()
+    if not fn:
+        fn = "report.pdf"
+
+    # ASCII fallback (브라우저 호환용)
+    ascii_fallback = re.sub(r"[^A-Za-z0-9._-]+", "_", fn)
+    if not ascii_fallback.lower().endswith(".pdf"):
+        ascii_fallback = ascii_fallback + ".pdf"
+
+    # RFC5987: UTF-8 percent-encoding
+    quoted = urllib.parse.quote(fn, safe="")  # 공백도 %20으로
+    return f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{quoted}'
+
+
+
 
 # ---- Basic app setup ----
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -2406,8 +2427,9 @@ def partner_supervisor_report_download_by_serial(
     return Response(
         content=content,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _content_disposition_attachment(filename)},
     )
+
 
 #관리자페이지 메모 저장기능
 @app.post("/partner/supervisor/memo")
