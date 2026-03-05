@@ -414,6 +414,7 @@ class Partner(SQLModel, table=True):
     p_mail: Optional[str] = None
     p_admin: Optional[str] = None
     p_admin_num: Optional[str] = None
+    p_price: int = 0
 
 
 # --- NHIS 저장 헬퍼 (rtoken 없이 rid가 확실할 때) ---
@@ -906,6 +907,34 @@ def try_auto_map_respondent_for_mapping(
         mapping.id,
     )
 
+#파트너 관리자 정산페이지 콤보박스 필터 (데이터 해당 연도, 월 추출 헬퍼)
+def _get_report_sent_months(session: Session, division: str) -> list[str]:
+    """
+    respondent.report_sent_at 기준(리포트발송완료)으로 실제 존재하는 월(YYYY-MM)만 반환 (KST 기준)
+    """
+    rows = session.exec(
+        sa_text("""
+            SELECT to_char(
+                     date_trunc('month', (report_sent_at AT TIME ZONE 'Asia/Seoul')),
+                     'YYYY-MM'
+                   ) AS ym
+              FROM respondent
+             WHERE trim(campaign_id) = :div
+               AND status = 'report_sent'
+               AND report_sent_at IS NOT NULL
+             GROUP BY ym
+             ORDER BY ym ASC
+        """).bindparams(div=division)
+    ).all()
+
+    out: list[str] = []
+    for r in rows:
+        if not r:
+            continue
+        v = (r[0] or "").strip()
+        if v:
+            out.append(v)
+    return out
 
 # ---- OTP helpers ----
 def issue_otp(session: Session, phone: str) -> str:
@@ -2273,6 +2302,82 @@ def partner_supervisor_export_xlsx(
     )
 
 
+#관리자페이지 리포트 다운로드 라우트
+@app.get("/partner/supervisor/report/{sr_id}/download")
+def partner_supervisor_report_download(
+    request: Request,
+    sr_id: int,
+    session: Session = Depends(get_session),
+):
+    # 로그인 체크
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=303)
+
+    ua_me = session.get(UserAdmin, int(partner_id))
+    if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
+        # 권한 없으면 supervisor 페이지로 돌리되 msg 표시
+        return _redirect_partner_with_msg("/partner/supervisor", "진입 권한이 없습니다.\n가온앤 관리자에게 문의해주세요.")
+
+    my_division = (ua_me.division or "").strip()
+    if not my_division:
+        return _redirect_partner_with_msg("/partner/supervisor", "소속(division) 정보가 없어 조회할 수 없습니다.\n가온앤 관리자에게 문의해주세요.")
+
+    # referer 기반으로 원래 화면(필터 유지)로 msg 띄우기 위한 next 구성
+    ref = request.headers.get("referer", "")
+    if ref:
+        parts = urlsplit(ref)
+        next_url = parts.path + (("?" + parts.query) if parts.query else "")
+    else:
+        next_url = "/partner/supervisor"
+
+    # SurveyResponse 존재 확인
+    sr = session.get(SurveyResponse, int(sr_id))
+    if not sr or not sr.respondent_id:
+        return _redirect_partner_with_msg(
+            next_url,
+            "리포트 다운로드 가능기간이 만료되었거나, 다운로드 가능한 리포트가 없습니다. 가온앤 관리자에게 문의해주세요",
+        )
+
+    resp = session.get(Respondent, int(sr.respondent_id))
+    if not resp:
+        return _redirect_partner_with_msg(
+            next_url,
+            "리포트 다운로드 가능기간이 만료되었거나, 다운로드 가능한 리포트가 없습니다. 가온앤 관리자에게 문의해주세요",
+        )
+
+    # ✅ 보안: 같은 division(업체)만 다운로드 허용
+    if func.trim(resp.campaign_id) != my_division:
+        return _redirect_partner_with_msg(
+            next_url,
+            "리포트 다운로드 가능기간이 만료되었거나, 다운로드 가능한 리포트가 없습니다. 가온앤 관리자에게 문의해주세요",
+        )
+
+    # ✅ 상태가 report_sent(리포트발송완료)일 때만 허용
+    if resp.status != "report_sent":
+        return _redirect_partner_with_msg(
+            next_url,
+            "리포트 다운로드 가능기간이 만료되었거나, 다운로드 가능한 리포트가 없습니다. 가온앤 관리자에게 문의해주세요",
+        )
+
+    rf = session.exec(
+        select(ReportFile).where(ReportFile.survey_response_id == sr.id)
+    ).first()
+
+    if (not rf) or (not rf.content):
+        return _redirect_partner_with_msg(
+            next_url,
+            "리포트 다운로드 가능기간이 만료되었거나, 다운로드 가능한 리포트가 없습니다. 가온앤 관리자에게 문의해주세요",
+        )
+
+    filename = rf.filename or "report.pdf"
+    return Response(
+        content=rf.content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 #관리자페이지 메모 저장기능
 @app.post("/partner/supervisor/memo")
 def partner_supervisor_save_memo(
@@ -2340,6 +2445,235 @@ def partner_supervisor_save_memo(
     return _redirect_partner_with_msg(next, "저장되었습니다.")
 
 
+#파트너 관리자 정산페이지
+@app.get("/partner/calculate", response_class=HTMLResponse)
+def partner_calculate(
+    request: Request,
+    session: Session = Depends(get_session),
+    ym: str | None = None,  # "YYYY-MM"
+    msg: str | None = None,
+):
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=303)
+
+    ua_me = session.get(UserAdmin, int(partner_id))
+    if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": "진입 권한이 없습니다.\n가온앤 관리자에게 문의해주세요."},
+            status_code=403,
+        )
+
+    my_division = (ua_me.division or "").strip()
+    if not my_division:
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": "소속(division) 정보가 없어 조회할 수 없습니다.\n가온앤 관리자에게 문의해주세요."},
+            status_code=400,
+        )
+
+    # ✅ 콤보박스 월 리스트: 2026-03 ~ 현재월
+    start = date(2026, 3, 1)
+    today = now_kst().date()
+    end = date(today.year, today.month, 1)
+
+    def _add_months(d: date, months: int) -> date:
+        y = d.year + (d.month - 1 + months) // 12
+        m = (d.month - 1 + months) % 12 + 1
+        last_day = (date(y, m, 28) + timedelta(days=4))
+        last_day = last_day - timedelta(days=last_day.day)
+        day = min(d.day, last_day.day)
+        return date(y, m, day)
+
+    # ✅ 콤보박스 월 리스트: DB에 report_sent_at 존재하는 월만 (KST 기준)
+    months = _get_report_sent_months(session, my_division)
+
+    # 선택값 기본: 존재하는 월 중 가장 최신(마지막)
+    if not ym:
+        ym = months[-1] if months else None
+
+    # DB에 발송 완료 월이 하나도 없으면: 화면은 뜨되 조회는 0건 처리
+    if not ym:
+        return templates.TemplateResponse(
+            "partner/calculate.html",
+            {
+                "request": request,
+                "months": [],
+                "ym": "",
+                "count": 0,
+                "unit_price": 0,
+                "total_amount": 0,
+                "fmt": lambda n: f"{int(n):,}",
+                "msg": msg or "해당 소속에 리포트 발송 완료 내역이 없습니다.",
+            },
+        )
+
+    # 기본 선택값: 현재월(리스트의 마지막)
+    if not ym:
+        ym = months[-1] if months else f"{end.year:04d}-{end.month:02d}"
+
+    # 선택월 파싱
+    try:
+        y, m = ym.split("-")
+        y = int(y); m = int(m)
+        month_start = date(y, m, 1)
+        next_month_start = _add_months(month_start, 1)
+        month_last = next_month_start - timedelta(days=1)
+    except Exception:
+        return templates.TemplateResponse(
+            "error.html",
+            {"request": request, "message": "월 선택 값이 올바르지 않습니다."},
+            status_code=400,
+        )
+
+    start_utc, end_utc = kst_date_range_to_utc_datetimes(month_start, month_last)
+
+    # 단가(p_price)
+    p_row = session.exec(
+        select(Partner).where(Partner.p_name == my_division)
+    ).first()
+    unit_price = int(getattr(p_row, "p_price", 0) or 0)
+
+    # 건수: report_sent_at이 해당 월에 속하는 건수 (division 고정)
+    cnt = session.exec(
+        select(func.count())
+        .select_from(Respondent)
+        .where(func.trim(Respondent.campaign_id) == my_division)
+        .where(Respondent.status == "report_sent")
+        .where(Respondent.report_sent_at.is_not(None))
+        .where(Respondent.report_sent_at >= start_utc)
+        .where(Respondent.report_sent_at < end_utc)
+    ).one()
+    cnt = int(cnt or 0)
+
+    total_amount = cnt * unit_price
+
+    return templates.TemplateResponse(
+        "partner/calculate.html",
+        {
+            "request": request,
+            "months": months,
+            "ym": ym,
+            "count": cnt,
+            "unit_price": unit_price,
+            "total_amount": total_amount,
+            "fmt": lambda n: f"{int(n):,}",
+            "msg": msg or "",
+        },
+    )
+
+#파트너 정산 엑셀다운로드
+@app.get("/partner/calculate/export.xlsx")
+def partner_calculate_export_xlsx(
+    request: Request,
+    ym: str = Query(...),  # ✅ Query로 기본값 있는 인수로 처리
+    session: Session = Depends(get_session),
+):
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=303)
+
+    ua_me = session.get(UserAdmin, int(partner_id))
+    if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
+        return RedirectResponse(url="/partner/dashboard?msg=권한이 없습니다.", status_code=303)
+
+    my_division = (ua_me.division or "").strip()
+    if not my_division:
+        return RedirectResponse(url="/partner/dashboard?msg=소속정보가 없습니다.", status_code=303)
+    
+    months = _get_report_sent_months(session, my_division)
+    if ym not in months:
+        return RedirectResponse(
+            url="/partner/calculate?msg=선택한 월의 발송 내역이 없거나 유효하지 않습니다.",
+            status_code=303,
+        )
+
+    def _add_months(d: date, months: int) -> date:
+        y = d.year + (d.month - 1 + months) // 12
+        m = (d.month - 1 + months) % 12 + 1
+        last_day = (date(y, m, 28) + timedelta(days=4))
+        last_day = last_day - timedelta(days=last_day.day)
+        day = min(d.day, last_day.day)
+        return date(y, m, day)
+
+    try:
+        y, m = ym.split("-")
+        y = int(y); m = int(m)
+        month_start = date(y, m, 1)
+        next_month_start = _add_months(month_start, 1)
+        month_last = next_month_start - timedelta(days=1)
+    except Exception:
+        return RedirectResponse(url="/partner/calculate?msg=월 선택 값이 올바르지 않습니다.", status_code=303)
+
+    start_utc, end_utc = kst_date_range_to_utc_datetimes(month_start, month_last)
+
+    pcm_latest = (
+        select(
+            PartnerClientMapping.partner_id.label("partner_id"),
+            PartnerClientMapping.client_phone.label("client_phone"),
+            func.max(PartnerClientMapping.created_at).label("created_at"),
+        )
+        .group_by(PartnerClientMapping.partner_id, PartnerClientMapping.client_phone)
+        .subquery()
+    )
+
+    stmt = (
+        select(
+            Respondent,
+            UserAdmin,
+            pcm_latest.c.created_at.label("partner_requested_at"),
+        )
+        .outerjoin(UserAdmin, UserAdmin.id == Respondent.partner_id)
+        .outerjoin(
+            pcm_latest,
+            and_(
+                pcm_latest.c.partner_id == Respondent.partner_id,
+                pcm_latest.c.client_phone == Respondent.client_phone,
+            ),
+        )
+        .where(func.trim(Respondent.campaign_id) == my_division)
+        .where(Respondent.status == "report_sent")
+        .where(Respondent.report_sent_at.is_not(None))
+        .where(Respondent.report_sent_at >= start_utc)
+        .where(Respondent.report_sent_at < end_utc)
+        .order_by(Respondent.report_sent_at.asc())
+    )
+
+    rows = session.exec(stmt).all()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "상세내역"
+
+    ws.append(["연번", "리포트발송일", "담당자신청일", "담당자", "담당자부서", "신청자명"])
+
+    for i, (resp, ua, partner_requested_at) in enumerate(rows, start=1):
+        ws.append([
+            i,
+            to_kst_str(resp.report_sent_at) if resp.report_sent_at else "",
+            to_kst_str(partner_requested_at) if partner_requested_at else "",
+            (ua.name if ua and ua.name else ""),
+            (ua.department if ua and ua.department else ""),
+            (resp.applicant_name or ""),
+        ])
+
+    # 열 너비
+    widths = [6, 18, 18, 14, 16, 16]
+    for idx, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = w
+
+    import io
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+
+    filename = f"calculate_detail_{ym}.xlsx"
+    return Response(
+        content=bio.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 #사용자 로그인 화면 렌더
 @app.get("/login", response_class=HTMLResponse)
@@ -3942,6 +4276,43 @@ async def admin_export_xlsx(
     id_list = [int(x) for x in (ids or "").split(",") if x.strip().isdigit()]
     if not id_list:
         return RedirectResponse(url="/admin/responses", status_code=303)
+
+    # ✅ 문진제출(submitted + 담당자신청일 없음) 건은 엑셀 다운로드 대상에서 제외
+    # (목록에서 숨겼더라도 방어적으로 체크)
+    if id_list:
+        pcm_latest = (
+            select(
+                PartnerClientMapping.partner_id.label("partner_id"),
+                PartnerClientMapping.client_phone.label("client_phone"),
+                func.max(PartnerClientMapping.created_at).label("created_at"),
+            )
+            .group_by(PartnerClientMapping.partner_id, PartnerClientMapping.client_phone)
+            .subquery()
+        )
+
+        bad_ids = session.exec(
+            select(SurveyResponse.id)
+            .join(Respondent, Respondent.id == SurveyResponse.respondent_id)
+            .outerjoin(
+                pcm_latest,
+                and_(
+                    pcm_latest.c.partner_id == Respondent.partner_id,
+                    pcm_latest.c.client_phone == Respondent.client_phone,
+                ),
+            )
+            .where(SurveyResponse.id.in_(id_list))
+            .where(
+                (Respondent.status == "submitted") &
+                (pcm_latest.c.created_at.is_(None))
+            )
+        ).all()
+
+        if bad_ids:
+            # referer(기존 필터 유지)로 되돌리기
+            ref = request.headers.get("referer", "")
+            parts = urllib.parse.urlsplit(ref)
+            next_url = parts.path + (("?" + parts.query) if parts.query else "")
+            return _redirect_with_msg(next_url, "문진제출 건은 엑셀 다운로드 대상이 아닙니다. (분석신청부터 가능)")
 
     # ---------------------------
     # 2) 질문 준비

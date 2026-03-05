@@ -1,0 +1,79 @@
+{% extends "admin/base_admin.html" %}
+{% block title %}정산페이지{% endblock %}
+
+{% block content %}
+<style>
+  body > .wrap { background: transparent; box-shadow: none; padding: 0; }
+  .page{max-width:1366px;margin:0 auto;padding:20px}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;box-shadow:0 6px 18px rgba(0,0,0,.04)}
+  .search{padding:16px;margin-bottom:10px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  select{padding:8px 10px;border:1px solid #e5e7eb;border-radius:10px;font-size:14px}
+  .btn{border:none;border-radius:999px;padding:.5rem 1rem;font-weight:700;cursor:pointer;color:#fff}
+  .btn-primary{background:#1e40af}
+  .btn-sky{background:#0ea5e9}
+  table{width:100%;border-collapse:collapse}
+  th,td{border-bottom:1px solid #e5e7eb;padding:12px;text-align:center}
+  th{background:#f3f4f6}
+  .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+</style>
+
+<div class="page">
+  <div class="card search">
+    <form method="get" action="/partner/calculate">
+      <div class="topbar">
+        <div class="row">
+          <select name="ym">
+            {% for v in months %}
+              <option value="{{ v }}" {% if v==ym %}selected{% endif %}>{{ v[:4] }}년 {{ v[5:7] }}월</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-primary" type="submit">검색</button>
+        </div>
+
+        <div class="row">
+          <button class="btn btn-sky" type="button" onclick="downloadDetail()">상세내역받기</button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" style="padding:0;overflow:auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>건수</th>
+          <th>단가</th>
+          <th>합계(부가세별도)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>{{ count }}</td>
+          <td>{{ fmt(unit_price) }}</td>
+          <td>{{ fmt(total_amount) }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+function downloadDetail(){
+  const u = new URL(window.location.href);
+  const ym = u.searchParams.get("ym") || "{{ ym }}";
+  const x = new URL(window.location.origin + "/partner/calculate/export.xlsx");
+  x.searchParams.set("ym", ym);
+  window.location.href = x.toString();
+}
+
+(function(){
+  const msg = {{ (msg or "")|tojson }};
+  if (!msg) return;
+  alert(msg);
+  const u = new URL(window.location.href);
+  u.searchParams.delete("msg");
+  history.replaceState({}, "", u.pathname + (u.search ? u.search : ""));
+})();
+</script>
+{% endblock %}
