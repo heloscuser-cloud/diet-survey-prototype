@@ -2670,7 +2670,10 @@ def admin_responses(
         )
     )
 
-
+    # --- 기본: "문진제출"(submitted + 담당자신청일 없음)은 목록에서 제외하고, "분석신청"부터 노출 ---
+    stmt = stmt.where(
+        ~((Respondent.status == "submitted") & (pcm_latest.c.created_at.is_(None)))
+    )
 
     # --- 검색어 필터 (생년월일 yyyy-mm-dd 지원) ---
     if q:
@@ -2738,22 +2741,15 @@ def admin_responses(
         stmt = stmt.where(SurveyResponse.submitted_at < end_utc)
 
     # --- 상태 필터 ---
-    # - 문진제출: Respondent.status == submitted AND 담당자신청일(created_at)이 없음
-    # - 분석신청: Respondent.status == submitted AND 담당자신청일(created_at)이 있음
-    # - 접수완료/리포트업로드 완료: 기존 status 그대로
-    if status == "analysis_requested":
+    # 기본적으로 "문진제출"은 목록에서 제외되므로,
+    # status=submitted가 들어오면 분석신청과 동일하게 처리(기존 URL 호환)
+    if status in ("analysis_requested", "submitted"):
         stmt = stmt.where(
             (Respondent.status == "submitted") &
             (pcm_latest.c.created_at.isnot(None))
         )
-    elif status == "submitted":
-        stmt = stmt.where(
-            (Respondent.status == "submitted") &
-            (pcm_latest.c.created_at.is_(None))
-        )
     elif status in ("accepted", "report_uploaded", "report_sent"):
         stmt = stmt.where(Respondent.status == status)
-
 
     # --- 정렬: 최신 제출일 → 응답 ID 내림차순 ---
     stmt = stmt.order_by(

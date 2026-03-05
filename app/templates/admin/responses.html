@@ -157,7 +157,6 @@ a.pdf-link:hover{
           <label>진행 상태</label>
           <select name="status" class="w-status">
 <option value="" {{ 'selected' if not status }}>전체</option>
-<option value="submitted" {{ 'selected' if status=='submitted' }}>문진제출</option>
 <option value="analysis_requested" {{ 'selected' if status=='analysis_requested' }}>분석신청</option>
 <option value="accepted" {{ 'selected' if status=='accepted' }}>접수완료</option>
 <option value="report_uploaded" {{ 'selected' if status=='report_uploaded' }}>리포트 업로드 완료</option>
