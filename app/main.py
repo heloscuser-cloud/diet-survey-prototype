@@ -2301,7 +2301,7 @@ def partner_supervisor_export_xlsx(
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
-#관리자페이지 리포트 다운로드 라우트
+
 @app.get("/partner/supervisor/report/{serial_no}/download")
 def partner_supervisor_report_download_by_serial(
     request: Request,
@@ -2329,49 +2329,97 @@ def partner_supervisor_report_download_by_serial(
     else:
         next_url = "/partner/supervisor"
 
-    # ✅ 신청번호로 Respondent를 정확히 찾음
+    def _fail(reason: str):
+        logging.warning(
+            "[SVR][DL][FAIL] serial_no=%s ua_id=%s division=%s reason=%s",
+            serial_no,
+            getattr(ua_me, "id", None),
+            my_division,
+            reason,
+        )
+        return _redirect_partner_with_msg(
+            next_url,
+            "리포트 다운로드 가능기간이 만료되었거나, 다운로드 가능한 리포트가 없습니다. 가온앤 관리자에게 문의해주세요",
+        )
+
+    logging.info(
+        "[SVR][DL][TRY] serial_no=%s ua_id=%s division=%s",
+        serial_no,
+        getattr(ua_me, "id", None),
+        my_division,
+    )
+
+    # 1) 신청번호로 Respondent 찾기
     resp = session.exec(
-        select(Respondent).where(Respondent.user_id == int(serial_no))
+        select(Respondent).where(Respondent.serial_no == int(serial_no))
     ).first()
-
     if not resp:
-        return _redirect_partner_with_msg(
-            next_url,
-            "리포트 다운로드 가능기간이 만료되었거나, 다운로드 가능한 리포트가 없습니다. 가온앤 관리자에게 문의해주세요",
-        )
+        return _fail("respondent_not_found")
 
-    # ✅ 보안: 같은 division(업체)만 다운로드 허용
+    # 2) 보안: 동일 division만
     if (resp.campaign_id or "").strip() != my_division:
-        return _redirect_partner_with_msg(
-            next_url,
-            "리포트 다운로드 가능기간이 만료되었거나, 다운로드 가능한 리포트가 없습니다. 가온앤 관리자에게 문의해주세요",
-        )
+        return _fail(f"division_mismatch campaign_id={((resp.campaign_id or '').strip())}")
 
-    # ✅ 상태가 report_sent(리포트발송완료)일 때만 다운로드 노출/허용
-    if resp.status != "report_sent":
-        return _redirect_partner_with_msg(
-            next_url,
-            "리포트 다운로드 가능기간이 만료되었거나, 다운로드 가능한 리포트가 없습니다. 가온앤 관리자에게 문의해주세요",
-        )
+    # 3) 상태 체크: report_sent만 허용
+    if (resp.status or "") != "report_sent":
+        return _fail(f"status_not_report_sent status={resp.status}")
 
-    # ✅ 이 신청번호(=respondent)와 연결된 reportfile을 찾음
-    # (SurveyResponse 여러 개여도 respondent 기준으로 정확히 같은 신청번호 범위 내에서 찾는다)
+    # 4) 이 respondent에 연결된 SurveyResponse id 목록
+    sr_ids = session.exec(
+        select(SurveyResponse.id)
+        .where(SurveyResponse.respondent_id == resp.id)
+        .order_by(SurveyResponse.submitted_at.desc())
+    ).all()
+    sr_ids = [int(x) for x in sr_ids if x is not None]
+
+    logging.info(
+        "[SVR][DL] respondent_id=%s sr_ids=%s",
+        resp.id,
+        sr_ids,
+    )
+
+    if not sr_ids:
+        return _fail("no_surveyresponse_for_respondent")
+
+    # 5) 그 survey_response_id들 중 reportfile 찾기 (최신 업로드 우선)
     rf = session.exec(
         select(ReportFile)
-        .join(SurveyResponse, SurveyResponse.id == ReportFile.survey_response_id)
-        .where(SurveyResponse.respondent_id == resp.id)
+        .where(ReportFile.survey_response_id.in_(sr_ids))
         .order_by(ReportFile.uploaded_at.desc())
     ).first()
 
-    if (not rf) or (not rf.content):
-        return _redirect_partner_with_msg(
-            next_url,
-            "리포트 다운로드 가능기간이 만료되었거나, 다운로드 가능한 리포트가 없습니다. 가온앤 관리자에게 문의해주세요",
-        )
+    if not rf:
+        return _fail("reportfile_not_found_for_sr_ids")
+
+    # content가 memoryview로 오는 경우가 있어서 bytes로 변환
+    content = rf.content
+    if content is None:
+        return _fail("reportfile_content_is_none")
+
+    if isinstance(content, memoryview):
+        content = content.tobytes()
+
+    # bytes 길이 로그
+    try:
+        clen = len(content)
+    except Exception:
+        clen = -1
+
+    logging.info(
+        "[SVR][DL][FOUND] respondent_id=%s reportfile_id=%s survey_response_id=%s filename=%s content_len=%s",
+        resp.id,
+        getattr(rf, "id", None),
+        rf.survey_response_id,
+        rf.filename,
+        clen,
+    )
+
+    if clen <= 0:
+        return _fail("reportfile_content_empty")
 
     filename = rf.filename or "report.pdf"
     return Response(
-        content=rf.content,
+        content=content,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
