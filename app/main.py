@@ -2331,7 +2331,7 @@ def partner_supervisor_report_download_by_serial(
 
     # ✅ 신청번호로 Respondent를 정확히 찾음
     resp = session.exec(
-        select(Respondent).where(Respondent.serial_no == int(serial_no))
+        select(Respondent).where(Respondent.user_id == int(serial_no))
     ).first()
 
     if not resp:
