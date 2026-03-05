@@ -139,22 +139,14 @@ def get_questions_for_step(step: int):
 #관리자페이지 리포트 다운로드 시 리포트 파일명 인코딩 헬퍼
 def _content_disposition_attachment(filename: str) -> str:
     """
-    Starlette 헤더는 latin-1 인코딩만 허용 → 한글 파일명은 RFC5987 filename*로 전달.
-    filename에는 ASCII fallback을 넣고, filename*에 UTF-8 퍼센트 인코딩을 넣는다.
+    Starlette headers는 value를 latin-1로만 인코딩한다.
+    따라서 filename(원본 한글)은 filename* (RFC5987, percent-encoding)로만 전달하고,
+    filename= 은 항상 ASCII만 넣는다.
     """
-    fn = (filename or "").strip()
-    if not fn:
-        fn = "report.pdf"
-
-    # ASCII fallback (브라우저 호환용)
-    ascii_fallback = re.sub(r"[^A-Za-z0-9._-]+", "_", fn)
-    if not ascii_fallback.lower().endswith(".pdf"):
-        ascii_fallback = ascii_fallback + ".pdf"
-
-    # RFC5987: UTF-8 percent-encoding
-    quoted = urllib.parse.quote(fn, safe="")  # 공백도 %20으로
-    return f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{quoted}'
-
+    fn = (filename or "").strip() or "report.pdf"
+    quoted = urllib.parse.quote(fn, safe="")  # UTF-8 percent-encoding 결과는 ASCII
+    # filename= 은 반드시 ASCII만 (브라우저 호환용)
+    return f'attachment; filename="report.pdf"; filename*=UTF-8\'\'{quoted}'
 
 
 
@@ -2424,10 +2416,15 @@ def partner_supervisor_report_download_by_serial(
     )
 
     filename = rf.filename or "report.pdf"
+    cd = _content_disposition_attachment(filename)
+
+    # (한글헤더 오류 임시로그) 여기 1줄 넣어두면, 다음 로그에서 헤더가 진짜 ASCII인지 확인 가능
+    logging.info("[SVR][DL][CD] %s", cd)
+
     return Response(
         content=content,
         media_type="application/pdf",
-        headers={"Content-Disposition": _content_disposition_attachment(filename)},
+        headers={"Content-Disposition": cd},
     )
 
 
