@@ -2301,12 +2301,11 @@ def partner_supervisor_export_xlsx(
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
-
 #관리자페이지 리포트 다운로드 라우트
-@app.get("/partner/supervisor/report/{sr_id}/download")
-def partner_supervisor_report_download(
+@app.get("/partner/supervisor/report/{serial_no}/download")
+def partner_supervisor_report_download_by_serial(
     request: Request,
-    sr_id: int,
+    serial_no: int,
     session: Session = Depends(get_session),
 ):
     # 로그인 체크
@@ -2316,30 +2315,25 @@ def partner_supervisor_report_download(
 
     ua_me = session.get(UserAdmin, int(partner_id))
     if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
-        # 권한 없으면 supervisor 페이지로 돌리되 msg 표시
         return _redirect_partner_with_msg("/partner/supervisor", "진입 권한이 없습니다.\n가온앤 관리자에게 문의해주세요.")
 
     my_division = (ua_me.division or "").strip()
     if not my_division:
         return _redirect_partner_with_msg("/partner/supervisor", "소속(division) 정보가 없어 조회할 수 없습니다.\n가온앤 관리자에게 문의해주세요.")
 
-    # referer 기반으로 원래 화면(필터 유지)로 msg 띄우기 위한 next 구성
+    # referer 기반 next (필터 유지)
     ref = request.headers.get("referer", "")
     if ref:
-        parts = urlsplit(ref)
+        parts = urllib.parse.urlsplit(ref)
         next_url = parts.path + (("?" + parts.query) if parts.query else "")
     else:
         next_url = "/partner/supervisor"
 
-    # SurveyResponse 존재 확인
-    sr = session.get(SurveyResponse, int(sr_id))
-    if not sr or not sr.respondent_id:
-        return _redirect_partner_with_msg(
-            next_url,
-            "리포트 다운로드 가능기간이 만료되었거나, 다운로드 가능한 리포트가 없습니다. 가온앤 관리자에게 문의해주세요",
-        )
+    # ✅ 신청번호로 Respondent를 정확히 찾음
+    resp = session.exec(
+        select(Respondent).where(Respondent.serial_no == int(serial_no))
+    ).first()
 
-    resp = session.get(Respondent, int(sr.respondent_id))
     if not resp:
         return _redirect_partner_with_msg(
             next_url,
@@ -2347,21 +2341,26 @@ def partner_supervisor_report_download(
         )
 
     # ✅ 보안: 같은 division(업체)만 다운로드 허용
-    if func.trim(resp.campaign_id) != my_division:
+    if (resp.campaign_id or "").strip() != my_division:
         return _redirect_partner_with_msg(
             next_url,
             "리포트 다운로드 가능기간이 만료되었거나, 다운로드 가능한 리포트가 없습니다. 가온앤 관리자에게 문의해주세요",
         )
 
-    # ✅ 상태가 report_sent(리포트발송완료)일 때만 허용
+    # ✅ 상태가 report_sent(리포트발송완료)일 때만 다운로드 노출/허용
     if resp.status != "report_sent":
         return _redirect_partner_with_msg(
             next_url,
             "리포트 다운로드 가능기간이 만료되었거나, 다운로드 가능한 리포트가 없습니다. 가온앤 관리자에게 문의해주세요",
         )
 
+    # ✅ 이 신청번호(=respondent)와 연결된 reportfile을 찾음
+    # (SurveyResponse 여러 개여도 respondent 기준으로 정확히 같은 신청번호 범위 내에서 찾는다)
     rf = session.exec(
-        select(ReportFile).where(ReportFile.survey_response_id == sr.id)
+        select(ReportFile)
+        .join(SurveyResponse, SurveyResponse.id == ReportFile.survey_response_id)
+        .where(SurveyResponse.respondent_id == resp.id)
+        .order_by(ReportFile.uploaded_at.desc())
     ).first()
 
     if (not rf) or (not rf.content):
@@ -2376,6 +2375,7 @@ def partner_supervisor_report_download(
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
 
 
 #관리자페이지 메모 저장기능
