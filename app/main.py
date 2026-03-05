@@ -2301,11 +2301,12 @@ def partner_supervisor_export_xlsx(
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
-
+#파트너 관리자페이지 리포트 다운로드 라우터
 @app.get("/partner/supervisor/report/{serial_no}/download")
 def partner_supervisor_report_download_by_serial(
     request: Request,
     serial_no: int,
+    rid: int | None = Query(None),  # ✅ 링크에서 ?rid=respondent_id
     session: Session = Depends(get_session),
 ):
     # 로그인 체크
@@ -2331,11 +2332,8 @@ def partner_supervisor_report_download_by_serial(
 
     def _fail(reason: str):
         logging.warning(
-            "[SVR][DL][FAIL] serial_no=%s ua_id=%s division=%s reason=%s",
-            serial_no,
-            getattr(ua_me, "id", None),
-            my_division,
-            reason,
+            "[SVR][DL][FAIL] serial_no=%s rid=%s ua_id=%s division=%s reason=%s",
+            serial_no, rid, getattr(ua_me, "id", None), my_division, reason
         )
         return _redirect_partner_with_msg(
             next_url,
@@ -2343,79 +2341,66 @@ def partner_supervisor_report_download_by_serial(
         )
 
     logging.info(
-        "[SVR][DL][TRY] serial_no=%s ua_id=%s division=%s",
-        serial_no,
-        getattr(ua_me, "id", None),
-        my_division,
+        "[SVR][DL][TRY] serial_no=%s rid=%s ua_id=%s division=%s",
+        serial_no, rid, getattr(ua_me, "id", None), getattr(ua_me, "division", None)
     )
 
-    # 1) 신청번호로 Respondent 찾기
-    resp = session.exec(
-        select(Respondent).where(Respondent.serial_no == int(serial_no))
-    ).first()
-    if not resp:
-        return _fail("respondent_not_found")
+    # 1) respondent 식별: rid가 있으면 rid로 확정, 없으면 serial_no로 조회
+    if rid is not None:
+        resp = session.get(Respondent, int(rid))
+        if not resp:
+            return _fail("respondent_not_found_by_id")
 
-    # 2) 보안: 동일 division만
+        # 신청번호 불일치면 차단 (링크 값/표시 값 불일치 또는 변조 방지)
+        if int(getattr(resp, "serial_no", 0) or 0) != int(serial_no):
+            return _fail(f"serial_mismatch db_serial={getattr(resp,'serial_no',None)}")
+    else:
+        resp = session.exec(
+            select(Respondent).where(Respondent.serial_no == int(serial_no))
+        ).first()
+        if not resp:
+            return _fail("respondent_not_found_by_serial")
+
+    # 2) 보안: 같은 division만
     if (resp.campaign_id or "").strip() != my_division:
         return _fail(f"division_mismatch campaign_id={((resp.campaign_id or '').strip())}")
 
-    # 3) 상태 체크: report_sent만 허용
+    # 3) 상태: report_sent만
     if (resp.status or "") != "report_sent":
         return _fail(f"status_not_report_sent status={resp.status}")
 
-    # 4) 이 respondent에 연결된 SurveyResponse id 목록
+    # 4) 해당 respondent에 연결된 surveyresponse들 id
     sr_ids = session.exec(
         select(SurveyResponse.id)
         .where(SurveyResponse.respondent_id == resp.id)
         .order_by(SurveyResponse.submitted_at.desc())
     ).all()
     sr_ids = [int(x) for x in sr_ids if x is not None]
-
-    logging.info(
-        "[SVR][DL] respondent_id=%s sr_ids=%s",
-        resp.id,
-        sr_ids,
-    )
-
     if not sr_ids:
         return _fail("no_surveyresponse_for_respondent")
 
-    # 5) 그 survey_response_id들 중 reportfile 찾기 (최신 업로드 우선)
+    # 5) 그 중 reportfile (최신 업로드 우선)
     rf = session.exec(
         select(ReportFile)
         .where(ReportFile.survey_response_id.in_(sr_ids))
         .order_by(ReportFile.uploaded_at.desc())
     ).first()
-
     if not rf:
         return _fail("reportfile_not_found_for_sr_ids")
 
-    # content가 memoryview로 오는 경우가 있어서 bytes로 변환
     content = rf.content
     if content is None:
         return _fail("reportfile_content_is_none")
-
     if isinstance(content, memoryview):
         content = content.tobytes()
-
-    # bytes 길이 로그
-    try:
-        clen = len(content)
-    except Exception:
-        clen = -1
+    if len(content) <= 0:
+        return _fail("reportfile_content_empty")
 
     logging.info(
-        "[SVR][DL][FOUND] respondent_id=%s reportfile_id=%s survey_response_id=%s filename=%s content_len=%s",
-        resp.id,
-        getattr(rf, "id", None),
-        rf.survey_response_id,
-        rf.filename,
-        clen,
+        "[SVR][DL][FOUND] respondent_id=%s serial_no=%s reportfile_id=%s sr_id=%s filename=%s bytes=%s",
+        resp.id, getattr(resp, "serial_no", None), getattr(rf, "id", None),
+        rf.survey_response_id, rf.filename, len(content)
     )
-
-    if clen <= 0:
-        return _fail("reportfile_content_empty")
 
     filename = rf.filename or "report.pdf"
     return Response(
@@ -2423,8 +2408,6 @@ def partner_supervisor_report_download_by_serial(
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
-
-
 
 #관리자페이지 메모 저장기능
 @app.post("/partner/supervisor/memo")

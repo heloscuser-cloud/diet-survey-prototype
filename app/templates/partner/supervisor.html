@@ -273,7 +273,7 @@
 
           <td class="nowrap">
             {% if resp and resp.status == 'report_sent' %}
-              <a class="pdf-link" href="/partner/supervisor/report/{{ sr.id }}/download">다운로드</a>
+              <a class="pdf-link" href="/partner/supervisor/report/{{ resp.serial_no }}/download?rid={{ resp.id }}">다운로드</a>
             {% endif %}
           </td>
 
