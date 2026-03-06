@@ -148,7 +148,9 @@ def _content_disposition_attachment(filename: str) -> str:
     # filename= 은 반드시 ASCII만 (브라우저 호환용)
     return f'attachment; filename="report.pdf"; filename*=UTF-8\'\'{quoted}'
 
-
+#사용자 휴대폰번호 동기화 헬퍼
+def _phone_digits(s: str | None) -> str:
+    return "".join(c for c in (s or "") if c.isdigit())
 
 # ---- Basic app setup ----
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -892,6 +894,12 @@ def try_auto_map_respondent_for_mapping(
 
     resp.is_mapped = True
     mapping.is_mapped = True
+    
+    # ✅ 매핑 성공 시 전화번호 digits 동기화(조인/표시 꼬임 방지)
+    mapping.client_phone = _phone_digits(mapping.client_phone)
+    resp.client_phone = _phone_digits(resp.client_phone)
+    if mapping.client_phone:
+        resp.client_phone = mapping.client_phone
 
     # 고객 문진 제출 시각을 partner_client_mapping의 client_submitted_at로 복사 (있으면)
     try:
@@ -1571,11 +1579,11 @@ async def partner_mapping_post(
     else:
         # 새 매핑 요청 INSERT
         mapping = PartnerClientMapping(
-            partner_id=partner_id,
-            partner_name=user.name,
-            partner_phone=partner_phone,
-            client_name=client_name,
-            client_phone=client_phone_raw,
+            partner_id=int(partner_id),
+            partner_name=(ua_me.name or "").strip(),      # ✅ 로그인 계정 이름
+            partner_phone=("".join(c for c in (ua_me.phone or "") if c.isdigit())),  # ✅ 로그인 계정 전화 digits
+            client_name=(client_name or "").strip(),
+            client_phone=client_phone_digits,            # ✅ digits
             is_mapped=False,
         )
         session.add(mapping)
@@ -1597,6 +1605,20 @@ async def partner_mapping_post(
             client_name_norm = (mapping.client_name or "").strip()
             client_phone_digits = "".join(c for c in (mapping.client_phone or "") if c.isdigit())
 
+            # ✅ 이미 매핑 완료된 건이면 추가 매핑신청 차단 (중복 row 생성 방지)
+            existing_done = session.exec(
+                select(PartnerClientMapping)
+                .where(
+                    PartnerClientMapping.partner_id == int(request.session.get("partner_id")),
+                    PartnerClientMapping.client_phone == client_phone_digits,
+                    PartnerClientMapping.is_mapped == True,
+                )
+                .order_by(PartnerClientMapping.created_at.desc())
+            ).first()
+
+            if existing_done:
+                return _redirect_partner_with_msg("/partner/mapping", "이미 분석신청/매핑이 완료된 건 입니다.")
+            
             resp = session.exec(
                 select(Respondent)
                 .where(
@@ -4110,6 +4132,7 @@ def survey_finish(
     if resp:
         resp.status = "submitted"
         resp.updated_at = now_kst()
+        resp.client_phone = _phone_digits(resp.client_phone)
         session.add(resp)
     session.commit()
     session.refresh(sr)
@@ -4696,7 +4719,25 @@ async def dh_simple_start(
     # 인적정보 세션 보관 (원래 있던 줄은 그대로 유지)
     request.session["nhis_start_payload"] = dh_body
 
-        
+    # ✅ respondent.client_phone을 DataHub 휴대폰번호(HPNUMBER)로 digits 저장
+    try:
+        rid = request.session.get("respondent_id")
+        hp = None
+        try:
+            hp = request.session.get("nhis_start_payload", {}).get("HPNUMBER")
+        except Exception:
+            hp = None
+
+        if rid and hp:
+            resp = session.get(Respondent, int(rid))
+            if resp:
+                resp.client_phone = _phone_digits(hp)
+                resp.updated_at = now_kst()
+                session.add(resp)
+                session.commit()
+    except Exception as e:
+        logging.warning("[PHONE][SAVE][HPNUMBER] %r", e)
+            
 
     # ===============================================
     # 1) DataHub.simple_auth_start 재시도(최대 3회)
