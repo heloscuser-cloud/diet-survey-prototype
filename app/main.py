@@ -1526,6 +1526,15 @@ async def partner_mapping_post(
         request.session.clear()
         return RedirectResponse(url="/partner/login", status_code=302)
 
+    # ✅ 로그인한 파트너 계정(user_admin) 로드 (mapping 저장에 사용)
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=303)
+
+    ua_me = session.get(UserAdmin, int(partner_id))
+    if not ua_me:
+        return RedirectResponse(url="/partner/login", status_code=303)
+    
     client_name = (client_name or "").strip()
     client_phone_raw = "".join(c for c in (client_phone or "") if c.isdigit())
     partner_phone = user.phone
@@ -1571,6 +1580,9 @@ async def partner_mapping_post(
             from_dt=one_month_ago,
         )
     ).first()
+
+    logging.info("[PCM][CREATE] ua_id=%s partner_name=%s partner_phone=%s client_phone=%s",
+                ua_me.id, (ua_me.name or "").strip(), _phone_digits(ua_me.phone), _phone_digits(client_phone))
 
     if dup_row:
         # 이미 등록된 요청이 있으면 그 레코드를 가져와서 재사용
