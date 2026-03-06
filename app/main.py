@@ -1592,10 +1592,10 @@ async def partner_mapping_post(
         # 새 매핑 요청 INSERT
         mapping = PartnerClientMapping(
             partner_id=int(partner_id),
-            partner_name=(ua_me.name or "").strip(),      # ✅ 로그인 계정 이름
-            partner_phone=("".join(c for c in (ua_me.phone or "") if c.isdigit())),  # ✅ 로그인 계정 전화 digits
+            partner_name=(ua_me.name or "").strip(),
+            partner_phone=_phone_digits(ua_me.phone),
             client_name=(client_name or "").strip(),
-            client_phone=client_phone_digits,            # ✅ digits
+            client_phone=_phone_digits(client_phone),
             is_mapped=False,
         )
         session.add(mapping)
