@@ -1675,6 +1675,7 @@ async def partner_mapping_post(
         },
     )
 
+
 # ---------------------------
 # 파트너 신청내역 조회 (/partner/requests)
 # ---------------------------
@@ -1974,6 +1975,81 @@ def partner_requests(
             "to_kst_str": to_kst_str,
         },
     )
+
+#파트너 담당자 지정 취소, 분석신청 취소 라우트
+@app.post("/partner/requests/cancel")
+def partner_requests_cancel(
+    request: Request,
+    pcm_id: int = Form(...),
+    next: str = Form("/partner/requests"),
+    session: Session = Depends(get_session),
+):
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=303)
+
+    ua_me = session.get(UserAdmin, int(partner_id))
+    if not ua_me:
+        return RedirectResponse(url="/partner/login", status_code=303)
+
+    my_division = (ua_me.division or "").strip()
+    if not my_division:
+        return _redirect_partner_with_msg(next, "소속정보가 없습니다.")
+
+    pcm = session.get(PartnerClientMapping, int(pcm_id))
+    if not pcm:
+        return _redirect_partner_with_msg(next, "취소할 대상이 존재하지 않습니다.")
+
+    # ✅ 본인만 취소 가능
+    if int(pcm.partner_id) != int(partner_id):
+        return _redirect_partner_with_msg(next, "취소 권한이 없습니다.")
+
+    client_phone_digits = _phone_digits(pcm.client_phone)
+    client_name_norm = (pcm.client_name or "").strip()
+
+    # ✅ 취소 가능 여부 확인(접수완료 이상이면 불가)
+    # respondent를 찾을 수 있으면 상태로 판단, 없으면(고객 미제출 등) 취소 허용
+    resp = session.exec(
+        select(Respondent)
+        .where(func.trim(Respondent.campaign_id) == my_division)
+        .where(func.trim(Respondent.client_phone) == client_phone_digits)
+        .where(func.trim(Respondent.applicant_name) == client_name_norm)
+        .order_by(Respondent.updated_at.desc(), Respondent.id.desc())
+    ).first()
+
+    if resp and (resp.status or "") in ("accepted", "report_uploaded", "report_sent"):
+        return _redirect_partner_with_msg(next, "이미 분석이 시작되어 취소 요청이 불가합니다")
+
+    # ✅ 초기화(없었던 것처럼):
+    # 1) mapping rows 삭제 (partner_id + client_phone 전체 삭제 → created_at 최신이 사라져 분석신청으로 인식되지 않음)
+    session.exec(
+        sa_text("""
+            DELETE FROM partner_client_mapping
+             WHERE partner_id = :pid
+               AND client_phone = :cp
+        """).bindparams(pid=int(partner_id), cp=client_phone_digits)
+    )
+
+    # 2) respondent 쪽 담당자 지정 해제/매핑 플래그 해제 (해당 담당자에게 붙어있는 건만)
+    if resp and int(getattr(resp, "partner_id") or 0) == int(partner_id):
+        resp.partner_id = None
+        resp.is_mapped = False
+        resp.updated_at = now_kst()
+        session.add(resp)
+
+    session.commit()
+
+    logging.info(
+        "[PCM][CANCEL][REQ] ua_id=%s division=%s pcm_id=%s client_phone=%s respondent_id=%s serial_no=%s",
+        getattr(ua_me, "id", None),
+        my_division,
+        pcm_id,
+        client_phone_digits,
+        (resp.id if resp else None),
+        (resp.serial_no if resp else None),
+    )
+
+    return _redirect_partner_with_msg(next, "취소되었습니다.")
 
 # 파트너 관리자페이지 기능
 @app.get("/partner/supervisor", response_class=HTMLResponse)
@@ -3233,13 +3309,15 @@ def _redirect_with_msg(next_url: str | None, msg: str) -> RedirectResponse:
         url = url + ("&" if "?" in url else "?") + "msg=" + urllib.parse.quote(msg)
     return RedirectResponse(url=url, status_code=303)
 
-# partner supervisor 전용 안전 next
+# partner 전용 안전 next
 def _safe_partner_next_url(next_url: str | None) -> str:
     if not next_url:
         return "/partner/supervisor"
-    # 외부 URL 오픈리다이렉트 방지: partner supervisor 내부만 허용
-    if next_url.startswith("/partner/supervisor"):
+
+    # 외부 URL 오픈리다이렉트 방지: 내부(/partner/*) 경로만 허용
+    if next_url.startswith("/partner/"):
         return next_url
+
     return "/partner/supervisor"
 
 # partner supervisor 전용 msg 포함 리다이렉트 (기존 쿼리 유지 + msg만 교체/추가)
