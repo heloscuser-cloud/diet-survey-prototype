@@ -253,7 +253,9 @@
               {% if st_cancel not in ('accepted', 'report_uploaded', 'report_sent') %}
                 <form method="post" action="/partner/requests/cancel" style="margin:0;">
                   <input type="hidden" name="pcm_id" value="{{ pcm.id }}">
+                  <input type="hidden" name="respondent_id" value="{{ resp.id if resp else '' }}">
                   <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+                  
 
                   <button type="submit"
                           title="취소하기"

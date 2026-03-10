@@ -1976,11 +1976,12 @@ def partner_requests(
         },
     )
 
-#파트너 담당자 지정 취소, 분석신청 취소 라우트
+#담당자 지정 해제, 분석신청 취소 라우트
 @app.post("/partner/requests/cancel")
 def partner_requests_cancel(
     request: Request,
     pcm_id: int = Form(...),
+    respondent_id: str = Form(""),     # ✅ template에서 넘어옴(없을 수도)
     next: str = Form("/partner/requests"),
     session: Session = Depends(get_session),
 ):
@@ -2005,23 +2006,28 @@ def partner_requests_cancel(
         return _redirect_partner_with_msg(next, "취소 권한이 없습니다.")
 
     client_phone_digits = _phone_digits(pcm.client_phone)
-    client_name_norm = (pcm.client_name or "").strip()
 
-    # ✅ 취소 가능 여부 확인(접수완료 이상이면 불가)
-    # respondent를 찾을 수 있으면 상태로 판단, 없으면(고객 미제출 등) 취소 허용
-    resp = session.exec(
-        select(Respondent)
-        .where(func.trim(Respondent.campaign_id) == my_division)
-        .where(func.trim(Respondent.client_phone) == client_phone_digits)
-        .where(func.trim(Respondent.applicant_name) == client_name_norm)
-        .order_by(Respondent.updated_at.desc(), Respondent.id.desc())
-    ).first()
+    # ✅ 상태 체크는 목록에서 보여주던 respondent_id로 “정확히” 판단
+    resp = None
+    rid = None
+    try:
+        rid = int(respondent_id) if (respondent_id or "").strip() else None
+    except Exception:
+        rid = None
 
+    if rid:
+        resp = session.get(Respondent, rid)
+
+        # 보안: division 일치하는 건만 상태 체크/초기화 대상으로 취급
+        if resp and (resp.campaign_id or "").strip() != my_division:
+            resp = None
+
+    # ✅ 접수완료 이상이면 취소 불가
     if resp and (resp.status or "") in ("accepted", "report_uploaded", "report_sent"):
         return _redirect_partner_with_msg(next, "이미 분석이 시작되어 취소 요청이 불가합니다")
 
     # ✅ 초기화(없었던 것처럼):
-    # 1) mapping rows 삭제 (partner_id + client_phone 전체 삭제 → created_at 최신이 사라져 분석신청으로 인식되지 않음)
+    # 1) pcm 기록 제거: 동일 담당자+동일 고객전화번호 rows 삭제(담당자신청일 제거 목적)
     session.exec(
         sa_text("""
             DELETE FROM partner_client_mapping
@@ -2030,7 +2036,7 @@ def partner_requests_cancel(
         """).bindparams(pid=int(partner_id), cp=client_phone_digits)
     )
 
-    # 2) respondent 쪽 담당자 지정 해제/매핑 플래그 해제 (해당 담당자에게 붙어있는 건만)
+    # 2) respondent 초기화(해당 respondent가 있고, 현재 담당자에게 붙어있는 경우만)
     if resp and int(getattr(resp, "partner_id") or 0) == int(partner_id):
         resp.partner_id = None
         resp.is_mapped = False
@@ -2050,6 +2056,7 @@ def partner_requests_cancel(
     )
 
     return _redirect_partner_with_msg(next, "취소되었습니다.")
+
 
 # 파트너 관리자페이지 기능
 @app.get("/partner/supervisor", response_class=HTMLResponse)
@@ -2142,6 +2149,8 @@ def partner_supervisor(
 
 
     start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
+    #조회내용 임시로그
+    logging.info("[SV][RANGE] from=%s to=%s start_utc=%s end_utc=%s", from_, to, start_utc, end_utc)
 
     # pcm_latest: (partner_id, client_phone)별 최신 created_at (responses와 동일 패턴)
     pcm_latest = (
@@ -2285,24 +2294,22 @@ def partner_supervisor_export_xlsx(
     ua_me = session.get(UserAdmin, int(partner_id))
     if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
         return RedirectResponse(url="/partner/dashboard?msg=권한이 없습니다.", status_code=303)
-    
-    #로그추가 임시
-    logging.info("[SVX][AUTH] ua_id=%s supervisor=%s division=%s qs=%s",
-             getattr(ua_me, "id", None),
-             getattr(ua_me, "supervisor", None),
-             getattr(ua_me, "division", None),
-             str(request.query_params))
 
     my_division = (ua_me.division or "").strip()
     if not my_division:
         return RedirectResponse(url="/partner/dashboard?msg=소속정보가 없습니다.", status_code=303)
 
-    utc_from = utc_to = None
-    if from_ and to:
+    # ✅ 화면과 동일: 문자열 -> date로 파싱 후 KST 날짜구간을 UTC로 변환
+    def _parse_date(s: str | None):
         try:
-            utc_from, utc_to = kst_date_range_to_utc_datetimes(from_, to)
+            return datetime.strptime((s or "").strip(), "%Y-%m-%d").date()
         except Exception:
-            utc_from = utc_to = None
+            return None
+
+    d_from = _parse_date(from_)
+    d_to = _parse_date(to)
+
+    start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
 
     pcm_latest = (
         select(
@@ -2330,49 +2337,70 @@ def partner_supervisor_export_xlsx(
             (pcm_latest.c.partner_id == Respondent.partner_id)
             & (pcm_latest.c.client_phone == Respondent.client_phone),
         )
-        .where(Respondent.campaign_id == my_division)
-        .order_by(SurveyResponse.submitted_at.desc())
+        # ✅ 화면과 동일: trim 비교
+        .where(func.trim(Respondent.campaign_id) == my_division)
     )
 
-    if utc_from and utc_to:
-        stmt = stmt.where(SurveyResponse.submitted_at >= utc_from, SurveyResponse.submitted_at <= utc_to)
+    # ✅ 화면과 동일: 제출일 필터(종료는 < end_utc)
+    if start_utc:
+        stmt = stmt.where(SurveyResponse.submitted_at >= start_utc)
+    if end_utc:
+        stmt = stmt.where(SurveyResponse.submitted_at < end_utc)
 
+    # ✅ 상태 필터 (화면과 동일)
     if status:
         status = status.strip()
         if status == "analysis_requested":
-            stmt = stmt.where(Respondent.status == "submitted", pcm_latest.c.created_at.is_not(None))
+            stmt = stmt.where(
+                (Respondent.status == "submitted") &
+                (pcm_latest.c.created_at.is_not(None))
+            )
         elif status == "submitted":
-            stmt = stmt.where(Respondent.status == "submitted", pcm_latest.c.created_at.is_(None))
+            stmt = stmt.where(
+                (Respondent.status == "submitted") &
+                (pcm_latest.c.created_at.is_(None))
+            )
         else:
             stmt = stmt.where(Respondent.status == status)
 
-    # --- 검색어 필터 (admin_responses와 동일 UX) ---
+    # ✅ 검색어 필터(화면과 동일)
     stmt = _apply_supervisor_q_filter(stmt, q)
 
+    # ✅ 담당자 미지정 인원만 보기(화면과 동일)
     only_unassigned_bool = str(only_unassigned or "").lower() in ("1", "true", "on", "yes")
     if only_unassigned_bool:
         stmt = stmt.where(Respondent.partner_id.is_(None))
 
-    # 화면에 "보이는 테이블" 그대로 export (page/page_size 반영)
-    if page_size == "all":
-        limit = None
-    else:
-        try:
-            limit = int(page_size)
-        except Exception:
-            limit = 50
+    # ✅ 정렬(화면과 동일)
+    stmt = stmt.order_by(
+        SurveyResponse.submitted_at.desc(),
+        SurveyResponse.id.desc(),
+    )
 
-    if page < 1:
+    # ✅ page_size 해석(화면과 동일)
+    page_size_norm = (page_size or "50").lower()
+    if page_size_norm == "all":
+        limit = None
+    elif page_size_norm == "100":
+        limit = 100
+    else:
+        limit = 50
+
+    try:
+        page = max(1, int(page))
+    except Exception:
         page = 1
+
     if limit:
         stmt = stmt.offset((page - 1) * limit).limit(limit)
 
     rows = session.exec(stmt).all()
-    #로그추가 임시
-    logging.info("[SVX][ROWS] division=%s rows=%s page=%s page_size=%s",
-             my_division, len(rows), page, page_size)
 
-    
+    logging.info(
+        "[SVX][ROWS] division=%s rows=%s page=%s page_size=%s from=%s to=%s status=%s q=%s only_unassigned=%s",
+        my_division, len(rows), page, page_size_norm, from_ or "", to or "", status or "", q or "", only_unassigned_bool
+    )
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Supervisor"
@@ -2407,7 +2435,6 @@ def partner_supervisor_export_xlsx(
             memo,
         ])
 
-    # 열 너비(대충) + 메모는 넓게
     widths = [10, 14, 14, 22, 20, 20, 20, 60]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
@@ -2423,6 +2450,9 @@ def partner_supervisor_export_xlsx(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+
 
 #파트너 관리자페이지 리포트 다운로드 라우터
 @app.get("/partner/supervisor/report/{serial_no}/download")
