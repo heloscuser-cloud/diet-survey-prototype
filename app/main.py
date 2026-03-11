@@ -104,18 +104,19 @@ def now_kst():
 
 def kst_date_range_to_utc_datetimes(d_from: date | None, d_to: date | None):
     """
-    KST 날짜 구간 [d_from, d_to] (둘 다 포함)을 UTC naive datetime 구간
-    [start_utc, end_utc) 로 변환한다.
-    DB의 naive UTC(datetime.utcnow())와 비교하기 위해 tzinfo 제거.
+    KST 날짜 구간 [d_from, d_to] (둘 다 포함)을
+    UTC aware datetime 구간 [start_utc, end_utc) 로 변환한다.
+
+    ※ timestamptz 비교는 aware로 넘겨야 DB 세션 타임존에 영향받지 않음.
     """
     start_kst = datetime(d_from.year, d_from.month, d_from.day, 0, 0, 0, tzinfo=KST) if d_from else None
-    end_kst   = datetime(d_to.year,   d_to.month,   d_to.day,   23,59,59,999999, tzinfo=KST) if d_to else None
+    end_kst = None
     if d_to:
         # end exclusive: 다음날 00:00 KST
-        end_kst = datetime(d_to.year, d_to.month, d_to.day, 0,0,0, tzinfo=KST) + timedelta(days=1)
+        end_kst = datetime(d_to.year, d_to.month, d_to.day, 0, 0, 0, tzinfo=KST) + timedelta(days=1)
 
-    start_utc = start_kst.astimezone(timezone.utc).replace(tzinfo=None) if start_kst else None
-    end_utc   = end_kst.astimezone(timezone.utc).replace(tzinfo=None)   if end_kst   else None
+    start_utc = start_kst.astimezone(timezone.utc) if start_kst else None  # ✅ tzinfo 유지
+    end_utc   = end_kst.astimezone(timezone.utc)   if end_kst   else None  # ✅ tzinfo 유지
     return start_utc, end_utc
 
 def ensure_not_completed(survey_completed: str | None = Cookie(default=None)):
@@ -2308,9 +2309,8 @@ def partner_supervisor_export_xlsx(
 
     d_from = _parse_date(from_)
     d_to = _parse_date(to)
-
     start_utc, end_utc = kst_date_range_to_utc_datetimes(d_from, d_to)
-
+    
     pcm_latest = (
         select(
             PartnerClientMapping.partner_id.label("partner_id"),
@@ -4238,6 +4238,12 @@ def survey_finish(
     gender = (resp.gender if resp and resp.gender else (user.gender if user and user.gender else "")) or ""
     height = (getattr(resp, "height_cm", None) if resp else None) or (getattr(user, "height_cm", None) if user else None)
     weight = (getattr(resp, "weight_kg", None) if resp else None) or (getattr(user, "weight_kg", None) if user else None)
+
+    # ✅ 중복 제출 방지: 이미 제출(submitted)된 응답이면 SurveyResponse를 새로 만들지 않는다.
+    # (새로고침/뒤로가기/중복 호출로 SurveyResponse가 여러 개 생기는 문제 방지)
+    if (resp.status or "") == "submitted":
+        # 완료 화면으로 이동 (기존 UX 유지)
+        return RedirectResponse(url="/portal", status_code=303)
 
     # SurveyResponse 생성 (이번 제출 레코드에 NHIS를 '직접' 저장)
     sr = SurveyResponse(
