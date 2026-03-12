@@ -2126,8 +2126,8 @@ def partner_supervisor(
             "to": today_str,
             "page_size": (page_size or "50"),
             "page": 1,
-    })
-    return RedirectResponse(url=f"/partner/supervisor?{qs}", status_code=303)
+        })
+        return RedirectResponse(url=f"/partner/supervisor?{qs}", status_code=303)
 
     def _parse_date(s: str | None):
         try:
