@@ -20,6 +20,7 @@ from random import randint
 from sqlalchemy import func, Column, LargeBinary, Integer, text, and_, or_
 from sqlalchemy import text as sa_text
 import sqlalchemy as sa
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.dialects.postgresql import JSONB
 from itsdangerous import (
     TimestampSigner, BadSignature, SignatureExpired,
@@ -1559,6 +1560,28 @@ async def partner_mapping_post(
             },
         )
 
+    # ✅ 이미 매핑 완료된 건이면 즉시 차단 (중복 처리 방지)
+    existing_done = session.exec(
+        select(PartnerClientMapping.id)
+        .where(
+            PartnerClientMapping.partner_id == int(partner_id),
+            PartnerClientMapping.client_phone == client_phone_raw,
+            PartnerClientMapping.is_mapped == True,
+        )
+        .order_by(PartnerClientMapping.created_at.desc())
+    ).first()
+
+    if existing_done:
+        return templates.TemplateResponse(
+            "partner/mapping.html",
+            {
+                "request": request,
+                "partner_phone": partner_phone,
+                "error": None,
+                "message": "이미 담당자 등록 및 분석신청이 완료된 건 입니다.",
+            },
+        )
+
     one_month_ago = datetime.utcnow() - timedelta(days=31)
 
     # 최근 1개월 내 중복 요청 여부 확인
@@ -1588,7 +1611,7 @@ async def partner_mapping_post(
     if dup_row:
         # 이미 등록된 요청이 있으면 그 레코드를 가져와서 재사용
         mapping = session.get(PartnerClientMapping, dup_row[0])
-        message = "이미 최근에 등록된 고객 매핑 요청이 있습니다."
+        message = "이미 최근에 등록된 요청이 있습니다."
     else:
         # 새 매핑 요청 INSERT
         mapping = PartnerClientMapping(
@@ -1602,36 +1625,24 @@ async def partner_mapping_post(
         session.add(mapping)
         session.commit()
         session.refresh(mapping)
-        message = "고객 매핑 요청을 등록했습니다."
+        message = "담당자 등록 및 분석신청을 완료했습니다."
 
     # 👉 이 시점에, 이미 존재하는 respondent와 자동 매핑 시도
     prev_is_mapped = bool(getattr(mapping, "is_mapped", False))
-    try_auto_map_respondent_for_mapping(session, mapping)
 
-    # 매핑 성공 여부에 따라 메시지 보완 (선택)
-    if mapping.is_mapped:
-        message = "고객 매핑 요청을 등록했고, 기존 문진과 자동으로 매칭되었습니다."
+    # 이미 매핑 완료 상태면 자동매핑 재시도하지 않음 + 메시지 고정
+    if prev_is_mapped:
+        message = "이미 담당자 등록 및 분석신청이 완료된 건 입니다."
+    else:
+        try_auto_map_respondent_for_mapping(session, mapping)
+        if mapping.is_mapped:
+            message = "담당자 등록 및 분석신청을 완료했습니다."
 
     # ── 알림메일: '매핑이 새로 완료' 되었고, 고객 문진이 이미 제출된 경우에만 발송 ──
     try:
         if mapping and mapping.is_mapped and (not prev_is_mapped):
             client_name_norm = (mapping.client_name or "").strip()
             client_phone_digits = "".join(c for c in (mapping.client_phone or "") if c.isdigit())
-
-            # ✅ 이미 매핑 완료된 건이면 추가 매핑신청 차단 (중복 row 생성 방지)
-            existing_done = session.exec(
-                select(PartnerClientMapping)
-                .where(
-                    PartnerClientMapping.partner_id == int(request.session.get("partner_id")),
-                    PartnerClientMapping.client_phone == client_phone_digits,
-                    PartnerClientMapping.is_mapped == True,
-                )
-                .order_by(PartnerClientMapping.created_at.desc())
-            ).first()
-
-            if existing_done:
-                return _redirect_partner_with_msg("/partner/mapping", "이미 분석신청/매핑이 완료된 건 입니다.")
-            
             resp = session.exec(
                 select(Respondent)
                 .where(
@@ -2105,12 +2116,18 @@ def partner_supervisor(
             status_code=400,
         )
 
-    # --- 첫 진입 기본값: from/to가 없으면 오늘(KST)로 세팅 (/partner/requests와 동일 UX) ---
     is_first_visit = (request.url.query == "")
     today_str = now_kst().date().isoformat()
+
+    # ✅ 첫 진입은 URL에 from/to를 붙여서 리다이렉트 (엑셀다운로드도 동일 필터 적용되게)
     if is_first_visit:
-        from_ = today_str
-        to = today_str
+        qs = urllib.parse.urlencode({
+            "from": today_str,
+            "to": today_str,
+            "page_size": (page_size or "50"),
+            "page": 1,
+    })
+    return RedirectResponse(url=f"/partner/supervisor?{qs}", status_code=303)
 
     def _parse_date(s: str | None):
         try:
@@ -3402,7 +3419,9 @@ async def admin_bulk_accept(
             f"(접수완료 처리 {accepted_cnt}건)"
         )
         return _redirect_with_msg(next, msg)
-
+    # ✅ 정상 케이스도 반드시 redirect 반환
+    msg = f"접수를 완료했습니다. ({accepted_cnt}건)"
+    return _redirect_with_msg(next, msg)
 
 @admin_router.post("/responses/report/send")
 async def admin_send_reports(
@@ -3563,6 +3582,9 @@ async def admin_send_reports(
 
 
 # 리포트 업로드 (POST + multipart/form-data)
+from sqlalchemy.exc import OperationalError  # 상단 import에 없으면 추가
+
+# 리포트 업로드 (POST + multipart/form-data)
 @admin_router.post("/response/{rid}/report")
 async def admin_upload_report(
     rid: int,
@@ -3575,28 +3597,37 @@ async def admin_upload_report(
         raise HTTPException(status_code=404, detail="not found")
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF만 업로드 가능합니다.")
+
     content = await file.read()
 
-    # 기존 파일 있으면 교체
-    old = session.exec(select(ReportFile).where(ReportFile.survey_response_id == rid)).first()
-    if old:
-        session.delete(old); session.commit()
+    try:
+        # ✅ 기존 파일 있으면 교체(중간 commit 금지)
+        old = session.exec(select(ReportFile).where(ReportFile.survey_response_id == rid)).first()
+        if old:
+            session.delete(old)
 
-    rf = ReportFile(survey_response_id=rid, filename=file.filename, content=content)
-    session.add(rf)
+        rf = ReportFile(survey_response_id=rid, filename=file.filename, content=content)
+        session.add(rf)
 
-    # 상태 업데이트
-    with session.no_autoflush:
-        resp = session.get(Respondent, sr.respondent_id)
-    if resp:
-        resp.status = "report_uploaded"
-        resp.report_sent_at = None
-        session.add(resp)
+        # 상태 업데이트 (autoflush 타이밍 제어)
+        with session.no_autoflush:
+            resp = session.get(Respondent, sr.respondent_id)
 
-    session.commit()
-    return RedirectResponse(url=_safe_next_url(next), status_code=303)
+        if resp:
+            resp.status = "report_uploaded"
+            resp.report_sent_at = None
+            session.add(resp)
 
+        session.commit()
+        return RedirectResponse(url=_safe_next_url(next), status_code=303)
 
+    except OperationalError as e:
+        session.rollback()
+        logging.error("[REPORT][UPLOAD][DB] OperationalError rid=%s err=%r", rid, e)
+        # 사용자에게 재시도 안내(기존 흐름 깨지지 않게 next로 복귀)
+        return _redirect_with_msg(_safe_next_url(next), "DB 연결이 일시적으로 불안정합니다. 잠시 후 다시 업로드해주세요.")
+    
+    
 # 리포트 삭제 (POST)
 @admin_router.post("/response/{rid}/report/delete")
 def admin_delete_report(
