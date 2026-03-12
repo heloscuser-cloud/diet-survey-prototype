@@ -3599,6 +3599,28 @@ async def admin_upload_report(
         raise HTTPException(status_code=400, detail="PDF만 업로드 가능합니다.")
 
     content = await file.read()
+    
+    #리포트 PDF파일 용량제한
+    # ✅ 큰 파일은 DB/메모리에 부담 → 청크로 읽으면서 용량 제한
+    MAX_PDF_BYTES = 15 * 1024 * 1024  # 15MB (원하면 조정)
+
+    total = 0
+    buf = bytearray()
+
+    while True:
+        chunk = await file.read(1024 * 1024)  # 1MB
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_PDF_BYTES:
+            return RedirectResponse(
+                url=_safe_next_url(next) + ("&" if "?" in _safe_next_url(next) else "?") +
+                    "msg=" + urllib.parse.quote("PDF 용량이 너무 큽니다. (최대 15MB)"),
+                status_code=303
+            )
+        buf.extend(chunk)
+
+    content = bytes(buf)
 
     try:
         # ✅ 기존 파일 있으면 교체(중간 commit 금지)
