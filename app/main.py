@@ -703,7 +703,7 @@ def send_report_email(
         f"앞으로도 양질의 서비스를 제공해드리기 위해 최선을 다하겠습니다.\n\n"
         f"즐거운 하루 보내세요!\n\n"
         f"** 보안을 위해 리포트에는 암호가 적용되어있습니다 **\n"
-        f"[암호 : 수검자 생년월일 8자리 YYYYMMDD]\n"
+        f"[암호 : 고객 생년월일 8자리(- 기호 포함) 'YYYY-MM-DD']\n"
     )
 
     msg = EmailMessage()
@@ -2461,7 +2461,8 @@ def partner_supervisor_export_xlsx(
     wb.save(bio)
     bio.seek(0)
 
-    filename = "partner_supervisor.xlsx"
+    today_str = now_kst().date().isoformat()
+    filename = f"partner_supervisor_{today_str}.xlsx"
     return Response(
         content=bio.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -2875,7 +2876,8 @@ def partner_calculate_export_xlsx(
     wb.save(bio)
     bio.seek(0)
 
-    filename = f"calculate_detail_{ym}.xlsx"
+    today_str = now_kst().date().isoformat()
+    filename = f"calculate_{today_str}.xlsx"
     return Response(
         content=bio.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -3580,11 +3582,7 @@ async def admin_send_reports(
     return _redirect_with_msg(next, msg)
 
 
-
-# 리포트 업로드 (POST + multipart/form-data)
-from sqlalchemy.exc import OperationalError  # 상단 import에 없으면 추가
-
-# 리포트 업로드 (POST + multipart/form-data)
+#가온엔 관리페이지 리포트업로드 라우트
 @admin_router.post("/response/{rid}/report")
 async def admin_upload_report(
     rid: int,
@@ -3598,43 +3596,38 @@ async def admin_upload_report(
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF만 업로드 가능합니다.")
 
-    content = await file.read()
-    
-    #리포트 PDF파일 용량제한
     # ✅ 큰 파일은 DB/메모리에 부담 → 청크로 읽으면서 용량 제한
-    MAX_PDF_BYTES = 15 * 1024 * 1024  # 15MB (원하면 조정)
+    MAX_PDF_BYTES = 15 * 1024 * 1024  # 15MB
 
     total = 0
     buf = bytearray()
-
     while True:
         chunk = await file.read(1024 * 1024)  # 1MB
         if not chunk:
             break
         total += len(chunk)
         if total > MAX_PDF_BYTES:
-            return RedirectResponse(
-                url=_safe_next_url(next) + ("&" if "?" in _safe_next_url(next) else "?") +
-                    "msg=" + urllib.parse.quote("PDF 용량이 너무 큽니다. (최대 15MB)"),
-                status_code=303
-            )
+            return _redirect_with_msg(_safe_next_url(next), "PDF 용량이 너무 큽니다. (최대 15MB)")
         buf.extend(chunk)
 
     content = bytes(buf)
+    if not content:
+        return _redirect_with_msg(_safe_next_url(next), "업로드 파일을 읽지 못했습니다. 다시 시도해주세요.")
 
     try:
-        # ✅ 기존 파일 있으면 교체(중간 commit 금지)
-        old = session.exec(select(ReportFile).where(ReportFile.survey_response_id == rid)).first()
+        # ✅ 기존 파일 있으면 교체 (중간 commit 절대 금지)
+        old = session.exec(
+            select(ReportFile).where(ReportFile.survey_response_id == rid)
+        ).first()
         if old:
             session.delete(old)
 
         rf = ReportFile(survey_response_id=rid, filename=file.filename, content=content)
         session.add(rf)
 
-        # 상태 업데이트 (autoflush 타이밍 제어)
+        # 상태 업데이트
         with session.no_autoflush:
             resp = session.get(Respondent, sr.respondent_id)
-
         if resp:
             resp.status = "report_uploaded"
             resp.report_sent_at = None
@@ -3644,12 +3637,30 @@ async def admin_upload_report(
         return RedirectResponse(url=_safe_next_url(next), status_code=303)
 
     except OperationalError as e:
+        # 커밋이 DB에서는 반영됐는데 클라이언트만 예외로 보이는 케이스가 있어 확인 후 처리
         session.rollback()
         logging.error("[REPORT][UPLOAD][DB] OperationalError rid=%s err=%r", rid, e)
-        # 사용자에게 재시도 안내(기존 흐름 깨지지 않게 next로 복귀)
+
+        # ✅ DB에 실제 저장됐는지 재확인 (새 세션으로)
+        try:
+            session.close()
+        except Exception:
+            pass
+
+        try:
+            with Session(engine) as s2:
+                rf2 = s2.exec(select(ReportFile).where(ReportFile.survey_response_id == rid)).first()
+                if rf2 and rf2.content:
+                    content2 = rf2.content.tobytes() if isinstance(rf2.content, memoryview) else rf2.content
+                    if content2 and len(content2) > 0:
+                        # 실제 저장 성공으로 간주
+                        return RedirectResponse(url=_safe_next_url(next), status_code=303)
+        except Exception as e2:
+            logging.error("[REPORT][UPLOAD][VERIFY] rid=%s err=%r", rid, e2)
+
         return _redirect_with_msg(_safe_next_url(next), "DB 연결이 일시적으로 불안정합니다. 잠시 후 다시 업로드해주세요.")
-    
-    
+
+
 # 리포트 삭제 (POST)
 @admin_router.post("/response/{rid}/report/delete")
 def admin_delete_report(
@@ -4791,10 +4802,11 @@ async def admin_export_xlsx(
     mem = BytesIO()
     wb.save(mem)
     mem.seek(0)
+    today_str = now_kst().date().isoformat()
     return StreamingResponse(
         mem,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="responses.xlsx"'}
+        headers={"Content-Disposition": f'attachment; filename="responses_{today_str}.xlsx"'}
     )
 
 
