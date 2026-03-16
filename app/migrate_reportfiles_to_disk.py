@@ -5,7 +5,10 @@ from pathlib import Path
 from sqlmodel import Session, select
 
 # main.py에서 engine/ReportFile/now_kst 등을 이미 쓰고 있으니 그대로 import해서 재사용
-from main import engine, ReportFile, now_kst, REPORTS_DIR  # REPORTS_DIR는 너가 이미 넣어둔 환경변수 기반
+import sys
+sys.path.insert(0, "/app")  # 'app' 패키지 인식용
+
+from app.main import engine, ReportFile, now_kst, REPORTS_DIR
 
 def main():
     Path(REPORTS_DIR).mkdir(parents=True, exist_ok=True)
