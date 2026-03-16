@@ -2356,38 +2356,46 @@ def partner_supervisor_cancel(
     if (resp.campaign_id or "").strip() != my_division:
         return _redirect_partner_with_msg(next, "취소 권한이 없습니다.")
 
-    # ✅ 접수완료 이상이면 취소 불가 (requests와 동일)
+    # ✅ 분석신청 상태(submitted)에서만 취소 가능
     if (resp.status or "") in ("accepted", "report_uploaded", "report_sent"):
         return _redirect_partner_with_msg(next, "이미 분석이 시작되어 취소 요청이 불가합니다")
 
-    client_phone_digits = _phone_digits(resp.client_phone)
+    if (resp.status or "") != "submitted":
+        return _redirect_partner_with_msg(next, "분석신청 상태가 아니어서 취소할 수 없습니다.")
 
-    # ✅ 초기화(없었던 것처럼) - requests와 동일 처리방법
-    # 1) pcm rows 삭제: 본 담당자(user_admin.id) 기준으로 삭제하면
-    #    해당 담당자 신청일(created_at)이 사라져 분석신청이 해제됨
+
+    # ✅ 현재 지정된 담당자 기준으로 pcm 삭제 + 담당자 해제
+    client_phone_digits = _phone_digits(resp.client_phone)
+    assigned_partner_id = int(getattr(resp, "partner_id") or 0)
+
+    # 담당자가 아예 없으면(=분석신청 조건상 거의 없겠지만) 취소 불가 처리
+    if assigned_partner_id <= 0:
+        return _redirect_partner_with_msg(next, "담당자 지정이 없어 취소할 수 없습니다.")
+
+    # 1) 해당 담당자의 분석신청(담당자신청일) 기록 삭제
     session.exec(
         sa_text("""
             DELETE FROM partner_client_mapping
-             WHERE partner_id = :pid
-               AND client_phone = :cp
-        """).bindparams(pid=int(partner_id), cp=client_phone_digits)
+            WHERE partner_id = :pid
+            AND client_phone = :cp
+        """).bindparams(pid=assigned_partner_id, cp=client_phone_digits)
     )
 
-    # 2) respondent 담당자 지정 해제/매핑 플래그 해제 (본인에게 붙어있는 경우만)
-    if int(getattr(resp, "partner_id") or 0) == int(partner_id):
-        resp.partner_id = None
-        resp.is_mapped = False
-        resp.updated_at = now_kst()
-        session.add(resp)
+    # 2) respondent 담당자 지정 해제 + 매핑 플래그 해제
+    resp.partner_id = None
+    resp.is_mapped = False
+    resp.updated_at = now_kst()
+    session.add(resp)
 
     session.commit()
 
     logging.info(
-        "[PCM][CANCEL][SV] ua_id=%s division=%s respondent_id=%s serial_no=%s client_phone=%s",
+        "[PCM][CANCEL][SV] ua_id=%s division=%s respondent_id=%s serial_no=%s assigned_partner_id=%s client_phone=%s",
         getattr(ua_me, "id", None),
         my_division,
         resp.id,
         resp.serial_no,
+        assigned_partner_id,
         client_phone_digits,
     )
 

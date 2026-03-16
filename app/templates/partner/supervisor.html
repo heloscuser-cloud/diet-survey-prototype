@@ -272,8 +272,7 @@
             {% endif %}
           </td>
           <td class="nowrap" style="text-align:center;">
-            {% set st_cancel = resp.status if resp else '' %}
-            {% if st_cancel not in ('accepted', 'report_uploaded', 'report_sent') %}
+            {% if resp and resp.status == 'submitted' and partner_requested_at %}
               <form method="post" action="/partner/supervisor/cancel" style="margin:0;">
                 <input type="hidden" name="respondent_id" value="{{ resp.id if resp else '' }}">
                 <input type="hidden" name="next" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
