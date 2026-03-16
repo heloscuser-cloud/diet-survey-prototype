@@ -275,7 +275,7 @@ def _mask_birth(s: str) -> str:
 REPORTS_DIR = os.getenv("REPORTS_DIR", "/var/data/reports")
 Path(REPORTS_DIR).mkdir(parents=True, exist_ok=True)
 
-MAX_REPORT_UPLOAD_BYTES = int(os.getenv("MAX_REPORT_UPLOAD_MB", "50")) * 1024 * 1024
+MAX_REPORT_UPLOAD_BYTES = int(os.getenv("MAX_REPORT_UPLOAD_MB", "35")) * 1024 * 1024
 MAX_EMAIL_ATTACHMENT_BYTES = int(os.getenv("MAX_EMAIL_ATTACHMENT_MB", "35")) * 1024 * 1024
 
 def _report_abs_path(file_path: str) -> Path:
@@ -2329,6 +2329,71 @@ def partner_supervisor(
     )
 
 
+@app.post("/partner/supervisor/cancel")
+def partner_supervisor_cancel(
+    request: Request,
+    respondent_id: int = Form(...),
+    next: str = Form("/partner/supervisor"),
+    session: Session = Depends(get_session),
+):
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=303)
+
+    ua_me = session.get(UserAdmin, int(partner_id))
+    if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
+        return _redirect_partner_with_msg(next, "권한이 없습니다.")
+
+    my_division = (ua_me.division or "").strip()
+    if not my_division:
+        return _redirect_partner_with_msg(next, "소속정보가 없습니다.")
+
+    resp = session.get(Respondent, int(respondent_id))
+    if not resp:
+        return _redirect_partner_with_msg(next, "취소할 대상이 존재하지 않습니다.")
+
+    # ✅ 보안: 같은 업체만
+    if (resp.campaign_id or "").strip() != my_division:
+        return _redirect_partner_with_msg(next, "취소 권한이 없습니다.")
+
+    # ✅ 접수완료 이상이면 취소 불가 (requests와 동일)
+    if (resp.status or "") in ("accepted", "report_uploaded", "report_sent"):
+        return _redirect_partner_with_msg(next, "이미 분석이 시작되어 취소 요청이 불가합니다")
+
+    client_phone_digits = _phone_digits(resp.client_phone)
+
+    # ✅ 초기화(없었던 것처럼) - requests와 동일 처리방법
+    # 1) pcm rows 삭제: 본 담당자(user_admin.id) 기준으로 삭제하면
+    #    해당 담당자 신청일(created_at)이 사라져 분석신청이 해제됨
+    session.exec(
+        sa_text("""
+            DELETE FROM partner_client_mapping
+             WHERE partner_id = :pid
+               AND client_phone = :cp
+        """).bindparams(pid=int(partner_id), cp=client_phone_digits)
+    )
+
+    # 2) respondent 담당자 지정 해제/매핑 플래그 해제 (본인에게 붙어있는 경우만)
+    if int(getattr(resp, "partner_id") or 0) == int(partner_id):
+        resp.partner_id = None
+        resp.is_mapped = False
+        resp.updated_at = now_kst()
+        session.add(resp)
+
+    session.commit()
+
+    logging.info(
+        "[PCM][CANCEL][SV] ua_id=%s division=%s respondent_id=%s serial_no=%s client_phone=%s",
+        getattr(ua_me, "id", None),
+        my_division,
+        resp.id,
+        resp.serial_no,
+        client_phone_digits,
+    )
+
+    return _redirect_partner_with_msg(next, "담당자 지정해제 및 분석신청 취소 완료.")
+
+
 #관리자페이지 엑셀다운로드 기능
 @app.get("/partner/supervisor/export.xlsx")
 def partner_supervisor_export_xlsx(
@@ -3091,6 +3156,7 @@ def _apply_supervisor_q_filter(stmt, q: str | None):
             | (User.name_enc.ilike(like))
             | (func.cast(Respondent.serial_no, sa.String).ilike(like))
             | (UserAdmin.name.ilike(like))
+            | (UserAdmin.phone.ilike(like))
             | (Respondent.sv_memo.ilike(like))
             | (Respondent.client_phone.ilike(like))
             | (func.to_char(User.birth_date, "YYYY-MM-DD").ilike(like))
