@@ -8,7 +8,7 @@ import re
 from fastapi.templating import Jinja2Templates
 from fastapi.routing import APIRoute
 from fastapi.exception_handlers import http_exception_handler
-from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse, JSONResponse, FileResponse
 from sqlmodel import SQLModel, Field, Session, create_engine, select, Relationship
 from pydantic import BaseModel
 from typing import Optional, List, Any, Dict
@@ -271,6 +271,44 @@ def _mask_birth(s: str) -> str:
         return f"{d[:4]}-**-**"
     return "***"
 
+#render disk 리포트 저장 관련 설정 및 헬퍼
+REPORTS_DIR = os.getenv("REPORTS_DIR", "/var/data/reports")
+Path(REPORTS_DIR).mkdir(parents=True, exist_ok=True)
+
+MAX_REPORT_UPLOAD_BYTES = int(os.getenv("MAX_REPORT_UPLOAD_MB", "50")) * 1024 * 1024
+MAX_EMAIL_ATTACHMENT_BYTES = int(os.getenv("MAX_EMAIL_ATTACHMENT_MB", "35")) * 1024 * 1024
+
+def _report_abs_path(file_path: str) -> Path:
+    return Path(REPORTS_DIR) / (file_path or "")
+
+def _delete_report_disk_file(file_path: str | None):
+    if not file_path:
+        return
+    p = _report_abs_path(file_path)
+    try:
+        if p.exists() and p.is_file():
+            p.unlink()
+    except Exception as e:
+        logging.warning("[REPORT][DISK][DELETE] path=%s err=%r", str(p), e)
+
+def _read_report_bytes(rf) -> bytes | None:
+    # 1) disk 우선
+    fp = getattr(rf, "file_path", None)
+    if fp:
+        p = _report_abs_path(fp)
+        try:
+            if p.exists() and p.is_file():
+                return p.read_bytes()
+        except Exception as e:
+            logging.warning("[REPORT][DISK][READ] path=%s err=%r", str(p), e)
+
+    # 2) DB fallback
+    b = getattr(rf, "content", None)
+    if b is None:
+        return None
+    if isinstance(b, memoryview):
+        b = b.tobytes()
+    return b if (b and len(b) > 0) else None
 
 
 # ---- Models ----
@@ -352,7 +390,13 @@ class ReportFile(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     survey_response_id: int = Field(index=True)
     filename: str
-    content: bytes = Field(sa_column=Column(LargeBinary))
+
+    # ✅ Render Disk 저장 경로(상대경로 권장: REPORTS_DIR 아래)
+    file_path: Optional[str] = None
+
+    # ✅ 기존 DB bytea 백워드 호환용 (이제는 보통 None)
+    content: Optional[bytes] = Field(default=None, sa_column=Column(LargeBinary, nullable=True))
+
     uploaded_at: datetime = Field(default_factory=now_kst)
 
 
@@ -2559,25 +2603,25 @@ def partner_supervisor_report_download_by_serial(
     if not rf:
         return _fail("reportfile_not_found_for_sr_ids")
 
-    content = rf.content
-    if content is None:
-        return _fail("reportfile_content_is_none")
-    if isinstance(content, memoryview):
-        content = content.tobytes()
-    if len(content) <= 0:
-        return _fail("reportfile_content_empty")
-
-    logging.info(
-        "[SVR][DL][FOUND] respondent_id=%s serial_no=%s reportfile_id=%s sr_id=%s filename=%s bytes=%s",
-        resp.id, getattr(resp, "serial_no", None), getattr(rf, "id", None),
-        rf.survey_response_id, rf.filename, len(content)
-    )
-
+    #리포트 다운로드 시 DB, render disk 둘다 보는 버전. db데이터 필요없어지면 코드 수정 필요
     filename = rf.filename or "report.pdf"
     cd = _content_disposition_attachment(filename)
 
-    # (한글헤더 오류 임시로그) 여기 1줄 넣어두면, 다음 로그에서 헤더가 진짜 ASCII인지 확인 가능
-    logging.info("[SVR][DL][CD] %s", cd)
+    # ✅ disk 우선
+    fp = getattr(rf, "file_path", None)
+    if fp:
+        p = _report_abs_path(fp)
+        if p.exists() and p.is_file():
+            return FileResponse(
+                path=str(p),
+                media_type="application/pdf",
+                headers={"Content-Disposition": cd},
+            )
+
+    # DB fallback
+    content = _read_report_bytes(rf)
+    if not content:
+        return _fail("reportfile_missing_on_disk_and_db")
 
     return Response(
         content=content,
@@ -3500,7 +3544,11 @@ async def admin_send_reports(
         if resp.status != "report_uploaded":
             not_uploaded += 1
             continue
-        if not rf or not getattr(rf, "content", None):
+        pdf_bytes = _read_report_bytes(rf) if rf else None
+        if not pdf_bytes:
+            missing_report += 1
+            continue
+        if len(pdf_bytes) > MAX_EMAIL_ATTACHMENT_BYTES:
             missing_report += 1
             continue
         if not ua or not (ua.mail or "").strip():
@@ -3561,7 +3609,7 @@ async def admin_send_reports(
             applicant_name=applicant_name_raw,  # 본문은 마스킹 불필요(요청사항)
             partner_requested_at_kst_str=partner_requested_at_kst_str,
             pdf_filename=(rf.filename or "report.pdf"),
-            pdf_bytes=rf.content,
+            pdf_bytes=_read_report_bytes(rf) or b"",
         )
 
         if ok:
@@ -3582,7 +3630,7 @@ async def admin_send_reports(
     return _redirect_with_msg(next, msg)
 
 
-#가온엔 관리페이지 리포트업로드 라우트
+#가온엔 관리페이지 리포트업로드 라우트 (render disk)
 @admin_router.post("/response/{rid}/report")
 async def admin_upload_report(
     rid: int,
@@ -3596,33 +3644,48 @@ async def admin_upload_report(
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF만 업로드 가능합니다.")
 
-    # ✅ 큰 파일은 DB/메모리에 부담 → 청크로 읽으면서 용량 제한
-    MAX_PDF_BYTES = 15 * 1024 * 1024  # 15MB
+    # ✅ 디스크로 스트리밍 저장(대용량도 메모리/DB 부담 최소화)
+    storage_name = f"sr_{rid}_{now_kst().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(6)}.pdf"
+    abs_path = _report_abs_path(storage_name)
 
     total = 0
-    buf = bytearray()
-    while True:
-        chunk = await file.read(1024 * 1024)  # 1MB
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > MAX_PDF_BYTES:
-            return _redirect_with_msg(_safe_next_url(next), "PDF 용량이 너무 큽니다. (최대 15MB)")
-        buf.extend(chunk)
+    try:
+        with abs_path.open("wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)  # 1MB
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_REPORT_UPLOAD_BYTES:
+                    try:
+                        f.close()
+                    except Exception:
+                        pass
+                    _delete_report_disk_file(storage_name)
+                    return _redirect_with_msg(_safe_next_url(next), f"PDF 용량이 너무 큽니다. (최대 {int(MAX_REPORT_UPLOAD_BYTES/1024/1024)}MB)")
+                f.write(chunk)
+    except Exception as e:
+        _delete_report_disk_file(storage_name)
+        logging.error("[REPORT][UPLOAD][DISK] rid=%s err=%r", rid, e)
+        return _redirect_with_msg(_safe_next_url(next), "파일 저장 중 오류가 발생했습니다. 다시 시도해주세요.")
 
-    content = bytes(buf)
-    if not content:
+    if total <= 0:
+        _delete_report_disk_file(storage_name)
         return _redirect_with_msg(_safe_next_url(next), "업로드 파일을 읽지 못했습니다. 다시 시도해주세요.")
 
     try:
-        # ✅ 기존 파일 있으면 교체 (중간 commit 절대 금지)
-        old = session.exec(
-            select(ReportFile).where(ReportFile.survey_response_id == rid)
-        ).first()
+        # ✅ 기존 ReportFile 있으면 디스크 파일까지 함께 교체
+        old = session.exec(select(ReportFile).where(ReportFile.survey_response_id == rid)).first()
         if old:
+            _delete_report_disk_file(getattr(old, "file_path", None))
             session.delete(old)
 
-        rf = ReportFile(survey_response_id=rid, filename=file.filename, content=content)
+        rf = ReportFile(
+            survey_response_id=rid,
+            filename=file.filename,
+            file_path=storage_name,
+            content=None,
+        )
         session.add(rf)
 
         # 상태 업데이트
@@ -3637,31 +3700,15 @@ async def admin_upload_report(
         return RedirectResponse(url=_safe_next_url(next), status_code=303)
 
     except OperationalError as e:
-        # 커밋이 DB에서는 반영됐는데 클라이언트만 예외로 보이는 케이스가 있어 확인 후 처리
         session.rollback()
         logging.error("[REPORT][UPLOAD][DB] OperationalError rid=%s err=%r", rid, e)
-
-        # ✅ DB에 실제 저장됐는지 재확인 (새 세션으로)
-        try:
-            session.close()
-        except Exception:
-            pass
-
-        try:
-            with Session(engine) as s2:
-                rf2 = s2.exec(select(ReportFile).where(ReportFile.survey_response_id == rid)).first()
-                if rf2 and rf2.content:
-                    content2 = rf2.content.tobytes() if isinstance(rf2.content, memoryview) else rf2.content
-                    if content2 and len(content2) > 0:
-                        # 실제 저장 성공으로 간주
-                        return RedirectResponse(url=_safe_next_url(next), status_code=303)
-        except Exception as e2:
-            logging.error("[REPORT][UPLOAD][VERIFY] rid=%s err=%r", rid, e2)
-
+        # 디스크에 파일은 저장됐으니, DB 저장 실패면 파일도 롤백(정합성 유지)
+        _delete_report_disk_file(storage_name)
         return _redirect_with_msg(_safe_next_url(next), "DB 연결이 일시적으로 불안정합니다. 잠시 후 다시 업로드해주세요.")
 
 
-# 리포트 삭제 (POST)
+
+# 리포트 삭제 (POST, DB, render disk 둘다 삭제하는 버전. 나중에 db데이터 읽기 필요없어지면 코드 정리할 필요있음)
 @admin_router.post("/response/{rid}/report/delete")
 def admin_delete_report(
     rid: int,
@@ -3671,44 +3718,59 @@ def admin_delete_report(
     sr = session.get(SurveyResponse, rid)
     if not sr:
         raise HTTPException(status_code=404, detail="not found")
+
     rf = session.exec(select(ReportFile).where(ReportFile.survey_response_id == rid)).first()
     if rf:
+        _delete_report_disk_file(getattr(rf, "file_path", None))
         session.delete(rf)
+
     # 상태는 업로드 이전 단계로(접수완료 유지)
     resp = session.get(Respondent, sr.respondent_id)
     if resp and resp.status == "report_uploaded":
         resp.status = "accepted"
         session.add(resp)
+
     session.commit()
     return RedirectResponse(url=_safe_next_url(next), status_code=303)
 
-#리포트 다운로드
+#리포트 다운로드(render disk, db 모두 보는 버전. 나중에 db데이터 읽기 필요없어지면 코드 정리할 필요있음)
 @admin_router.get("/response/{rid}/report/download")
 def admin_download_report(rid: int, session: Session = Depends(get_session)):
     rf = session.exec(
         select(ReportFile).where(ReportFile.survey_response_id == rid)
     ).first()
 
-    if not rf or not getattr(rf, "content", None):
-        # JSON 404 대신, 관리자 화면으로 msg 리다이렉트
+    if not rf:
         return _redirect_with_msg("/admin/responses", "리포트 파일이 존재하지 않습니다.")
 
     filename = (rf.filename or f"report_{rid}.pdf").strip()
     if not filename.lower().endswith(".pdf"):
         filename += ".pdf"
+    cd = _content_disposition_attachment(filename)
 
-    # UTF-8 파일명 대응 (공백/괄호 등)
-    quoted = urllib.parse.quote(filename)
+    # 1) disk 우선
+    fp = getattr(rf, "file_path", None)
+    if fp:
+        p = _report_abs_path(fp)
+        if p.exists() and p.is_file():
+            return FileResponse(
+                path=str(p),
+                media_type="application/pdf",
+                headers={"Content-Disposition": cd},
+            )
 
-    headers = {
-        "Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"
-    }
+    # 2) DB fallback
+    b = _read_report_bytes(rf)
+    if not b:
+        return _redirect_with_msg("/admin/responses", "리포트 파일이 존재하지 않습니다.")
 
     return StreamingResponse(
-        BytesIO(rf.content),
+        BytesIO(b),
         media_type="application/pdf",
-        headers=headers
+        headers={"Content-Disposition": cd},
     )
+
+
 
 # CSV (GET)
 @admin_router.get("/responses.csv")
