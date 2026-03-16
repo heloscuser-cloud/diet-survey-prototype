@@ -292,23 +292,16 @@ def _delete_report_disk_file(file_path: str | None):
         logging.warning("[REPORT][DISK][DELETE] path=%s err=%r", str(p), e)
 
 def _read_report_bytes(rf) -> bytes | None:
-    # 1) disk 우선
     fp = getattr(rf, "file_path", None)
-    if fp:
-        p = _report_abs_path(fp)
-        try:
-            if p.exists() and p.is_file():
-                return p.read_bytes()
-        except Exception as e:
-            logging.warning("[REPORT][DISK][READ] path=%s err=%r", str(p), e)
-
-    # 2) DB fallback
-    b = getattr(rf, "content", None)
-    if b is None:
+    if not fp:
         return None
-    if isinstance(b, memoryview):
-        b = b.tobytes()
-    return b if (b and len(b) > 0) else None
+    p = _report_abs_path(fp)
+    try:
+        if p.exists() and p.is_file():
+            return p.read_bytes()
+    except Exception as e:
+        logging.warning("[REPORT][DISK][READ] path=%s err=%r", str(p), e)
+    return None
 
 
 # ---- Models ----
@@ -2603,11 +2596,11 @@ def partner_supervisor_report_download_by_serial(
     if not rf:
         return _fail("reportfile_not_found_for_sr_ids")
 
-    #리포트 다운로드 시 DB, render disk 둘다 보는 버전. db데이터 필요없어지면 코드 수정 필요
+    #리포트 다운로드 시 DISK 조회
     filename = rf.filename or "report.pdf"
     cd = _content_disposition_attachment(filename)
 
-    # ✅ disk 우선
+    # ✅ disk
     fp = getattr(rf, "file_path", None)
     if fp:
         p = _report_abs_path(fp)
@@ -2618,16 +2611,7 @@ def partner_supervisor_report_download_by_serial(
                 headers={"Content-Disposition": cd},
             )
 
-    # DB fallback
-    content = _read_report_bytes(rf)
-    if not content:
-        return _fail("reportfile_missing_on_disk_and_db")
-
-    return Response(
-        content=content,
-        media_type="application/pdf",
-        headers={"Content-Disposition": cd},
-    )
+    return _fail("reportfile_missing_on_disk")
 
 
 #관리자페이지 메모 저장기능
@@ -3733,7 +3717,8 @@ def admin_delete_report(
     session.commit()
     return RedirectResponse(url=_safe_next_url(next), status_code=303)
 
-#리포트 다운로드(render disk, db 모두 보는 버전. 나중에 db데이터 읽기 필요없어지면 코드 정리할 필요있음)
+
+#리포트 다운로드(render disk 보는 버전)
 @admin_router.get("/response/{rid}/report/download")
 def admin_download_report(rid: int, session: Session = Depends(get_session)):
     rf = session.exec(
@@ -3748,7 +3733,7 @@ def admin_download_report(rid: int, session: Session = Depends(get_session)):
         filename += ".pdf"
     cd = _content_disposition_attachment(filename)
 
-    # 1) disk 우선
+    # disk-only
     fp = getattr(rf, "file_path", None)
     if fp:
         p = _report_abs_path(fp)
@@ -3759,17 +3744,7 @@ def admin_download_report(rid: int, session: Session = Depends(get_session)):
                 headers={"Content-Disposition": cd},
             )
 
-    # 2) DB fallback
-    b = _read_report_bytes(rf)
-    if not b:
-        return _redirect_with_msg("/admin/responses", "리포트 파일이 존재하지 않습니다.")
-
-    return StreamingResponse(
-        BytesIO(b),
-        media_type="application/pdf",
-        headers={"Content-Disposition": cd},
-    )
-
+    return _redirect_with_msg("/admin/responses", "리포트 파일이 존재하지 않습니다.")
 
 
 # CSV (GET)
