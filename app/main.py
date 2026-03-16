@@ -3597,7 +3597,7 @@ async def admin_upload_report(
         raise HTTPException(status_code=400, detail="PDF만 업로드 가능합니다.")
 
     # ✅ 큰 파일은 DB/메모리에 부담 → 청크로 읽으면서 용량 제한
-    MAX_PDF_BYTES = 30 * 1024 * 1024  # 30MB
+    MAX_PDF_BYTES = 15 * 1024 * 1024  # 15MB
 
     total = 0
     buf = bytearray()
