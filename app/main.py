@@ -26,7 +26,7 @@ from itsdangerous import (
     TimestampSigner, BadSignature, SignatureExpired,
     URLSafeSerializer, URLSafeTimedSerializer
 )
-import os, smtplib, ssl, socket, traceback, time, sys, base64, hashlib
+import os, smtplib, ssl, socket, traceback, time, sys, base64, hashlib, asyncio
 from Crypto.Cipher import AES
 from email.message import EmailMessage
 import zipfile
@@ -2754,6 +2754,249 @@ def partner_supervisor_save_memo(
     return _redirect_partner_with_msg(next, "저장되었습니다.")
 
 
+#파트너 관리자페이지 담당자 지정/분석신청 기능 (담당자검색API)
+@app.get("/partner/supervisor/assignees")
+def supervisor_search_assignees(
+    request: Request,
+    q: str | None = None,
+    session: Session = Depends(get_session),
+):
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        raise HTTPException(status_code=401, detail="login required")
+
+    ua_me = session.get(UserAdmin, int(partner_id))
+    if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    my_division = (ua_me.division or "").strip()
+    if not my_division:
+        return JSONResponse([])
+
+    qq = (q or "").strip()
+    like = f"%{qq}%"
+    qq_digits = _phone_digits(qq)
+
+    stmt = select(UserAdmin).where(
+        func.trim(UserAdmin.division) == my_division,
+        UserAdmin.is_active == True,
+    )
+
+    if qq:
+        conds = [UserAdmin.name.ilike(like), UserAdmin.phone.ilike(like)]
+        if qq_digits:
+            conds.append(UserAdmin.phone.ilike(f"%{qq_digits}%"))
+        stmt = stmt.where(or_(*conds))
+
+    rows = session.exec(stmt.order_by(UserAdmin.name.asc()).limit(50)).all()
+    data = []
+    for ua in rows:
+        data.append({
+            "id": ua.id,
+            "name": ua.name or "",
+            "department": ua.department or "",
+            "phone": ua.phone or "",
+            "mail": ua.mail or "",
+        })
+    return JSONResponse(data)
+
+#관리자페이지 담당자지정&분석신청
+@app.post("/partner/supervisor/assign")
+def supervisor_assign(
+    request: Request,
+    ids: str = Form(...),           # respondent ids (comma)
+    assignee_id: int = Form(...),   # user_admin.id
+    next: str = Form("/partner/supervisor"),
+    session: Session = Depends(get_session),
+):
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=303)
+
+    ua_me = session.get(UserAdmin, int(partner_id))
+    if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
+        return _redirect_partner_with_msg(next, "권한이 없습니다.")
+
+    my_division = (ua_me.division or "").strip()
+    if not my_division:
+        return _redirect_partner_with_msg(next, "소속정보가 없습니다.")
+
+    # 선택한 담당자
+    ua_target = session.get(UserAdmin, int(assignee_id))
+    if not ua_target or (ua_target.division or "").strip() != my_division or not bool(getattr(ua_target, "is_active", True)):
+        return _redirect_partner_with_msg(next, "선택한 담당자가 유효하지 않습니다.")
+
+    id_list = [int(x) for x in (ids or "").split(",") if x.strip().isdigit()]
+    if not id_list:
+        return _redirect_partner_with_msg(next, "선택한 건이 없습니다.")
+
+    # ✅ 조건: '문진제출' 상태만 (submitted + 담당자신청일 없음)
+    invalid = 0
+    targets: list[Respondent] = []
+    for rid in id_list:
+        resp = session.get(Respondent, rid)
+        if not resp or (resp.campaign_id or "").strip() != my_division:
+            invalid += 1
+            continue
+
+        # 문진제출 조건
+        if (resp.status or "") != "submitted":
+            invalid += 1
+            continue
+
+        # 현재 partner_id 기준 pcm 존재하면 이미 분석신청으로 간주
+        if resp.partner_id:
+            has_pcm = session.exec(
+                select(func.count())
+                .select_from(PartnerClientMapping)
+                .where(
+                    PartnerClientMapping.partner_id == int(resp.partner_id),
+                    PartnerClientMapping.client_phone == _phone_digits(resp.client_phone),
+                )
+            ).one()
+            if int(has_pcm or 0) > 0:
+                invalid += 1
+                continue
+
+        targets.append(resp)
+
+    if invalid > 0:
+        return _redirect_partner_with_msg(
+            next,
+            "선택한 건 중 이미 분석신청이 완료된 건이 있습니다.\n선택 목록을 확인 후 시도해주세요."
+        )
+
+    # 실행
+    now = now_kst()
+    done = 0
+    for resp in targets:
+        resp.client_phone = _phone_digits(resp.client_phone)
+        resp.partner_id = int(assignee_id)
+        resp.is_mapped = True
+        resp.updated_at = now
+        session.add(resp)
+
+        # 담당자신청일(=분석신청) 생성
+        latest_submitted = session.exec(
+            select(func.max(SurveyResponse.submitted_at))
+            .where(SurveyResponse.respondent_id == resp.id)
+        ).one()
+
+        pcm = PartnerClientMapping(
+            partner_id=int(assignee_id),
+            partner_name=(ua_target.name or "").strip(),
+            partner_phone=_phone_digits(ua_target.phone),
+            client_name=(resp.applicant_name or "").strip(),
+            client_phone=_phone_digits(resp.client_phone),
+            is_mapped=True,
+            client_submitted_at=latest_submitted,
+        )
+        session.add(pcm)
+        done += 1
+
+    session.commit()
+    return _redirect_partner_with_msg(next, f"담당자 지정 및 분석신청을 완료했습니다. ({done}건)")
+
+#관리자페이지 담당자 변경 라우트
+@app.post("/partner/supervisor/reassign")
+def supervisor_reassign(
+    request: Request,
+    ids: str = Form(...),           # respondent ids (comma)
+    assignee_id: int = Form(...),   # user_admin.id
+    next: str = Form("/partner/supervisor"),
+    session: Session = Depends(get_session),
+):
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=303)
+
+    ua_me = session.get(UserAdmin, int(partner_id))
+    if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
+        return _redirect_partner_with_msg(next, "권한이 없습니다.")
+
+    my_division = (ua_me.division or "").strip()
+    if not my_division:
+        return _redirect_partner_with_msg(next, "소속정보가 없습니다.")
+
+    ua_target = session.get(UserAdmin, int(assignee_id))
+    if not ua_target or (ua_target.division or "").strip() != my_division or not bool(getattr(ua_target, "is_active", True)):
+        return _redirect_partner_with_msg(next, "선택한 담당자가 유효하지 않습니다.")
+
+    id_list = [int(x) for x in (ids or "").split(",") if x.strip().isdigit()]
+    if not id_list:
+        return _redirect_partner_with_msg(next, "선택한 건이 없습니다.")
+
+    # ✅ 조건: 분석신청(submitted+pcm 있음), 접수완료, 리포트업로드만
+    invalid = 0
+    targets: list[Respondent] = []
+    for rid in id_list:
+        resp = session.get(Respondent, rid)
+        if not resp or (resp.campaign_id or "").strip() != my_division:
+            invalid += 1
+            continue
+
+        st = (resp.status or "")
+        ok = False
+
+        if st == "submitted":
+            # 분석신청 판단: 현재 partner_id + client_phone 기준 pcm 존재
+            if resp.partner_id:
+                has_pcm = session.exec(
+                    select(func.count())
+                    .select_from(PartnerClientMapping)
+                    .where(
+                        PartnerClientMapping.partner_id == int(resp.partner_id),
+                        PartnerClientMapping.client_phone == _phone_digits(resp.client_phone),
+                    )
+                ).one()
+                ok = int(has_pcm or 0) > 0
+        elif st in ("accepted", "report_uploaded"):
+            ok = True
+
+        if not ok:
+            invalid += 1
+            continue
+
+        targets.append(resp)
+
+    if invalid > 0:
+        return _redirect_partner_with_msg(
+            next,
+            "분석신청 건 중 리포트 발송전 건에 한해 가능합니다.\n선택 목록을 확인 후 시도해주세요."
+        )
+
+    now = now_kst()
+    done = 0
+    for resp in targets:
+        resp.client_phone = _phone_digits(resp.client_phone)
+
+        # 담당자 변경(기존 매핑이 있어도 허용)
+        resp.partner_id = int(assignee_id)
+        resp.is_mapped = True
+        resp.updated_at = now
+        session.add(resp)
+
+        latest_submitted = session.exec(
+            select(func.max(SurveyResponse.submitted_at))
+            .where(SurveyResponse.respondent_id == resp.id)
+        ).one()
+
+        pcm = PartnerClientMapping(
+            partner_id=int(assignee_id),
+            partner_name=(ua_target.name or "").strip(),
+            partner_phone=_phone_digits(ua_target.phone),
+            client_name=(resp.applicant_name or "").strip(),
+            client_phone=_phone_digits(resp.client_phone),
+            is_mapped=True,
+            client_submitted_at=latest_submitted,
+        )
+        session.add(pcm)
+        done += 1
+
+    session.commit()
+    return _redirect_partner_with_msg(next, f"담당자 변경을 완료했습니다. ({done}건)")
+
+
 #파트너 관리자 정산페이지
 @app.get("/partner/calculate", response_class=HTMLResponse)
 def partner_calculate(
@@ -3485,20 +3728,20 @@ def _redirect_partner_with_msg(next_url: str | None, msg: str) -> RedirectRespon
     new_url = urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
     return RedirectResponse(url=new_url, status_code=303)
 
+
 # 접수완료 처리 (POST + Form)
 @admin_router.post("/responses/accept")
 async def admin_bulk_accept(
     request: Request,
     response: Response,
     next: str | None = Form(None),
-    ids: str = Form(...),  # "1,2,3"
+    ids: str = Form(...),  # "1,2,3" (SurveyResponse.id들)
     session: Session = Depends(get_session),
 ):
-
-    # ... 나머지 처리 및 RedirectResponse 반환
-    id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+    id_list = [int(x) for x in (ids or "").split(",") if x.strip().isdigit()]
     if not id_list:
         return RedirectResponse(url=_safe_next_url(next), status_code=303)
+
     srs = session.exec(select(SurveyResponse).where(SurveyResponse.id.in_(id_list))).all()
     sent_cnt = 0
     accepted_cnt = 0
@@ -3507,10 +3750,14 @@ async def admin_bulk_accept(
         resp = session.get(Respondent, sr.respondent_id)
         if not resp:
             continue
+
+        # 리포트 발송 완료 건은 접수완료로 변경 금지
         if resp.status == "report_sent":
             sent_cnt += 1
             continue
+
         resp.status = "accepted"
+        resp.updated_at = now_kst()
         session.add(resp)
         accepted_cnt += 1
 
@@ -3523,9 +3770,55 @@ async def admin_bulk_accept(
             f"(접수완료 처리 {accepted_cnt}건)"
         )
         return _redirect_with_msg(next, msg)
-    # ✅ 정상 케이스도 반드시 redirect 반환
-    msg = f"접수를 완료했습니다. ({accepted_cnt}건)"
-    return _redirect_with_msg(next, msg)
+
+    return _redirect_with_msg(next, f"접수완료 처리를 완료했습니다. ({accepted_cnt}건)")
+
+
+# 접수취소(accepted -> submitted)
+@admin_router.post("/responses/unaccept")
+async def admin_bulk_unaccept(
+    request: Request,
+    response: Response,
+    next: str | None = Form(None),
+    ids: str = Form(...),  # "1,2,3" (SurveyResponse.id들)
+    session: Session = Depends(get_session),
+):
+    id_list = [int(x) for x in (ids or "").split(",") if x.strip().isdigit()]
+    if not id_list:
+        return RedirectResponse(url=_safe_next_url(next), status_code=303)
+
+    srs = session.exec(select(SurveyResponse).where(SurveyResponse.id.in_(id_list))).all()
+    if not srs:
+        return RedirectResponse(url=_safe_next_url(next), status_code=303)
+
+    invalid = 0
+    ok_cnt = 0
+
+    # 1) 유효성 검사: "접수완료(accepted)"에서만 가능
+    for sr in srs:
+        resp = session.get(Respondent, sr.respondent_id)
+        if not resp:
+            invalid += 1
+            continue
+        if resp.status != "accepted":
+            invalid += 1
+
+    if invalid > 0:
+        return _redirect_with_msg(next, "접수완료 상태에서만 접수취소가 가능합니다.")
+
+    # 2) 롤백
+    for sr in srs:
+        resp = session.get(Respondent, sr.respondent_id)
+        if not resp:
+            continue
+        resp.status = "submitted"   # 분석신청(=submitted + 담당자신청일 존재 시)로 복귀
+        resp.updated_at = now_kst()
+        session.add(resp)
+        ok_cnt += 1
+
+    session.commit()
+    return _redirect_with_msg(next, f"접수취소 처리를 완료했습니다. ({ok_cnt}건)")
+
 
 @admin_router.post("/responses/report/send")
 async def admin_send_reports(
@@ -5057,7 +5350,8 @@ async def dh_simple_start(
                 dh_body.get("HPNUMBER"),
             )
 
-            rsp = DATAHUB.simple_auth_start(
+            rsp = await asyncio.to_thread(
+                DATAHUB.simple_auth_start,
                 login_option=dh_body["LOGINOPTION"],
                 user_name=dh_body["USERNAME"],
                 hp_number=dh_body["HPNUMBER"],
@@ -5076,7 +5370,7 @@ async def dh_simple_start(
             )
 
             if attempt >= 3:
-                msg = "현재 국가건강검진 조회 서비스 연결이 불안정하여 연결에 실패하였습니다.\n잠시 후 다시 시도해주세요."
+                msg = "국가건강검진 조회 연결이 일시적으로 지연되고 있습니다.\n잠시 후 다시 시도해주세요."
                 logging.error(
                     "[DH][START][TIMEOUT] attempts=3 last_error=%r",
                     last_error,
@@ -5089,7 +5383,8 @@ async def dh_simple_start(
                         "data": None
                     }
                 )
-            time.sleep(0.3)
+
+            await asyncio.sleep(0.3)
 
 
     try:
@@ -5183,7 +5478,8 @@ async def dh_simple_complete(
 
     # 1) Step2: /scrap/captcha (키는 모두 포함; 값은 비어도 OK) — 예외/타임아웃 안전 처리
     try:
-        step2_res = DATAHUB.simple_auth_complete(
+        step2_res = await asyncio.to_thread(
+            DATAHUB.simple_auth_complete,
             callback_id=cbid,
             callback_type=cbtp,
             callbackResponse=str(payload.get("callbackResponse") or ""),
@@ -5296,11 +5592,11 @@ async def dh_simple_complete(
             # ✅ 가이드에 맞게: Step2 이후 재조회도 callback 기반(light)만 사용
             #    (full=신상정보 포함 재요청은 Step1 성격이라 0001 재발 가능)
             fetch_body = {"CALLBACKID": cbid, "CALLBACKTYPE": cbtp}
-            rsp2 = DATAHUB.medical_checkup_simple(fetch_body)
+            rsp2 = await asyncio.to_thread(DATAHUB.medical_checkup_simple, fetch_body)
             kind = "light"
         except Exception as e:
             logging.warning("[DH-COMPLETE][FETCH][ERR] %r", e)
-            time.sleep(NHIS_FETCH_INTERVAL)
+            await asyncio.sleep(NHIS_FETCH_INTERVAL)
             continue
 
         # 감사로그(요약)
@@ -5345,7 +5641,6 @@ async def dh_simple_complete(
                     "data": data2,
                 },
             )
-
 
         # 내부 에러 힌트만 DEBUG로
         inner_ecode  = data2.get("ECODE")
@@ -5400,7 +5695,8 @@ async def dh_simple_complete(
             telecomGubun = str(SP.get("TELECOMGUBUN", "")).strip() if loginOption == "3" else None
 
             try:
-                rsp_id = DATAHUB.medical_checkup_simple_with_identity(
+                rsp_id = await asyncio.to_thread(
+                    DATAHUB.medical_checkup_simple_with_identity,
                     callback_id=cbid,
                     callback_type=cbtp,
                     login_option=loginOption,
@@ -5436,8 +5732,46 @@ async def dh_simple_complete(
                 logging.warning("[DH-COMPLETE][FALLBACK][ERR] %r", e)
 
             # fallback 이후에는 바로 다음 폴링 주기로
-            time.sleep(NHIS_FETCH_INTERVAL)
+            await asyncio.sleep(NHIS_FETCH_INTERVAL)
             continue
+
+        if err2 == "0000" and isinstance(income, list) and len(income) > 0:
+            picked = pick_latest_general(rsp2, mode=("all" if want_all else "latest"))
+            request.session["nhis_latest"] = picked if isinstance(picked, dict) else {}
+            # DB 저장 (엑셀 병합용)
+            try:
+                picked_one = pick_latest_general(rsp2, mode="latest")
+                _save_nhis_to_db(session, request, picked_one, rsp2)
+                request.session["nhis_latest"] = picked_one or {}
+            except Exception as e:
+                logging.warning("[NHIS][DB][WARN][fetch-save] %r", e)
+
+            # --- 성공 직전 User 인적정보 업데이트(이름/성별/생년월일) ---
+            try:
+                auth_cookie = request.cookies.get(AUTH_COOKIE_NAME)
+                user_id = verify_user(auth_cookie) if auth_cookie else -1
+                if user_id and user_id > 0:
+                    user = session.get(User, user_id)
+                    if user:
+                        sp = (request.session or {}).get("nhis_start_payload") or {}
+                        nm = str(sp.get("USERNAME") or "").strip()
+                        bd8 = str(sp.get("JUMIN") or "").strip()
+                        gd = (request.session or {}).get("nhis_gender") or ""
+                        # 생년월일 파싱(YYYYMMDD)
+                        bd_date = None
+                        if len(bd8) == 8 and bd8.isdigit():
+                            bd_date = date(int(bd8[0:4]), int(bd8[4:6]), int(bd8[6:8]))
+                        # 저장(있을 때만 덮어씀)
+                        if nm: user.name_enc = nm
+                        if gd in ("남","여"): user.gender = gd
+                        if bd_date: user.birth_date = bd_date; user.birth_year = bd_date.year
+                        session.add(user); session.commit()
+            except Exception as _e:
+                logging.debug("[NHIS][USER-SNAPSHOT][WARN] %r", _e)
+
+            return JSONResponse({"ok": True, "errCode": "0000", "message": "OK", "data": picked}, status_code=200)
+
+        await asyncio.sleep(NHIS_FETCH_INTERVAL)
 
 
 
@@ -5480,7 +5814,7 @@ async def dh_simple_complete(
         time.sleep(NHIS_FETCH_INTERVAL)
 
 
-    return JSONResponse({"ok": False, "errCode": "2020", "message": "아직 인증이 완료되지 않았거나 데이터가 준비되지 않았습니다."}, status_code=202)
+    return JSONResponse({"ok": False, "errCode": "2020", "message": "인증은 완료되었으나, 데이터 수신에 실패했습니다. 페이지 새로고침 후 다시 시도해주세요."}, status_code=202)
 
 
 

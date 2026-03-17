@@ -199,17 +199,22 @@ a.pdf-link:hover{
     <form id="acceptForm" method="post" action="/admin/responses/accept" style="margin:0">
       <input type="hidden" name="ids" id="acceptIds">
       <input type="hidden" name="next" id="acceptNext">
-      <button class="btn btn-cyan btn-sm" type="button" onclick="bulkAccept()" style="width:120px;">접수 완료</button>
+      <button class="btn btn-cyan btn-sm" type="button" onclick="bulkAccept()" style="width:120px;">접수완료</button>
+    </form>
+    <form id="unacceptForm" method="post" action="/admin/responses/unaccept" style="margin:0">
+      <input type="hidden" name="ids" id="unacceptIds">
+      <input type="hidden" name="next" id="unacceptNext">
+      <button class="btn btn-sky btn-sm" type="button" onclick="bulkUnaccept()" style="width:120px;">접수취소</button>
     </form>
     <form id="xlsxForm" method="post" action="/admin/responses/export.xlsx" style="margin:0">
       <input type="hidden" name="ids" id="xlsxIds">
       <input type="hidden" name="next" id="xlsxNext">
-      <button class="btn btn-sky btn-sm" type="button" onclick="bulkXlsx()" style="width:120px;">엑셀 다운로드</button>
+      <button class="btn btn-cyan btn-sm" type="button" onclick="bulkXlsx()" style="width:120px;">엑셀 다운로드</button>
     </form>
     <form id="sendForm" method="post" action="/admin/responses/report/send" style="margin:0">
   <input type="hidden" name="ids" id="sendIds">
   <input type="hidden" name="next" id="sendNext">
-  <button class="btn btn-cyan btn-sm" type="button" onclick="bulkSendReport()" style="width:120px;">리포트발송</button>
+  <button class="btn btn-sky btn-sm" type="button" onclick="bulkSendReport()" style="width:120px;">리포트발송</button>
 </form>
 
   </div>
@@ -449,6 +454,13 @@ if(fd < minFrom){
     document.getElementById('acceptIds').value = ids.join(',');
     f.submit();
   }
+  function bulkUnaccept(){
+  const ids = getSelectedIds();
+  if(ids.length===0){ alert('선택된 항목이 없습니다.'); return; }
+  const f = document.getElementById('unacceptForm');
+  document.getElementById('unacceptIds').value = ids.join(',');
+  f.submit();
+  }
   function bulkXlsx(){
     const ids = getSelectedIds();
     if(ids.length===0){ alert('선택된 항목이 없습니다.'); return; }
@@ -492,6 +504,9 @@ if(fd < minFrom){
 
   const s = document.getElementById("sendNext");
   if (s) s.value = nextUrl;
+
+  const u2 = document.getElementById("unacceptNext");
+  if (u2) u2.value = nextUrl;
 
   document.querySelectorAll("input.rowNext").forEach(el => el.value = nextUrl);
 })();
