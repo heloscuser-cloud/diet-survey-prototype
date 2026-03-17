@@ -1917,35 +1917,71 @@ def partner_requests(
     # --- 상태 필터/리포트 발송 여부 반영하면서 rows 빌드 ---
     all_rows: list[tuple[PartnerClientMapping, Optional[Respondent], Optional[SurveyResponse], Optional[ReportFile]]] = []
 
+    # ✅ "같은 고객"이 아니라 "같은 건(case)"만 dedupe
+    #    - 제출건: (이름, 전화번호, client_submitted_at)
+    #    - 미제출건: pcm.id 기준(각 요청을 별도 이력으로 유지)
+    seen_case_keys: set[tuple] = set()
+
     for pcm in mappings:
         resp: Optional[Respondent] = None
         sr: Optional[SurveyResponse] = None
         rf: Optional[ReportFile] = None
 
-        # Respondent: 같은 파트너 + 이름 + 전화, 최신 1건
+        pcm_name = (pcm.client_name or "").strip()
+        pcm_phone = _phone_digits(pcm.client_phone)
+        pcm_submitted_at = getattr(pcm, "client_submitted_at", None)
+
+        # ---------------------------
+        # 1) 이 PCM이 가리키는 "정확한 respondent" 찾기
+        # ---------------------------
         try:
-            if pcm.client_name and pcm.client_phone:
-                resp = session.exec(
-                    select(Respondent)
+            if pcm_submitted_at is not None:
+                # ✅ 제출건은 client_submitted_at 으로 같은 건을 특정
+                sr = session.exec(
+                    select(SurveyResponse)
+                    .join(Respondent, SurveyResponse.respondent_id == Respondent.id)
                     .where(
-                        Respondent.partner_id == pcm.partner_id,
-                        Respondent.applicant_name == pcm.client_name,
-                        Respondent.client_phone == pcm.client_phone,
+                        Respondent.applicant_name == pcm_name,
+                        Respondent.client_phone == pcm_phone,
+                        SurveyResponse.submitted_at == pcm_submitted_at,
                     )
                     .order_by(Respondent.created_at.desc())
                 ).first()
+
+                if sr:
+                    resp = session.get(Respondent, sr.respondent_id)
+
+                    # ✅ 현재 담당자가 이미 다른 사람으로 바뀌었거나 취소되어 None이면 stale row 숨김
+                    if not resp or int(getattr(resp, "partner_id") or 0) != int(pcm.partner_id):
+                        continue
+
+            else:
+                # ✅ 미제출건은 respondent가 없어도 정상
+                #    다만, 같은 담당자/같은 고객으로 생성된 "완전 동일 건" 중복은 막기 위해 pcm.id로만 유지
+                resp = None
+
         except Exception as e:
             logging.warning(
                 "[PARTNER-REQ][RESP-LOOKUP][WARN] mapping_id=%s err=%r",
                 getattr(pcm, "id", None),
                 e,
             )
+            continue
+
+        # ---------------------------
+        # 2) 같은 건(case) 중복 제거
+        # ---------------------------
+        if pcm_submitted_at is not None:
+            case_key = (pcm_name, pcm_phone, pcm_submitted_at)
+        else:
+            case_key = ("pcm", int(pcm.id))
+
+        if case_key in seen_case_keys:
+            continue
 
         # ---------------------------
         # 필터: (1) 리포트 발송여부 status=unsent/sent
         # ---------------------------
-        # sent: Respondent.status == report_sent
-        # unsent: 그 외(응답이 없거나 report_sent가 아닌 경우 포함)
         if status == "sent":
             if not resp or resp.status != "report_sent":
                 continue
@@ -1956,41 +1992,24 @@ def partner_requests(
         # ---------------------------
         # 필터: (2) 문진 미제출 인원만 보기 (체크박스)
         # ---------------------------
-        # 문진 미제출 정의:
-        # - resp.status == submitted
-        # - pcm.created_at(담당자신청일)은 존재
-        # - pcm.client_submitted_at(고객신청일)이 비어있음
         if only_not_submitted:
-            # resp가 없어도 pcm 기준으로 문진 미제출 판단 가능해야 누락이 없음
             is_not_submitted = (pcm.created_at is not None) and (pcm.client_submitted_at is None)
             if not is_not_submitted:
                 continue
 
-
-
-        # SurveyResponse / ReportFile
-        if resp:
-            try:
-                sr = session.exec(
-                    select(SurveyResponse)
-                    .where(SurveyResponse.respondent_id == resp.id)
-                    .order_by(SurveyResponse.submitted_at.desc())
-                ).first()
-            except Exception as e:
-                logging.warning(
-                    "[PARTNER-REQ][SR-LOOKUP][WARN] resp_id=%s err=%r",
-                    getattr(resp, "id", None),
-                    e,
+        # ---------------------------
+        # ReportFile
+        # ---------------------------
+        if sr:
+            rf = session.exec(
+                select(ReportFile).where(
+                    ReportFile.survey_response_id == sr.id
                 )
-
-            if sr:
-                rf = session.exec(
-                    select(ReportFile).where(
-                        ReportFile.survey_response_id == sr.id
-                    )
-                ).first()
+            ).first()
 
         all_rows.append((pcm, resp, sr, rf))
+        seen_case_keys.add(case_key)
+
 
     # --- 페이지네이션 ---
     total = len(all_rows)
@@ -2979,17 +2998,25 @@ def supervisor_reassign(
         ok = False
 
         if st == "submitted":
-            # 분석신청 판단: 현재 partner_id + client_phone 기준 pcm 존재
+            # 분석신청 판단: 같은 건(case)에 대한 pcm 존재 여부로 확인
             if resp.partner_id:
-                has_pcm = session.exec(
-                    select(func.count())
-                    .select_from(PartnerClientMapping)
-                    .where(
-                        PartnerClientMapping.partner_id == int(resp.partner_id),
-                        PartnerClientMapping.client_phone == _phone_digits(resp.client_phone),
-                    )
+                latest_submitted = session.exec(
+                    select(func.max(SurveyResponse.submitted_at))
+                    .where(SurveyResponse.respondent_id == resp.id)
                 ).one()
-                ok = int(has_pcm or 0) > 0
+
+                if latest_submitted is not None:
+                    has_pcm = session.exec(
+                        select(func.count())
+                        .select_from(PartnerClientMapping)
+                        .where(
+                            PartnerClientMapping.partner_id == int(resp.partner_id),
+                            PartnerClientMapping.client_name == (resp.applicant_name or "").strip(),
+                            PartnerClientMapping.client_phone == _phone_digits(resp.client_phone),
+                            PartnerClientMapping.client_submitted_at == latest_submitted,
+                        )
+                    ).one()
+                    ok = int(has_pcm or 0) > 0
         elif st in ("accepted", "report_uploaded"):
             ok = True
 
@@ -3010,23 +3037,62 @@ def supervisor_reassign(
     for resp in targets:
         resp.client_phone = _phone_digits(resp.client_phone)
 
-        # 담당자 변경(기존 매핑이 있어도 허용)
-        resp.partner_id = int(assignee_id)
-        resp.is_mapped = True
-        resp.updated_at = now
-        session.add(resp)
+        old_partner_id = int(getattr(resp, "partner_id") or 0)
+        new_partner_id = int(assignee_id)
+        client_name = (resp.applicant_name or "").strip()
+        client_phone = _phone_digits(resp.client_phone)
 
         latest_submitted = session.exec(
             select(func.max(SurveyResponse.submitted_at))
             .where(SurveyResponse.respondent_id == resp.id)
         ).one()
 
+        # ✅ 이전 담당자의 "같은 건(case)" pcm만 삭제
+        if old_partner_id > 0 and latest_submitted is not None:
+            session.exec(
+                sa_text("""
+                    DELETE FROM partner_client_mapping
+                     WHERE partner_id = :pid
+                       AND client_name = :cname
+                       AND client_phone = :cphone
+                       AND client_submitted_at = :submitted_at
+                """).bindparams(
+                    pid=old_partner_id,
+                    cname=client_name,
+                    cphone=client_phone,
+                    submitted_at=latest_submitted,
+                )
+            )
+
+        # ✅ 새 담당자 쪽 동일 건 중복도 제거
+        if latest_submitted is not None:
+            session.exec(
+                sa_text("""
+                    DELETE FROM partner_client_mapping
+                     WHERE partner_id = :pid
+                       AND client_name = :cname
+                       AND client_phone = :cphone
+                       AND client_submitted_at = :submitted_at
+                """).bindparams(
+                    pid=new_partner_id,
+                    cname=client_name,
+                    cphone=client_phone,
+                    submitted_at=latest_submitted,
+                )
+            )
+
+        # 담당자 변경
+        resp.partner_id = new_partner_id
+        resp.is_mapped = True
+        resp.updated_at = now
+        session.add(resp)
+
         pcm = PartnerClientMapping(
-            partner_id=int(assignee_id),
+            partner_id=new_partner_id,
             partner_name=(ua_target.name or "").strip(),
             partner_phone=_phone_digits(ua_target.phone),
-            client_name=(resp.applicant_name or "").strip(),
-            client_phone=_phone_digits(resp.client_phone),
+            client_name=client_name,
+            client_phone=client_phone,
             is_mapped=True,
             client_submitted_at=latest_submitted,
         )
