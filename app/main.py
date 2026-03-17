@@ -1596,16 +1596,35 @@ async def partner_mapping_post(
             },
         )
 
-    # ✅ 이미 매핑 완료된 건이면 즉시 차단 (중복 처리 방지)
-    existing_done = session.exec(
-        select(PartnerClientMapping.id)
+    one_month_ago = datetime.utcnow() - timedelta(days=31)
+    # 1) 최근 1개월 내, 이름/전화가 일치하는 "최신 미매핑 respondent"가 있는지 먼저 확인
+    #    → 있으면 과거 완료 이력이 있어도 이번 최신 건을 우선 매핑할 수 있어야 함
+    latest_unmapped_resp_id = session.exec(
+        select(Respondent.id)
         .where(
-            PartnerClientMapping.partner_id == int(partner_id),
-            PartnerClientMapping.client_phone == client_phone_raw,
-            PartnerClientMapping.is_mapped == True,
+            Respondent.applicant_name == client_name,
+            Respondent.client_phone == client_phone_raw,
+            Respondent.is_mapped == False,   # noqa
+            Respondent.created_at >= one_month_ago,
         )
-        .order_by(PartnerClientMapping.created_at.desc())
+        .order_by(Respondent.created_at.desc())
     ).first()
+
+    # 2) 최신 미매핑 respondent가 없을 때만,
+    #    최근 1개월 내 완료된 매핑 이력으로 차단
+    existing_done = None
+    if not latest_unmapped_resp_id:
+        existing_done = session.exec(
+            select(PartnerClientMapping.id)
+            .where(
+                PartnerClientMapping.partner_id == int(partner_id),
+                PartnerClientMapping.client_name == client_name,
+                PartnerClientMapping.client_phone == client_phone_raw,
+                PartnerClientMapping.is_mapped == True,
+                PartnerClientMapping.created_at >= one_month_ago,
+            )
+            .order_by(PartnerClientMapping.created_at.desc())
+        ).first()
 
     if existing_done:
         return templates.TemplateResponse(
@@ -1618,9 +1637,8 @@ async def partner_mapping_post(
             },
         )
 
-    one_month_ago = datetime.utcnow() - timedelta(days=31)
-
-    # 최근 1개월 내 중복 요청 여부 확인
+    # 3) 최근 1개월 내 중복 요청 여부 확인
+    #    → 이미 완료된 요청은 재사용하지 말고, 미완료 요청만 재사용
     dup_row = session.exec(
         sa_text(
             """
@@ -1629,6 +1647,7 @@ async def partner_mapping_post(
              WHERE partner_id   = :pid
                AND client_name  = :cname
                AND client_phone = :cphone
+               AND is_mapped    = FALSE
                AND created_at  >= :from_dt
              ORDER BY created_at DESC
              LIMIT 1
