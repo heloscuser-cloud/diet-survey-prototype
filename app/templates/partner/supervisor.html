@@ -401,8 +401,9 @@
     </div>
 
     <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
-      <input id="assignee_kw" type="text" placeholder="담당자명 또는 전화번호 일부"
-             style="flex:1; padding:8px 10px; border:1px solid #e5e7eb; border-radius:10px;">
+    <input id="assignee_kw" type="text" placeholder="담당자명 또는 전화번호 일부"
+       onkeydown="if(event.key === 'Enter'){ event.preventDefault(); loadAssignees(); }"
+       style="flex:1; padding:8px 10px; border:1px solid #e5e7eb; border-radius:10px;">
       <button type="button" class="btn btn-primary btn-sm" onclick="loadAssignees()">검색</button>
     </div>
 
@@ -423,7 +424,7 @@
 
     <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
       <button type="button" class="btn btn-gray btn-sm" onclick="closeAssigneeModal()">닫기</button>
-      <button type="button" id="assigneeConfirmBtn" class="btn btn-indigo btn-sm" onclick="confirmAssignee()">진행</button>
+      <button type="button" id="assigneeConfirmBtn" class="btn btn-sky btn-sm" onclick="confirmAssignee()">진행</button>
     </div>
   </div>
 </div>

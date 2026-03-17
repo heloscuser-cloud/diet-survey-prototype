@@ -621,7 +621,8 @@ def mask_second_char(name: str | None) -> str:
         s[1] = "*"
     return "".join(s)
 
-def send_submission_email(serial_no: int, applicant_name: str, created_at_kst_str: str):
+# 접수 알림 이메일 발송
+def send_submission_email(serial_no: int, campaign_id: str | None, created_at_kst_str: str):
     host = os.getenv("SMTP_HOST")
     port_env = os.getenv("SMTP_PORT", "").strip()
     user = (os.getenv("SMTP_USER") or "").strip()
@@ -640,15 +641,15 @@ def send_submission_email(serial_no: int, applicant_name: str, created_at_kst_st
 
     # 메일 만들기
     msg = EmailMessage()
-    msg["Subject"] = f"[GaonnSurvey] 새 문진 접수 #{serial_no}"
+    msg["Subject"] = f"[GaonnSurvey] 신규 분석신청 접수 알림 #{serial_no}"
     msg["From"] = mail_from
     msg["To"] = mail_to
     body = (
-        f"새 문진이 접수되었습니다.\n"
+        f"신규 분석신청 건이 접수되었습니다.\n"
         f"- 일련번호: {serial_no}\n"
-        f"- 신청자: {applicant_name or '(미입력)'}\n"
+        f"- 신청업체: {campaign_id or '(미입력)'}\n"
         f"- 접수시각(KST): {created_at_kst_str}\n"
-        f"\n관리자 페이지에서 확인하세요."
+        f"\n가온앤 관리자 페이지에서 확인해주세요."
     )
     msg.set_content(body)
 
@@ -657,7 +658,7 @@ def send_submission_email(serial_no: int, applicant_name: str, created_at_kst_st
     def try_587():
         print("[EMAIL] connecting 587 STARTTLS...")
         with smtplib.SMTP(host, 587, timeout=timeout) as s:
-            s.set_debuglevel(1)  # SMTP 대화 로그 출력
+            s.set_debuglevel(1)
             s.ehlo()
             s.starttls(context=ctx)
             s.ehlo()
@@ -673,14 +674,12 @@ def send_submission_email(serial_no: int, applicant_name: str, created_at_kst_st
             s.send_message(msg)
         print("[EMAIL] sent OK via 465")
 
-    # IPv6 경로가 느린 환경에서 타임아웃을 줄이기 위해(선택) IPv4 우선 DNS 확인 로그
     try:
         ipv4s = [ai[4][0] for ai in socket.getaddrinfo(host, None, socket.AF_INET)]
         print(f"[EMAIL] DNS A records (IPv4): {ipv4s}")
     except Exception as _e:
         print("[EMAIL] DNS A lookup failed (non-fatal):", repr(_e))
 
-    # 시도: 587 → 실패 시 465 폴백
     try:
         try_587()
         return
@@ -1700,14 +1699,11 @@ async def partner_mapping_post(
 
             # 제출(문진 완료) 여부는 SurveyResponse.submitted_at 기준으로 판단
             if resp and sr and sr.submitted_at and (resp.serial_no or 0) > 0:
-                created_at_kst_str = (
-                    to_kst(resp.created_at).strftime("%Y-%m-%d %H:%M")
-                    if resp.created_at else now_kst().strftime("%Y-%m-%d %H:%M")
-                )
+                created_at_kst_str = now_kst().strftime("%Y-%m-%d %H:%M")
                 background_tasks.add_task(
                     send_submission_email,
                     resp.serial_no or 0,
-                    (resp.applicant_name or ""),
+                    (resp.campaign_id or ""),
                     created_at_kst_str,
                 )
     except Exception as e:
@@ -2804,6 +2800,7 @@ def supervisor_search_assignees(
 @app.post("/partner/supervisor/assign")
 def supervisor_assign(
     request: Request,
+    background_tasks: BackgroundTasks,
     ids: str = Form(...),           # respondent ids (comma)
     assignee_id: int = Form(...),   # user_admin.id
     next: str = Form("/partner/supervisor"),
@@ -2869,6 +2866,8 @@ def supervisor_assign(
     # 실행
     now = now_kst()
     done = 0
+    mail_jobs = []
+
     for resp in targets:
         resp.client_phone = _phone_digits(resp.client_phone)
         resp.partner_id = int(assignee_id)
@@ -2894,8 +2893,30 @@ def supervisor_assign(
         session.add(pcm)
         done += 1
 
+        if (resp.serial_no or 0) > 0:
+            mail_jobs.append(
+                (
+                    resp.serial_no or 0,
+                    (resp.campaign_id or ""),
+                    now.strftime("%Y-%m-%d %H:%M"),
+                )
+            )
+
     session.commit()
+
+    try:
+        for serial_no_val, campaign_id_val, created_at_kst_str in mail_jobs:
+            background_tasks.add_task(
+                send_submission_email,
+                serial_no_val,
+                campaign_id_val,
+                created_at_kst_str,
+            )
+    except Exception as e:
+        print("[EMAIL][ERR][SUPERVISOR-ASSIGN]", repr(e))
+
     return _redirect_partner_with_msg(next, f"담당자 지정 및 분석신청을 완료했습니다. ({done}건)")
+
 
 #관리자페이지 담당자 변경 라우트
 @app.post("/partner/supervisor/reassign")
@@ -4752,7 +4773,9 @@ def survey_finish(
     if resp:
         try_auto_map_partner_for_respondent(session, resp)
 
-    # ── 알림메일: 매핑 완료된 경우에만 비동기 발송 ───────────────────────────────
+    # ── 문진제출 완료시점 가온앤에 문진제출 알림 이메일 사용안함 처리_260317
+    # 알림메일: 매핑 완료된 경우에만 비동기 발송 ───────────────────────────────
+    """
     try:
         if resp and bool(getattr(resp, "is_mapped", False)):
             applicant_name = (
@@ -4776,6 +4799,8 @@ def survey_finish(
             print("[EMAIL] skip submission mail (not mapped yet): resp_id=", getattr(resp, "id", None))
     except Exception as e:
         print("[EMAIL][ERR]", repr(e))
+    """
+    print("[EMAIL] skip submission mail on survey finish: resp_id=", getattr(resp, "id", None))
 
 
     # 세션 정리 (작은 dict만 보관했었다면 이제 비워도 OK)
