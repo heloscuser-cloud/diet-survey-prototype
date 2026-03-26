@@ -131,7 +131,7 @@ with QUESTIONS_PATH.open("r", encoding="utf-8") as f:
     ALL_QUESTIONS = json.load(f)
 
 # 페이지 그룹: (start_id, end_id)
-SURVEY_STEPS = [(1, 8), (9, 15), (16, 23)]
+SURVEY_STEPS = [(1, 8), (9, 15), (16, 17)]
 
 
 def get_questions_for_step(step: int):
