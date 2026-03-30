@@ -64,11 +64,6 @@
           </div>
         {% endif %}
 
-        {% if q.id == 15 %}
-          <div class="info-box">
-            <b>※ 본 식행동 영양설문지는 귀하의 영양상태와 식행동을 평가하기 위해 사용됩니다.</span>16~17 문항은 참고용 문항으로 종합 점수 평가문항에 포함되지 않으나, 영양 컨설팅 시 참고 할 수 있는 문항입니다.</b>
-          </div>
-        {% endif %}
 
         <div class="q" data-qid="{{ q.id }}">
           <div class="q-title">{{ q.id }}. {{ q.title or q.text or q.label or q.question }}</div>
@@ -89,6 +84,13 @@
             {% endfor %}
           {% endif %}
         </div>
+
+        {% if q.id == 17 %}
+          <div class="info-box">
+            <b>※ 16~17 문항은 참고용 문항으로 종합 점수 평가문항에 포함되지 않으나, 영양 컨설팅 시 참고 할 수 있는 문항입니다.</b>
+          </div>
+        {% endif %}
+
       {% endfor %}
 
       <div class="nav">
