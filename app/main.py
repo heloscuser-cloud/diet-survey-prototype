@@ -608,9 +608,8 @@ PARTNER_RESET_SESSION_TS_KEY = "partner_pw_reset_verified_at"
 PARTNER_RESET_SESSION_TTL_SEC = 30 * 60  # 30분
 
 # 사용 허용 특수문자
-PARTNER_PW_SPECIALS = "!@#$%^&*+-_=.?~"
 PARTNER_PW_REGEX = re.compile(
-    rf"^(?=.*[A-Za-z])(?=.*\d)(?=.*[{re.escape(PARTNER_PW_SPECIALS)}])[A-Za-z\d{re.escape(PARTNER_PW_SPECIALS)}]{{8,10}}$"
+    r"^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9\s])[^\s]{8,12}$"
 )
 
 def hash_partner_password(raw_password: str) -> str:
@@ -1532,7 +1531,7 @@ async def partner_signup_submit(
     elif password != password_confirm:
         error = "비밀번호와 비밀번호 재확인이 일치하지 않습니다."
     elif not is_valid_partner_password(password):
-        error = "비밀번호는 영문, 숫자, 특수문자를 모두 포함한 8~10자리만 가능합니다. 사용 가능 특수문자: ! @ # $ % ^ & + - = _ . ? ~"
+        error = "비밀번호는 영문, 숫자, 특수문자를 모두 포함한 8~15자리만 가능합니다."
     elif len(phone_raw) < 10 or len(phone_raw) > 11:
         error = "전화번호는 숫자 10~11자리로 입력해주세요."
 
@@ -1808,7 +1807,7 @@ def partner_password_reset_change_password(
 
     if not is_valid_partner_password(new_password):
         return JSONResponse(
-            {"ok": False, "message": "숫자, 영문, 특수문자를 혼합한 8~10자리로 입력해주세요. 사용 가능 특수문자: ! @ # $ % ^ & + - = _ . ? ~"},
+            {"ok": False, "message": "숫자, 영문, 특수문자를 혼합한 8~15자리로 입력해주세요."},
             status_code=200
         )
 
@@ -1926,7 +1925,7 @@ async def partner_profile_post(
             error = "현재 비밀번호가 올바르지 않습니다."
         # 1-3) 새 비밀번호 규칙 체크
         elif not is_valid_partner_password(new_password):
-            error = "새 비밀번호는 영문, 숫자, 특수문자를 모두 포함한 8~10자리만 가능합니다. 사용 가능 특수문자: ! @ # $ % ^ & + - = _ . ? ~"
+            error = "새 비밀번호는 영문, 숫자, 특수문자를 모두 포함한 8~15자리만 가능합니다."
         # 1-4) 새 비밀번호 일치 확인
         elif new_password != new_password_confirm:
             error = "새 비밀번호와 새 비밀번호 확인이 일치하지 않습니다."

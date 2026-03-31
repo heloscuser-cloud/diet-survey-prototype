@@ -78,7 +78,7 @@
       비밀번호 입력란은 비밀번호 변경 시에만 입력합니다.
     </p>
     <p style="margin-top:-4px; font-size:12px; color:#6b7280;">
-      비밀번호는 영문, 숫자, 특수문자를 모두 포함한 8~10자리만 가능합니다. 사용 가능 특수문자: @ # $ % ^ & + = - _ . ? ~
+      비밀번호는 영문, 숫자, 특수문자를 모두 포함한 8~15자리만 가능합니다.
     </p>
 
     <!-- 현재 비밀번호 -->
@@ -90,11 +90,10 @@
 
     <!-- 새 비밀번호 -->
     <label style="display:flex; flex-direction:column; font-size:14px;">
-      새 비밀번호 (영문/숫자/특수문자 8~10자리)
+      새 비밀번호 (영문/숫자/특수문자 8~15자리)
       <input type="password" name="new_password"
              inputmode="text"
-             pattern="(?=.*[A-Za-z])(?=.*\d)(?=.*[@#$%^&+=.?~])[A-Za-z\d@#$%^&+=.?~]{8,10}"
-             minlength="8" maxlength="10"
+             minlength="8" maxlength="15"
              title="영문, 숫자, 특수문자를 모두 포함한 8~10자리"
              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
     </label>
@@ -104,7 +103,7 @@
       새 비밀번호 확인
       <input type="password" name="new_password_confirm"
              inputmode="text"
-             minlength="8" maxlength="10"
+             minlength="8" maxlength="15"
              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
     </label>
 
@@ -131,7 +130,7 @@
     const form = document.getElementById("partnerProfileForm");
     if (!form) return;
 
-    const pwRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[@#$%^&+=.?~])[A-Za-z\d@#$%^&+=.?~]{8,10}$/;
+    const pwRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9\s])[^\s]{8,12}$/;
 
     form.addEventListener("submit", function (e) {
       const currentPw = (form.querySelector('input[name="current_password"]')?.value || "").trim();
@@ -149,7 +148,7 @@
 
       if (!pwRegex.test(newPw)) {
         e.preventDefault();
-        alert("새 비밀번호는 영문, 숫자, 특수문자를 모두 포함한 8~10자리만 가능합니다.\n사용 가능 특수문자: @ # $ % ^ & + = - _ . ? ~");
+        alert("새 비밀번호는 영문, 숫자, 특수문자를 모두 포함한 8~15자리만 가능합니다.");
         return;
       }
 

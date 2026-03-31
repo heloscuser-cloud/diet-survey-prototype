@@ -90,18 +90,14 @@
              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
     </label>
 
-    <!-- 비밀번호(필수, 영문/숫자/특수문자 8~10자리) -->
+    <!-- 비밀번호(필수, 영문/숫자/특수문자 8~15자리) -->
     <label style="display:flex; flex-direction:column; font-size:14px;">
-      비밀번호(영문/숫자/특수문자 8~10자리)<span style="color:#ef4444; margin-left:4px;">*</span>
+      비밀번호(영문/숫자/특수문자 8~15자리)<span style="color:#ef4444; margin-left:4px;">*</span>
       <input type="password" name="password" required
              inputmode="text"
-             pattern="(?=.*[A-Za-z])(?=.*\d)(?=.*[@#$%^&+=.?~-_])[A-Za-z\d@#$%^&+=.?~-_]{8,10}"
-             minlength="8" maxlength="10"
-             title="영문, 숫자, 특수문자를 모두 포함한 8~10자리"
+             minlength="8" maxlength="15"
+             title="영문, 숫자, 특수문자를 모두 포함한 8~15자리"
              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
-      <small style="font-size:12px; color:#6b7280; margin-top:2px;">
-        사용 가능 특수문자: @ # $ % ^ & + = - _ . ? ~
-      </small>
     </label>
 
     <!-- 비밀번호 재확인 -->
@@ -109,20 +105,11 @@
       비밀번호 재확인<span style="color:#ef4444; margin-left:4px;">*</span>
       <input type="password" name="password_confirm" required
              inputmode="text"
-             minlength="8" maxlength="10"
+             minlength="8" maxlength="15"
              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
     </label>
 
-    <!-- 비밀번호 재확인 -->
-    <label style="display:flex; flex-direction:column; font-size:14px;">
-      비밀번호 재확인<span style="color:#ef4444; margin-left:4px;">*</span>
-      <input type="password" name="password_confirm" required
-             inputmode="numeric"
-             minlength="4" maxlength="6"
-             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
-    </label>
-
-    <button type="submit"
+     <button type="submit"
             class="btn primary"
             style="margin-top:16px; width:100%; border-radius:999px; padding:10px 0;">
       회원가입
@@ -139,7 +126,7 @@
     const form = document.querySelector('form[action="/partner/signup"]');
     if (!form) return;
 
-    const pwRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[@#$%^&+=.-_?~])[A-Za-z\d@#$%^&+=.-_?~]{8,10}$/;
+    const pwRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9\s])[^\s]{8,12}$/;
 
     form.addEventListener('submit', function (e) {
       const email = (form.querySelector('input[name="email"]')?.value || '').trim();
@@ -155,7 +142,7 @@
 
       if (pw && !pwRegex.test(pw)) {
         e.preventDefault();
-        alert("비밀번호는 영문, 숫자, 특수문자를 모두 포함한 8~10자리만 가능합니다.\n사용 가능 특수문자: @ # $ % ^ & + = - _ . ? ~");
+        alert("비밀번호는 영문, 숫자, 특수문자를 모두 포함한 8~15자리만 가능합니다.");
         return;
       }
 

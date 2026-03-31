@@ -66,7 +66,7 @@
       </div>
 
       <p style="font-size:14px; color:#374151; margin:0 0 16px; text-align:left;">
-        가입 시 등록한 이메일로 인증코드를 받아 인증은 완료해주세요.
+        가입 시 등록한 이메일로 인증코드를 받아 인증을 완료해주세요.
       </p>
 
       <div id="pwResetMsg"
@@ -74,7 +74,7 @@
 
       <div id="pwResetStep1">
         <div style="display:flex; gap:8px; margin-bottom:10px;">
-          <input type="tel" id="pwResetPhone" placeholder="휴대폰번호 입력 (숫자만)"
+          <input type="tel" id="pwResetPhone" placeholder="ID-휴대폰번호(숫자만)"
                  inputmode="numeric"
                  style="flex:1; padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px;">
           <button type="button" id="sendPwResetCode"
@@ -96,7 +96,7 @@
 
       <div id="pwResetStep2" style="display:none; margin-top:16px; text-align:left;">
         <p style="font-size:14px; color:#374151; margin:0 0 12px;">
-          숫자,영문,특수문자 혼합 8~10자리
+          숫자,영문,특수문자 혼합 8~15자리
         </p>
 
         <div style="display:flex; flex-direction:column; gap:10px;">
@@ -104,10 +104,6 @@
                  style="padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px;">
           <input type="password" id="pwResetNewPasswordConfirm" placeholder="신규 비밀번호 확인"
                  style="padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px;">
-
-          <small style="font-size:12px; color:#6b7280;">
-            사용 가능 특수문자: @ # $ % ^ & + = . ? ~
-          </small>
 
           <button type="button" id="changePwResetPassword"
                   style="padding:12px 0; border:0; border-radius:12px; background:#111827; color:#fff; cursor:pointer; font-weight:700;">
@@ -131,7 +127,7 @@
       const newPw2El = document.getElementById("pwResetNewPasswordConfirm");
       const step2 = document.getElementById("pwResetStep2");
 
-      const pwRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[@#$%^&+=.?~])[A-Za-z\d@#$%^&+=.?~]{8,10}$/;
+      const pwRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9\s])[^\s]{8,12}$/;
 
       function setMsg(text, ok) {
         msgBox.textContent = text || "";
@@ -182,7 +178,7 @@
         const new_password_confirm = (newPw2El?.value || "").trim();
 
         if (!pwRegex.test(new_password)) {
-          setMsg("숫자, 영문, 특수문자를 혼합한 8~10자리로 입력해주세요. 사용 가능 특수문자: @ # $ % ^ & + = - _ . ? ~", false);
+          setMsg("숫자, 영문, 특수문자를 혼합한 8~15자리로 입력해주세요.", false);
           return;
         }
 
