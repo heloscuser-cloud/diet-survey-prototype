@@ -126,7 +126,7 @@
     const form = document.querySelector('form[action="/partner/signup"]');
     if (!form) return;
 
-    const pwRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9\s])[^\s]{8,12}$/;
+    const pwRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9\s])[^\s]{8,15}$/;
 
     form.addEventListener('submit', function (e) {
       const email = (form.querySelector('input[name="email"]')?.value || '').trim();

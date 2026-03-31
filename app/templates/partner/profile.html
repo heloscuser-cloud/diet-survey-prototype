@@ -94,7 +94,7 @@
       <input type="password" name="new_password"
              inputmode="text"
              minlength="8" maxlength="15"
-             title="영문, 숫자, 특수문자를 모두 포함한 8~10자리"
+             title="영문, 숫자, 특수문자를 모두 포함한 8~15자리"
              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
     </label>
 
@@ -130,7 +130,7 @@
     const form = document.getElementById("partnerProfileForm");
     if (!form) return;
 
-    const pwRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9\s])[^\s]{8,12}$/;
+    const pwRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9\s])[^\s]{8,15}$/;
 
     form.addEventListener("submit", function (e) {
       const currentPw = (form.querySelector('input[name="current_password"]')?.value || "").trim();

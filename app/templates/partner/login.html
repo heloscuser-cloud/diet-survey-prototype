@@ -127,7 +127,7 @@
       const newPw2El = document.getElementById("pwResetNewPasswordConfirm");
       const step2 = document.getElementById("pwResetStep2");
 
-      const pwRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9\s])[^\s]{8,12}$/;
+      const pwRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9\s])[^\s]{8,15}$/;
 
       function setMsg(text, ok) {
         msgBox.textContent = text || "";
