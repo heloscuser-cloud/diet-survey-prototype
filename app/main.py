@@ -275,8 +275,22 @@ def _mask_birth(s: str) -> str:
 REPORTS_DIR = os.getenv("REPORTS_DIR", "/var/data/reports")
 Path(REPORTS_DIR).mkdir(parents=True, exist_ok=True)
 
-MAX_REPORT_UPLOAD_BYTES = int(os.getenv("MAX_REPORT_UPLOAD_MB", "35")) * 1024 * 1024
-MAX_EMAIL_ATTACHMENT_BYTES = int(os.getenv("MAX_EMAIL_ATTACHMENT_MB", "35")) * 1024 * 1024
+
+#render 환경변수에 적용되어있음. 해당 부분 수정 필요
+MAX_REPORT_UPLOAD_BYTES = int(os.getenv("MAX_REPORT_UPLOAD_MB", "18")) * 1024 * 1024
+
+# 이메일 첨부는 SMTP 일반 첨부 기준으로 보수적으로 잡는다.
+# 기본 18MB: Gmail 등 외부 수신자까지 고려한 안전값
+#render 환경변수에 적용되어있음. 해당 부분 수정 필요
+MAX_EMAIL_ATTACHMENT_BYTES = int(os.getenv("MAX_EMAIL_ATTACHMENT_MB", "18")) * 1024 * 1024
+
+# 한 번에 발송 가능한 최대 건수
+#render 환경변수에 적용되어있음. 해당 부분 수정 필요
+REPORT_SEND_BATCH_LIMIT = int(os.getenv("REPORT_SEND_BATCH_LIMIT", "5"))
+
+# 백그라운드 발송 시 각 메일 사이 간격(초)
+#render 환경변수에 적용되어있음. 해당 부분 수정 필요
+REPORT_SEND_INTERVAL_SEC = float(os.getenv("REPORT_SEND_INTERVAL_SEC", "0.7"))
 
 def _report_abs_path(file_path: str) -> Path:
     return Path(REPORTS_DIR) / (file_path or "")
@@ -291,6 +305,7 @@ def _delete_report_disk_file(file_path: str | None):
     except Exception as e:
         logging.warning("[REPORT][DISK][DELETE] path=%s err=%r", str(p), e)
 
+#리포트 전체 크기 확인
 def _read_report_bytes(rf) -> bytes | None:
     fp = getattr(rf, "file_path", None)
     if not fp:
@@ -302,6 +317,29 @@ def _read_report_bytes(rf) -> bytes | None:
     except Exception as e:
         logging.warning("[REPORT][DISK][READ] path=%s err=%r", str(p), e)
     return None
+
+# 리포트 크기만 확인
+def _read_report_size(rf) -> int:
+    if not rf:
+        return 0
+
+    fp = getattr(rf, "file_path", None)
+    if fp:
+        p = _report_abs_path(fp)
+        try:
+            if p.exists() and p.is_file():
+                return p.stat().st_size
+        except Exception as e:
+            logging.warning("[REPORT][DISK][SIZE] path=%s err=%r", str(p), e)
+
+    content = getattr(rf, "content", None)
+    if content:
+        try:
+            return len(content)
+        except Exception:
+            return 0
+
+    return 0
 
 
 # ---- Models ----
@@ -854,6 +892,141 @@ def send_report_email(
 
     print("[EMAIL] send failed: both 587 and 465 attempts failed")
     return False  # ✅ 중요
+
+
+
+def _get_partner_requested_at_for_resp(session: Session, resp: Respondent | None):
+    if not resp or not resp.partner_id or not (resp.client_phone or "").strip():
+        return None
+
+    try:
+        return session.exec(
+            select(func.max(PartnerClientMapping.created_at))
+            .where(
+                PartnerClientMapping.partner_id == int(resp.partner_id),
+                PartnerClientMapping.client_phone == _phone_digits(resp.client_phone),
+            )
+        ).one()
+    except Exception as e:
+        logging.warning(
+            "[REPORT-BG][PARTNER-REQUESTED-AT][WARN] resp_id=%s err=%r",
+            getattr(resp, "id", None),
+            e,
+        )
+        return None
+
+
+# 리포트 이메일 백그라운드 발송용 헬퍼
+def _send_report_batch_job(sr_ids: list[int]):
+    sr_ids = [int(x) for x in (sr_ids or []) if str(x).isdigit()]
+    if not sr_ids:
+        return
+
+    print("[REPORT-BG] start count=", len(sr_ids))
+
+    ok_cnt = 0
+    fail_cnt = 0
+    skip_cnt = 0
+
+    with Session(engine) as session:
+        for idx, sr_id in enumerate(sr_ids, start=1):
+            try:
+                sr = session.get(SurveyResponse, sr_id)
+                if not sr:
+                    print("[REPORT-BG][SKIP] sr not found:", sr_id)
+                    skip_cnt += 1
+                    continue
+
+                resp = session.get(Respondent, sr.respondent_id) if sr.respondent_id else None
+                if not resp:
+                    print("[REPORT-BG][SKIP] respondent not found: sr.id=", sr_id)
+                    skip_cnt += 1
+                    continue
+
+                # 이미 발송완료이거나 업로드 완료 상태가 아니면 스킵
+                if resp.status == "report_sent":
+                    print("[REPORT-BG][SKIP] already sent: sr.id=", sr_id)
+                    skip_cnt += 1
+                    continue
+
+                if resp.status != "report_uploaded":
+                    print("[REPORT-BG][SKIP] invalid status: sr.id=", sr_id, " status=", resp.status)
+                    skip_cnt += 1
+                    continue
+
+                rf = session.exec(
+                    select(ReportFile).where(ReportFile.survey_response_id == sr_id)
+                ).first()
+
+                ua = session.get(UserAdmin, resp.partner_id) if resp.partner_id else None
+
+                if not ua or not (ua.mail or "").strip():
+                    print("[REPORT-BG][FAIL] missing email: sr.id=", sr_id)
+                    fail_cnt += 1
+                    continue
+
+                pdf_size = _read_report_size(rf)
+                if not pdf_size:
+                    print("[REPORT-BG][FAIL] missing report: sr.id=", sr_id)
+                    fail_cnt += 1
+                    continue
+
+                if pdf_size > MAX_EMAIL_ATTACHMENT_BYTES:
+                    print(
+                        "[REPORT-BG][FAIL] report too large: sr.id=",
+                        sr_id,
+                        " size=",
+                        pdf_size,
+                        " limit=",
+                        MAX_EMAIL_ATTACHMENT_BYTES,
+                    )
+                    fail_cnt += 1
+                    continue
+
+                pdf_bytes = _read_report_bytes(rf)
+                if not pdf_bytes:
+                    print("[REPORT-BG][FAIL] read report bytes failed: sr.id=", sr_id)
+                    fail_cnt += 1
+                    continue
+
+                partner_requested_at = _get_partner_requested_at_for_resp(session, resp)
+                partner_requested_at_kst_str = to_kst_str(partner_requested_at) if partner_requested_at else ""
+
+                ok = send_report_email(
+                    to_email=(ua.mail or "").strip(),
+                    partner_name=(ua.name or "").strip() or "담당자",
+                    applicant_name=(resp.applicant_name or ""),
+                    partner_requested_at_kst_str=partner_requested_at_kst_str,
+                    pdf_filename=(rf.filename if rf and rf.filename else f"report_{sr_id}.pdf"),
+                    pdf_bytes=pdf_bytes,
+                )
+
+                if ok:
+                    now = now_kst()
+                    resp.status = "report_sent"
+                    resp.report_sent_at = now
+                    resp.updated_at = now
+                    session.add(resp)
+                    session.commit()
+                    ok_cnt += 1
+                    print("[REPORT-BG][OK] sr.id=", sr_id)
+                else:
+                    session.rollback()
+                    fail_cnt += 1
+                    print("[REPORT-BG][FAIL] send failed: sr.id=", sr_id)
+
+            except Exception as e:
+                session.rollback()
+                fail_cnt += 1
+                print("[REPORT-BG][ERR] sr.id=", sr_id, " err=", repr(e))
+                traceback.print_exc()
+
+            if idx < len(sr_ids) and REPORT_SEND_INTERVAL_SEC > 0:
+                time.sleep(REPORT_SEND_INTERVAL_SEC)
+
+    print("[REPORT-BG] done ok=", ok_cnt, " fail=", fail_cnt, " skip=", skip_cnt)
+
+
 
 #-- 업체담당자, 고객 매핑 헬퍼 1(업체 담당자가 고객 등록 후 문진 작성 시) --#
 def try_auto_map_partner_for_respondent(
@@ -4059,6 +4232,7 @@ def admin_responses(
             "msg": msg or "",
             "page_size": page_size_norm,
             "to_kst_str": to_kst_str,
+            "report_send_batch_limit": REPORT_SEND_BATCH_LIMIT,
         },
     )
 
@@ -4200,13 +4374,20 @@ async def admin_bulk_unaccept(
 
 @admin_router.post("/responses/report/send")
 async def admin_send_reports(
+    background_tasks: BackgroundTasks,
     ids: str = Form(...),
     next: str | None = Form(None),
     session: Session = Depends(get_session),
 ):
-    id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+    id_list = sorted({int(x) for x in ids.split(",") if x.strip().isdigit()})
     if not id_list:
         return RedirectResponse(url=_safe_next_url(next), status_code=303)
+
+    if len(id_list) > REPORT_SEND_BATCH_LIMIT:
+        return _redirect_with_msg(
+            next,
+            f"리포트 발송은 최대 {REPORT_SEND_BATCH_LIMIT}개씩 가능합니다."
+        )
 
     # 담당자신청일(PartnerClientMapping.created_at) 최신 1건만 (row 중복 방지)
     pcm_latest = (
@@ -4244,8 +4425,7 @@ async def admin_send_reports(
     )
 
     rows = session.exec(stmt).all()
-    
-    # DEBUG: 어떤 데이터가 들어왔는지 즉시 확인
+
     print("[REPORT-SEND] rows=", len(rows))
     for sr, resp, user, rf, ua, partner_requested_at in rows:
         print(
@@ -4254,8 +4434,8 @@ async def admin_send_reports(
             " status=", resp.status if resp else None,
             " to_email=", (ua.mail if ua else None),
             " rf=", bool(rf),
-            " rf.content.len=", (len(rf.content) if (rf and getattr(rf, "content", None)) else None),
-    )
+            " rf.size=", _read_report_size(rf) if rf else 0,
+        )
 
     if not rows:
         return RedirectResponse(url=_safe_next_url(next), status_code=303)
@@ -4264,99 +4444,81 @@ async def admin_send_reports(
     not_uploaded = 0
     missing_email = 0
     missing_report = 0
+    too_large_report = 0
 
-    # 1) 선검증: 하나라도 조건 안 맞으면 "상태 변경/메일발송" 절대 하지 않고 즉시 중단
+    job_sr_ids: list[int] = []
+
+    # 1) 선검증: 하나라도 조건 안 맞으면 전체 시작하지 않음
     for sr, resp, user, rf, ua, partner_requested_at in rows:
+        if not resp:
+            missing_report += 1
+            continue
+
         if resp.status == "report_sent":
             already_sent += 1
             continue
+
         if resp.status != "report_uploaded":
             not_uploaded += 1
             continue
-        pdf_bytes = _read_report_bytes(rf) if rf else None
-        if not pdf_bytes:
+
+        pdf_size = _read_report_size(rf) if rf else 0
+        if not pdf_size:
             missing_report += 1
             continue
-        if len(pdf_bytes) > MAX_EMAIL_ATTACHMENT_BYTES:
-            missing_report += 1
+
+        if pdf_size > MAX_EMAIL_ATTACHMENT_BYTES:
+            too_large_report += 1
             continue
+
         if not ua or not (ua.mail or "").strip():
             missing_email += 1
             continue
 
+        job_sr_ids.append(sr.id)
+
     if already_sent > 0:
-        msg = (
-            f"이미 리포트 발송을 완료한 {already_sent}건이 포함되어있습니다.\n"
-            f"확인 후 다시 시도해주세요."
+        return _redirect_with_msg(
+            next,
+            f"이미 리포트 발송을 완료한 {already_sent}건이 포함되어있습니다.\n확인 후 다시 시도해주세요."
         )
-        return _redirect_with_msg(next, msg)
 
     if not_uploaded > 0:
-        msg = (
-            f"선택한 목록 중 아직 리포트 업로드가 완료되지 않은 건이 {not_uploaded}건 있습니다.\n"
-            f"확인 후 다시 시도해주세요."
+        return _redirect_with_msg(
+            next,
+            f"선택한 목록 중 아직 리포트 업로드가 완료되지 않은 건이 {not_uploaded}건 있습니다.\n확인 후 다시 시도해주세요."
         )
-        return _redirect_with_msg(next, msg)
 
     if missing_report > 0:
-        msg = (
-            f"선택한 목록 중 리포트 파일이 없는 건이 {missing_report}건 있습니다.\n"
-            f"확인 후 다시 시도해주세요."
+        return _redirect_with_msg(
+            next,
+            f"선택한 목록 중 리포트 파일이 없는 건이 {missing_report}건 있습니다.\n확인 후 다시 시도해주세요."
         )
-        return _redirect_with_msg(next, msg)
+
+    if too_large_report > 0:
+        limit_mb = MAX_EMAIL_ATTACHMENT_BYTES // (1024 * 1024)
+        return _redirect_with_msg(
+            next,
+            f"선택한 목록 중 이메일 첨부 가능 용량({limit_mb}MB)을 초과한 리포트가 {too_large_report}건 있습니다.\n확인 후 다시 시도해주세요."
+        )
 
     if missing_email > 0:
-        msg = (
-            f"선택한 목록 중 담당자 메일 정보가 없는 건이 {missing_email}건 있습니다.\n"
-            f"확인 후 다시 시도해주세요."
-        )
-        return _redirect_with_msg(next, msg)
-
-    # 2) 실제 발송: 여기까지 왔으면 모두 report_uploaded + 메일/파일 보장
-    ok_cnt = 0
-    fail_cnt = 0
-
-    for sr, resp, user, rf, ua, partner_requested_at in rows:
-        # 제목: 신청자명 2번째 글자 마스킹
-        applicant_name_raw = (resp.applicant_name or user.name_enc or "").strip()
-        masked_applicant = mask_second_char(applicant_name_raw) if applicant_name_raw else ""
-
-        partner_name = (ua.name or "").strip()
-        to_email = (ua.mail or "").strip()
-
-        # 담당자신청일(KST 문자열)
-        partner_requested_at_kst_str = ""
-        if partner_requested_at:
-            try:
-                partner_requested_at_kst_str = to_kst(partner_requested_at).strftime("%Y-%m-%d")
-            except Exception:
-                partner_requested_at_kst_str = ""
-
-        ok = send_report_email(
-            to_email=to_email,
-            partner_name=partner_name,
-            applicant_name=applicant_name_raw,  # 본문은 마스킹 불필요(요청사항)
-            partner_requested_at_kst_str=partner_requested_at_kst_str,
-            pdf_filename=(rf.filename or "report.pdf"),
-            pdf_bytes=_read_report_bytes(rf) or b"",
+        return _redirect_with_msg(
+            next,
+            f"선택한 목록 중 담당자 메일 정보가 없는 건이 {missing_email}건 있습니다.\n확인 후 다시 시도해주세요."
         )
 
-        if ok:
-            resp.status = "report_sent"
-            resp.report_sent_at = now_kst()
-            session.add(resp)
-            ok_cnt += 1
-        else:
-            fail_cnt += 1
+    if not job_sr_ids:
+        return _redirect_with_msg(next, "발송 가능한 리포트가 없습니다.")
 
-    session.commit()
+    # 2) 실제 발송은 백그라운드에서 처리
+    background_tasks.add_task(_send_report_batch_job, job_sr_ids)
 
-    if fail_cnt > 0:
-        msg = f"리포트 발송 완료 {ok_cnt}건, 실패 {fail_cnt}건이 있습니다.\n로그를 확인해주세요."
-        return _redirect_with_msg(next, msg)
+    return _redirect_with_msg(
+        next,
+        f"리포트 발송을 시작했습니다. ({len(job_sr_ids)}건)"
+    )
 
-    msg = f"리포트 발송을 완료했습니다. ({ok_cnt}건)"
-    return _redirect_with_msg(next, msg)
 
 
 #가온엔 관리페이지 리포트업로드 라우트 (render disk)
