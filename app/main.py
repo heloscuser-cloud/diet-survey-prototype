@@ -609,7 +609,7 @@ PARTNER_RESET_SESSION_TTL_SEC = 30 * 60  # 30분
 
 # 사용 허용 특수문자
 PARTNER_PW_REGEX = re.compile(
-    r"^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9\s])[^\s]{8,12}$"
+    r"^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9\s])[^\s]{8,15}$"
 )
 
 def hash_partner_password(raw_password: str) -> str:
