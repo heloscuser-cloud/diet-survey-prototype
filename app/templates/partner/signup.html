@@ -90,13 +90,26 @@
              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
     </label>
 
-    <!-- 비밀번호(필수, 숫자 4~6자리) -->
+    <!-- 비밀번호(필수, 영문/숫자/특수문자 8~10자리) -->
     <label style="display:flex; flex-direction:column; font-size:14px;">
-      비밀번호(숫자 4~6자리)<span style="color:#ef4444; margin-left:4px;">*</span>
+      비밀번호(영문/숫자/특수문자 8~10자리)<span style="color:#ef4444; margin-left:4px;">*</span>
       <input type="password" name="password" required
-             inputmode="numeric"
-             pattern="[0-9]{4,6}"
-             minlength="4" maxlength="6"
+             inputmode="text"
+             pattern="(?=.*[A-Za-z])(?=.*\d)(?=.*[@#$%^&+=.?~-_])[A-Za-z\d@#$%^&+=.?~-_]{8,10}"
+             minlength="8" maxlength="10"
+             title="영문, 숫자, 특수문자를 모두 포함한 8~10자리"
+             style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+      <small style="font-size:12px; color:#6b7280; margin-top:2px;">
+        사용 가능 특수문자: @ # $ % ^ & + = - _ . ? ~
+      </small>
+    </label>
+
+    <!-- 비밀번호 재확인 -->
+    <label style="display:flex; flex-direction:column; font-size:14px;">
+      비밀번호 재확인<span style="color:#ef4444; margin-left:4px;">*</span>
+      <input type="password" name="password_confirm" required
+             inputmode="text"
+             minlength="8" maxlength="10"
              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
     </label>
 
@@ -126,13 +139,29 @@
     const form = document.querySelector('form[action="/partner/signup"]');
     if (!form) return;
 
+    const pwRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[@#$%^&+=.-_?~])[A-Za-z\d@#$%^&+=.-_?~]{8,10}$/;
+
     form.addEventListener('submit', function (e) {
       const email = (form.querySelector('input[name="email"]')?.value || '').trim();
       const email2 = (form.querySelector('input[name="email_confirm"]')?.value || '').trim();
+      const pw = (form.querySelector('input[name="password"]')?.value || '').trim();
+      const pw2 = (form.querySelector('input[name="password_confirm"]')?.value || '').trim();
 
       if (email && email2 && email !== email2) {
         e.preventDefault();
         alert("이메일주소를 확인해주세요");
+        return;
+      }
+
+      if (pw && !pwRegex.test(pw)) {
+        e.preventDefault();
+        alert("비밀번호는 영문, 숫자, 특수문자를 모두 포함한 8~10자리만 가능합니다.\n사용 가능 특수문자: @ # $ % ^ & + = - _ . ? ~");
+        return;
+      }
+
+      if (pw !== pw2) {
+        e.preventDefault();
+        alert("비밀번호와 비밀번호 재확인이 일치하지 않습니다.");
         return;
       }
     });

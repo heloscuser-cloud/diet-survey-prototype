@@ -560,19 +560,36 @@ def get_session():
         yield session
 
 # -- admin페이지 partner 비밀번호 검증 헬퍼 -- #
+PARTNER_VERIFY_CODE_DEFAULT = "__NO_CODE__"
+PARTNER_RESET_SESSION_PHONE_KEY = "partner_pw_reset_verified_phone"
+PARTNER_RESET_SESSION_TS_KEY = "partner_pw_reset_verified_at"
+PARTNER_RESET_SESSION_TTL_SEC = 30 * 60  # 30분
+
+# 사용 허용 특수문자
+PARTNER_PW_SPECIALS = "!@#$%^&*+-_=.?~"
+PARTNER_PW_REGEX = re.compile(
+    rf"^(?=.*[A-Za-z])(?=.*\d)(?=.*[{re.escape(PARTNER_PW_SPECIALS)}])[A-Za-z\d{re.escape(PARTNER_PW_SPECIALS)}]{{8,10}}$"
+)
+
+def hash_partner_password(raw_password: str) -> str:
+    SALT = "partner_salt_v1"   # 기존 규칙 유지, 서비스 운영 시 환경변수로 저장 권장
+    return hashlib.sha256((SALT + (raw_password or "")).encode("utf-8")).hexdigest()
+
 def verify_partner_password(raw_password: str, stored_hash: str | None) -> bool:
     """
     파트너 비밀번호 검증 헬퍼.
-    raw_password : 로그인 폼에서 입력한 비밀번호 (평문 숫자 4~6자리)
+    raw_password : 로그인 폼에서 입력한 비밀번호
     stored_hash  : DB(user_admin.password_p)에 저장된 해시 문자열
     """
     if not raw_password or not stored_hash:
         return False
+    return hash_partner_password(raw_password) == stored_hash
 
-    SALT = "partner_salt_v1"   # ❗ 서비스 운영 시 환경변수로 분리 권장
-    hashed = hashlib.sha256((SALT + raw_password).encode("utf-8")).hexdigest()
+def is_valid_partner_password(raw_password: str | None) -> bool:
+    return bool(PARTNER_PW_REGEX.fullmatch((raw_password or "").strip()))
 
-    return hashed == stored_hash
+def generate_partner_verify_code() -> str:
+    return "".join(secrets.choice("0123456789") for _ in range(6))
 
 
 #-- NHIS 인증간 고객 정보 저장 헬퍼(업체담당자, 고객 매핑 시 활용) --#
@@ -695,6 +712,61 @@ def send_submission_email(serial_no: int, campaign_id: str | None, created_at_ks
         traceback.print_exc()
 
     print("[EMAIL] send failed: both 587 and 465 attempts failed")
+
+
+# 파트너 비밀번호 찾기 인증메일 발송 라우터
+def send_partner_verify_code_email(to_email: str, verify_code: str) -> bool:
+    host = os.getenv("SMTP_HOST")
+    user = (os.getenv("SMTP_USER") or "").strip()
+    password = (os.getenv("SMTP_PASS") or "").strip()
+    mail_from = (os.getenv("SMTP_FROM") or "").strip()
+    timeout = int(os.getenv("SMTP_TIMEOUT", "25"))
+
+    if not (host and user and password and mail_from and to_email):
+        print("[EMAIL][VERIFY-CODE] SMTP env not configured or recipient missing, skip.")
+        return False
+
+    login_user = user if "@" in user else f"{user}@naver.com"
+
+    msg = EmailMessage()
+    msg["Subject"] = "가온앤 영양분석 서비스 인증코드 발송"
+    msg["From"] = mail_from
+    msg["To"] = to_email
+    body = (
+        "※ 가온앤 영양분석 서비스의 비밀번호 찾기 인증코드가 발송되었습니다.\n"
+        "※ 본인이 비밀번호 찾기를 시도한 것이 아닌 경우 가온앤 관리자에게 문의하세요.\n\n"
+        f"- 인증코드 : {verify_code}\n"
+    )
+    msg.set_content(body)
+
+    ctx = ssl.create_default_context()
+
+    try:
+        with smtplib.SMTP(host, 587, timeout=timeout) as s:
+            s.ehlo()
+            s.starttls(context=ctx)
+            s.ehlo()
+            s.login(login_user, password)
+            s.send_message(msg)
+        print("[EMAIL][VERIFY-CODE] sent OK via 587")
+        return True
+    except Exception as e1:
+        print("[EMAIL][VERIFY-CODE] 587 failed:", repr(e1))
+        traceback.print_exc()
+
+    try:
+        with smtplib.SMTP_SSL(host, 465, timeout=timeout, context=ctx) as s:
+            s.login(login_user, password)
+            s.send_message(msg)
+        print("[EMAIL][VERIFY-CODE] sent OK via 465")
+        return True
+    except Exception as e2:
+        print("[EMAIL][VERIFY-CODE] 465 failed:", repr(e2))
+        traceback.print_exc()
+
+    print("[EMAIL][VERIFY-CODE] send failed: both 587 and 465 attempts failed")
+    return False
+
 
 
 def send_report_email(
@@ -1282,8 +1354,8 @@ async def partner_signup_submit(
         error = "이메일주소를 확인해주세요"
     elif password != password_confirm:
         error = "비밀번호와 비밀번호 재확인이 일치하지 않습니다."
-    elif len(password) < 4 or len(password) > 6 or not password.isdigit():
-        error = "비밀번호는 숫자 4~6자리만 가능합니다."
+    elif not is_valid_partner_password(password):
+        error = "비밀번호는 영문, 숫자, 특수문자를 모두 포함한 8~10자리만 가능합니다. 사용 가능 특수문자: ! @ # $ % ^ & + - = _ . ? ~"
     elif len(phone_raw) < 10 or len(phone_raw) > 11:
         error = "전화번호는 숫자 10~11자리로 입력해주세요."
 
@@ -1335,15 +1407,14 @@ async def partner_signup_submit(
         )
 
     #비밀번호 처리
-    SALT = "partner_salt_v1"
-    password_p = hashlib.sha256((SALT + password).encode("utf-8")).hexdigest()
+    password_p = hash_partner_password(password)
 
     session.exec(
         sa_text("""
             INSERT INTO user_admin
-                (division, department, co_num, name, phone, mail, is_active, password_p)
+                (division, department, co_num, name, phone, mail, is_active, password_p, login_fail_count, verify_code)
             VALUES
-                (:division, :department, :co_num, :name, :phone, :mail, TRUE, :password_p)
+                (:division, :department, :co_num, :name, :phone, :mail, TRUE, :password_p, 0, :verify_code)
         """).bindparams(
             division=division,
             department=department,
@@ -1352,12 +1423,14 @@ async def partner_signup_submit(
             phone=phone_raw,
             mail=email,
             password_p=password_p,
+            verify_code=PARTNER_VERIFY_CODE_DEFAULT,
         )
     )
     session.commit()
 
     #가입 성공, 리다이렉트
     return RedirectResponse(url="/partner/login?msg=signup_ok", status_code=303)
+
 
 # ---------------------------
 # 파트너 로그인 (POST)
@@ -1369,23 +1442,225 @@ def partner_login_post(
     password: str = Form(...),
     session: Session = Depends(get_session)
 ):
-    # 업체 담당자 DB: user_admin
+    phone_raw = _phone_digits(phone)
+    password = (password or "").strip()
+
     user = session.exec(
-        select(UserAdmin).where(UserAdmin.phone == phone, UserAdmin.is_active == True)
+        select(UserAdmin).where(UserAdmin.phone == phone_raw)
     ).first()
 
-    if not user or not verify_partner_password(password, user.password_p):
+    locked_msg = "로그인 시도 횟수를 초과하였습니다. 비밀번호 찾기를 시도하거나 가온앤 관리자에게 문의해주세요."
+
+    # 1) 잠금된 계정
+    if user and (not bool(user.is_active)) and int(getattr(user, "login_fail_count", 0) or 0) >= 5:
         return templates.TemplateResponse("partner/login.html", {
             "request": request,
-            "error": "전화번호 또는 비밀번호가 올바르지 않습니다."
+            "error": locked_msg,
+            "message": None,
         })
+
+    # 2) 없는 계정
+    if not user:
+        return templates.TemplateResponse("partner/login.html", {
+            "request": request,
+            "error": "전화번호 또는 비밀번호가 올바르지 않습니다.",
+            "message": None,
+        })
+
+    # 3) 잠금 외 비활성 계정
+    if not bool(user.is_active):
+        return templates.TemplateResponse("partner/login.html", {
+            "request": request,
+            "error": "사용이 중지된 계정입니다. 가온앤 관리자에게 문의해주세요.",
+            "message": None,
+        })
+
+    # 4) 비밀번호 불일치 → 실패 횟수 증가
+    if not verify_partner_password(password, user.password_p):
+        fail_count = int(getattr(user, "login_fail_count", 0) or 0) + 1
+        user.login_fail_count = fail_count
+        user.updated_at = now_kst()
+
+        if fail_count >= 5:
+            user.login_fail_count = 5
+            user.is_active = False
+            session.add(user)
+            session.commit()
+            return templates.TemplateResponse("partner/login.html", {
+                "request": request,
+                "error": locked_msg,
+                "message": None,
+            })
+
+        session.add(user)
+        session.commit()
+
+        return templates.TemplateResponse("partner/login.html", {
+            "request": request,
+            "error": "전화번호 또는 비밀번호가 올바르지 않습니다.",
+            "message": None,
+        })
+
+    # 5) 로그인 성공 → 실패횟수/인증코드 초기화
+    user.login_fail_count = 0
+    user.verify_code = PARTNER_VERIFY_CODE_DEFAULT
+    user.updated_at = now_kst()
+    session.add(user)
+    session.commit()
 
     # 세션 값 등록 (관리자 세션과 충돌 방지)
     request.session["partner_id"] = user.id
     request.session["_iat_partner"] = int(datetime.now(timezone.utc).timestamp())
 
-    # 로그인 성공 → 파트너 대시보드로
+    # 비밀번호 재설정 인증 세션 흔적 제거
+    request.session.pop(PARTNER_RESET_SESSION_PHONE_KEY, None)
+    request.session.pop(PARTNER_RESET_SESSION_TS_KEY, None)
+
+    # 로그인 성공, 파트너 대시보드로
     return RedirectResponse(url="/partner/dashboard", status_code=302)
+
+
+
+@app.post("/partner/password-reset/send-code", response_class=JSONResponse)
+def partner_password_reset_send_code(
+    request: Request,
+    phone: str = Form(...),
+    session: Session = Depends(get_session),
+):
+    phone_raw = _phone_digits(phone)
+
+    if len(phone_raw) < 10 or len(phone_raw) > 11:
+        return JSONResponse({"ok": False, "message": "휴대폰번호를 확인해주세요."}, status_code=200)
+
+    user = session.exec(
+        select(UserAdmin).where(UserAdmin.phone == phone_raw)
+    ).first()
+
+    if not user or not (user.mail or "").strip():
+        return JSONResponse(
+            {"ok": False, "message": "가입 정보를 찾을 수 없거나 이메일 정보가 없습니다. 가온앤 관리자에게 문의해주세요."},
+            status_code=200
+        )
+
+    verify_code = generate_partner_verify_code()
+
+    user.verify_code = verify_code
+    user.updated_at = now_kst()
+    session.add(user)
+    session.commit()
+
+    sent = send_partner_verify_code_email((user.mail or "").strip(), verify_code)
+    if not sent:
+        user.verify_code = PARTNER_VERIFY_CODE_DEFAULT
+        user.updated_at = now_kst()
+        session.add(user)
+        session.commit()
+        return JSONResponse(
+            {"ok": False, "message": "인증코드 메일 발송에 실패했습니다. 잠시 후 다시 시도해주세요."},
+            status_code=200
+        )
+
+    request.session.pop(PARTNER_RESET_SESSION_PHONE_KEY, None)
+    request.session.pop(PARTNER_RESET_SESSION_TS_KEY, None)
+
+    return JSONResponse({"ok": True, "message": "인증코드를 이메일로 발송했습니다."}, status_code=200)
+
+
+@app.post("/partner/password-reset/verify-code", response_class=JSONResponse)
+def partner_password_reset_verify_code(
+    request: Request,
+    phone: str = Form(...),
+    verify_code: str = Form(...),
+    session: Session = Depends(get_session),
+):
+    phone_raw = _phone_digits(phone)
+    verify_code = (verify_code or "").strip()
+
+    user = session.exec(
+        select(UserAdmin).where(UserAdmin.phone == phone_raw)
+    ).first()
+
+    if (
+        not user
+        or not re.fullmatch(r"\d{6}", verify_code)
+        or (user.verify_code or "") != verify_code
+    ):
+        return JSONResponse(
+            {"ok": False, "message": "인증코드가 일치하지 않습니다. 다시 확인해주세요."},
+            status_code=200
+        )
+
+    request.session[PARTNER_RESET_SESSION_PHONE_KEY] = phone_raw
+    request.session[PARTNER_RESET_SESSION_TS_KEY] = int(datetime.now(timezone.utc).timestamp())
+
+    return JSONResponse({"ok": True, "message": "인증이 완료되었습니다."}, status_code=200)
+
+# 비밀번호 찾기 추가 API, POST 우회접근 방지
+@app.post("/partner/password-reset/change-password", response_class=JSONResponse)
+def partner_password_reset_change_password(
+    request: Request,
+    phone: str = Form(...),
+    new_password: str = Form(...),
+    new_password_confirm: str = Form(...),
+    session: Session = Depends(get_session),
+):
+    phone_raw = _phone_digits(phone)
+    new_password = (new_password or "").strip()
+    new_password_confirm = (new_password_confirm or "").strip()
+
+    verified_phone = (request.session or {}).get(PARTNER_RESET_SESSION_PHONE_KEY)
+    verified_ts = int((request.session or {}).get(PARTNER_RESET_SESSION_TS_KEY) or 0)
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+
+    if (
+        not verified_phone
+        or verified_phone != phone_raw
+        or verified_ts <= 0
+        or (now_ts - verified_ts) > PARTNER_RESET_SESSION_TTL_SEC
+    ):
+        return JSONResponse(
+            {"ok": False, "message": "인증이 완료되지 않았거나 인증 유효시간이 만료되었습니다. 다시 인증해주세요."},
+            status_code=200
+        )
+
+    if new_password != new_password_confirm:
+        return JSONResponse(
+            {"ok": False, "message": "신규 비밀번호와 신규 비밀번호 확인이 일치하지 않습니다."},
+            status_code=200
+        )
+
+    if not is_valid_partner_password(new_password):
+        return JSONResponse(
+            {"ok": False, "message": "숫자, 영문, 특수문자를 혼합한 8~10자리로 입력해주세요. 사용 가능 특수문자: ! @ # $ % ^ & + - = _ . ? ~"},
+            status_code=200
+        )
+
+    user = session.exec(
+        select(UserAdmin).where(UserAdmin.phone == phone_raw)
+    ).first()
+
+    if not user:
+        return JSONResponse(
+            {"ok": False, "message": "가입 정보를 찾을 수 없습니다. 가온앤 관리자에게 문의해주세요."},
+            status_code=200
+        )
+
+    user.password_p = hash_partner_password(new_password)
+    user.is_active = True
+    user.login_fail_count = 0
+    user.verify_code = PARTNER_VERIFY_CODE_DEFAULT
+    user.updated_at = now_kst()
+    session.add(user)
+    session.commit()
+
+    request.session.pop(PARTNER_RESET_SESSION_PHONE_KEY, None)
+    request.session.pop(PARTNER_RESET_SESSION_TS_KEY, None)
+
+    return JSONResponse(
+        {"ok": True, "message": "비밀번호가 변경되었습니다. 다시 로그인해주세요."},
+        status_code=200
+    )
+
 
 
 #파트너 대시보드 진입점 추가
@@ -1473,8 +1748,8 @@ async def partner_profile_post(
         elif not verify_partner_password(current_password, user.password_p):
             error = "현재 비밀번호가 올바르지 않습니다."
         # 1-3) 새 비밀번호 규칙 체크
-        elif not new_password.isdigit() or not (4 <= len(new_password) <= 6):
-            error = "새 비밀번호는 숫자 4~6자리만 가능합니다."
+        elif not is_valid_partner_password(new_password):
+            error = "새 비밀번호는 영문, 숫자, 특수문자를 모두 포함한 8~10자리만 가능합니다. 사용 가능 특수문자: ! @ # $ % ^ & + - = _ . ? ~"
         # 1-4) 새 비밀번호 일치 확인
         elif new_password != new_password_confirm:
             error = "새 비밀번호와 새 비밀번호 확인이 일치하지 않습니다."
@@ -1509,10 +1784,7 @@ async def partner_profile_post(
     # 3) 비밀번호 변경 의도가 있고 검증도 통과한 경우에만 password_p 변경
     # ---------------------------
     if wants_pw_change:
-        SALT = "partner_salt_v1"
-        user.password_p = hashlib.sha256(
-            (SALT + new_password).encode("utf-8")
-        ).hexdigest()
+        user.password_p = hash_partner_password(new_password)
 
     session.add(user)
     session.commit()

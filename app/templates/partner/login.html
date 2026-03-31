@@ -11,38 +11,200 @@
     {% if error %}
       <p style="color:#b91c1c; font-weight:600; margin-bottom:12px;">{{ error }}</p>
     {% endif %}
+    {% if message %}
+      <p style="color:#15803d; font-weight:600; margin-bottom:12px;">{{ message }}</p>
+    {% endif %}
 
-<form method="post" action="/partner/login"
-      style="display:flex; flex-direction:column; gap:14px; text-align:left;">
+    <form method="post" action="/partner/login"
+          style="display:flex; flex-direction:column; gap:14px; text-align:left;">
 
-  <label style="font-weight:600;">휴대폰 번호
-    <input type="text" name="phone" required
-           style="width:80%; padding:12px; border:1px solid #ddd; border-radius:8px;">
-  </label>
+      <label style="font-weight:600;">ID(휴대폰 번호)
+        <input type="text" name="phone" required
+               inputmode="numeric"
+               style="width:100%; padding:12px; border:1px solid #ddd; border-radius:8px;">
+      </label>
 
-  <label style="font-weight:600;">비밀번호(4~6자리 숫자)
-    <input type="password" name="password" required
-           style="width:80%; padding:12px; border:1px solid #ddd; border-radius:8px;">
-  </label>
+      <label style="font-weight:600;">비밀번호
+        <input type="password" name="password" required
+               style="width:100%; padding:12px; border:1px solid #ddd; border-radius:8px;">
+      </label>
 
-  <button type="submit"
-          style="padding:14px; background:#1d4ed8; color:white; font-weight:700;
-                 border-radius:9999px; font-size:16px;">
-    로그인하기
-  </button>
-</form>
+      <button type="submit"
+              style="padding:14px; background:#1d4ed8; color:white; font-weight:700;
+                     border-radius:9999px; font-size:16px; border:none; cursor:pointer;">
+        로그인하기
+      </button>
+    </form>
 
-<!-- 회원가입 버튼 -->
-<div style="margin-top:20px;">
-  <a href="/partner/signup"
-     style="display:inline-block; padding:12px 20px; border-radius:9999px;
-            border:1px solid #1d4ed8; color:#1d4ed8; font-weight:700;
-            text-decoration:none; font-size:15px;">
-    회원가입
-  </a>
-</div>
+    <!-- 회원가입 / 비밀번호 찾기 버튼 -->
+    <div style="margin-top:20px; display:flex; gap:10px; justify-content:center;">
+      <a href="/partner/signup"
+         style="display:inline-block; padding:12px 20px; border-radius:9999px;
+                border:1px solid #1d4ed8; color:#1d4ed8; font-weight:700;
+                text-decoration:none; font-size:15px; background:#fff;">
+        회원가입
+      </a>
 
+      <button type="button" id="openPwResetModal"
+              style="display:inline-block; padding:12px 20px; border-radius:9999px;
+                     border:1px solid #6b7280; color:#374151; font-weight:700;
+                     background:#fff; font-size:15px; cursor:pointer;">
+        비밀번호 찾기
+      </button>
     </div>
 
   </div>
+
+  <!-- 비밀번호 찾기 모달 -->
+  <div id="pwResetModal"
+       style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:9999; padding:16px;">
+    <div style="max-width:440px; margin:8vh auto; background:#fff; border-radius:16px; padding:20px; box-shadow:0 10px 30px rgba(0,0,0,.18);">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 style="margin:0; font-size:18px; font-weight:700;">비밀번호 찾기</h3>
+        <button type="button" id="closePwResetModal"
+                style="border:0; background:transparent; font-size:24px; line-height:1; cursor:pointer;">×</button>
+      </div>
+
+      <p style="font-size:14px; color:#374151; margin:0 0 16px; text-align:left;">
+        가입 시 등록한 이메일로 인증코드를 받아 인증은 완료해주세요.
+      </p>
+
+      <div id="pwResetMsg"
+           style="font-size:13px; margin-bottom:12px; min-height:18px; text-align:left; color:#374151;"></div>
+
+      <div id="pwResetStep1">
+        <div style="display:flex; gap:8px; margin-bottom:10px;">
+          <input type="tel" id="pwResetPhone" placeholder="휴대폰번호 입력 (숫자만)"
+                 inputmode="numeric"
+                 style="flex:1; padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px;">
+          <button type="button" id="sendPwResetCode"
+                  style="white-space:nowrap; padding:10px 12px; border:0; border-radius:10px; background:#111827; color:#fff; cursor:pointer;">
+            이메일로 코드발송
+          </button>
+        </div>
+
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="pwResetCode" placeholder="인증코드 입력"
+                 inputmode="numeric" maxlength="6"
+                 style="flex:1; padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px;">
+          <button type="button" id="verifyPwResetCode"
+                  style="white-space:nowrap; padding:10px 12px; border:0; border-radius:10px; background:#111827; color:#fff; cursor:pointer;">
+            인증하기
+          </button>
+        </div>
+      </div>
+
+      <div id="pwResetStep2" style="display:none; margin-top:16px; text-align:left;">
+        <p style="font-size:14px; color:#374151; margin:0 0 12px;">
+          숫자,영문,특수문자 혼합 8~10자리
+        </p>
+
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <input type="password" id="pwResetNewPassword" placeholder="신규 비밀번호"
+                 style="padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px;">
+          <input type="password" id="pwResetNewPasswordConfirm" placeholder="신규 비밀번호 확인"
+                 style="padding:10px 12px; border:1px solid #e5e7eb; border-radius:10px;">
+
+          <small style="font-size:12px; color:#6b7280;">
+            사용 가능 특수문자: @ # $ % ^ & + = . ? ~
+          </small>
+
+          <button type="button" id="changePwResetPassword"
+                  style="padding:12px 0; border:0; border-radius:12px; background:#111827; color:#fff; cursor:pointer; font-weight:700;">
+            비밀번호 변경
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const modal = document.getElementById("pwResetModal");
+      const openBtn = document.getElementById("openPwResetModal");
+      const closeBtn = document.getElementById("closePwResetModal");
+      const msgBox = document.getElementById("pwResetMsg");
+
+      const phoneEl = document.getElementById("pwResetPhone");
+      const codeEl = document.getElementById("pwResetCode");
+      const newPwEl = document.getElementById("pwResetNewPassword");
+      const newPw2El = document.getElementById("pwResetNewPasswordConfirm");
+      const step2 = document.getElementById("pwResetStep2");
+
+      const pwRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[@#$%^&+=.?~])[A-Za-z\d@#$%^&+=.?~]{8,10}$/;
+
+      function setMsg(text, ok) {
+        msgBox.textContent = text || "";
+        msgBox.style.color = ok ? "#15803d" : "#b91c1c";
+      }
+
+      function postForm(url, data) {
+        return fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams(data),
+        }).then(r => r.json());
+      }
+
+      openBtn?.addEventListener("click", function () {
+        modal.style.display = "block";
+        setMsg("", false);
+      });
+
+      closeBtn?.addEventListener("click", function () {
+        modal.style.display = "none";
+      });
+
+      modal?.addEventListener("click", function (e) {
+        if (e.target === modal) modal.style.display = "none";
+      });
+
+      document.getElementById("sendPwResetCode")?.addEventListener("click", async function () {
+        const phone = (phoneEl?.value || "").replace(/[^0-9]/g, "");
+        const data = await postForm("/partner/password-reset/send-code", { phone });
+        setMsg(data.message || "", !!data.ok);
+      });
+
+      document.getElementById("verifyPwResetCode")?.addEventListener("click", async function () {
+        const phone = (phoneEl?.value || "").replace(/[^0-9]/g, "");
+        const verify_code = (codeEl?.value || "").trim();
+        const data = await postForm("/partner/password-reset/verify-code", { phone, verify_code });
+        setMsg(data.message || "", !!data.ok);
+
+        if (data.ok) {
+          step2.style.display = "block";
+        }
+      });
+
+      document.getElementById("changePwResetPassword")?.addEventListener("click", async function () {
+        const phone = (phoneEl?.value || "").replace(/[^0-9]/g, "");
+        const new_password = (newPwEl?.value || "").trim();
+        const new_password_confirm = (newPw2El?.value || "").trim();
+
+        if (!pwRegex.test(new_password)) {
+          setMsg("숫자, 영문, 특수문자를 혼합한 8~10자리로 입력해주세요. 사용 가능 특수문자: @ # $ % ^ & + = - _ . ? ~", false);
+          return;
+        }
+
+        if (new_password !== new_password_confirm) {
+          setMsg("신규 비밀번호와 신규 비밀번호 확인이 일치하지 않습니다.", false);
+          return;
+        }
+
+        const data = await postForm("/partner/password-reset/change-password", {
+          phone,
+          new_password,
+          new_password_confirm
+        });
+
+        setMsg(data.message || "", !!data.ok);
+
+        if (data.ok) {
+          alert(data.message || "비밀번호가 변경되었습니다.");
+          modal.style.display = "none";
+          window.location.href = "/partner/login";
+        }
+      });
+    })();
+  </script>
 {% endblock %}
