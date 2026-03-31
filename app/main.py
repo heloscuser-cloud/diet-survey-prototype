@@ -455,6 +455,10 @@ class UserAdmin(SQLModel, table=True):
 
     # 새로 추가한 비밀번호 해시 컬럼 (DB에 password_p 로 생성해 둔 상태)
     password_p: Optional[str] = None
+    
+    # 로그인 실패 횟수, 비밀번호 찾이 인증코드
+    login_fail_count: int = Field(default=0)
+    verify_code: str = Field(default="__NO_CODE__")
 
 
 #-- 업체담당자, 고객 매핑 테이블 --#
