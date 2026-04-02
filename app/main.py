@@ -460,7 +460,7 @@ class UserAdmin(SQLModel, table=True):
     login_fail_count: int = Field(default=0)
     verify_code: str = Field(default="__NO_CODE__")
     
-    #파트너 회원가입 시 동의여부, 시점
+    # 파트너 회원가입 시 동의여부, 시점
     agreement_all: bool = Field(default=False)
     agreement_at: Optional[datetime] = None
 
@@ -1547,7 +1547,6 @@ async def partner_signup_submit(
         error = "필수 동의 항목에 모두 동의해주세요."
     elif len(phone_raw) < 10 or len(phone_raw) > 11:
         error = "전화번호는 숫자 10~11자리로 입력해주세요."
-    
 
     #입력값 유지 렌더
     if error:
