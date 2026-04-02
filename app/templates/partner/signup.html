@@ -143,6 +143,10 @@
     line-height: 1.5;
     white-space: pre-wrap;
     overflow-y: auto;
+
+  .consent-col-single {
+    flex: 1 1 100%;
+  }
   }
 </style>
 
@@ -244,7 +248,7 @@
 
     <!-- 비밀번호(필수, 숫자 4~6자리) -->
     <label style="display:flex; flex-direction:column; font-size:14px;">
-      비밀번호(숫자 4~6자리)<span style="color:#ef4444; margin-left:4px;">*</span>
+      <span>비밀번호(숫자 4~6자리)<span style="color:#ef4444; margin-left:4px;">*</span></span>
       <input type="password" name="password" required
              inputmode="numeric"
              pattern="[0-9]{4,6}"
@@ -254,7 +258,7 @@
 
     <!-- 비밀번호 재확인 -->
     <label style="display:flex; flex-direction:column; font-size:14px;">
-      비밀번호 재확인<span style="color:#ef4444; margin-left:4px;">*</span>
+      </span>비밀번호 재확인<span style="color:#ef4444; margin-left:4px;">*</span></span>
       <input type="password" name="password_confirm" required
              inputmode="numeric"
              minlength="4" maxlength="6"
@@ -273,7 +277,7 @@
       </div>
 
       <div class="consent-row">
-        <div class="consent-col">
+        <div class="consent-col consent-col-single">
           <label class="consent-label">
             <input type="checkbox" id="agree_collect" name="agreement_collect" value="Y" class="consent-check"
                    {% if agreement_collect %}checked{% endif %}>
@@ -281,8 +285,10 @@
           </label>
           <button type="button" class="consent-view-btn" data-consent="collect">보기</button>
         </div>
+      </div>
 
-        <div class="consent-col">
+      <div class="consent-row">
+        <div class="consent-col consent-col-single">
           <label class="consent-label">
             <input type="checkbox" id="agree_outsource" name="agreement_outsource" value="Y" class="consent-check"
                    {% if agreement_outsource %}checked{% endif %}>
@@ -293,7 +299,7 @@
       </div>
 
       <div class="consent-row">
-        <div class="consent-col">
+        <div class="consent-col consent-col-single">
           <label class="consent-label">
             <input type="checkbox" id="agree_overseas" name="agreement_overseas" value="Y" class="consent-check"
                    {% if agreement_overseas %}checked{% endif %}>
@@ -502,5 +508,4 @@
   </div>
 </div>
 
-</div>
 {% endblock %}
