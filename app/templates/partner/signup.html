@@ -1,3 +1,151 @@
+<style>
+  .consent-box {
+    background-color: #ffffff;
+    border-radius: 16px;
+    padding: 12px 16px;
+    font-size: 0.9rem;
+    margin: 8px 0 18px;
+    border: 1px solid #e5e7eb;
+  }
+
+  .consent-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    margin-top: 8px;
+    align-items: center;
+  }
+
+  .consent-row-top {
+    justify-content: flex-start;
+    margin-top: 0;
+    margin-bottom: 4px;
+  }
+
+  .consent-col {
+    flex: 1 1 160px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .consent-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .consent-label-text {
+    font-weight: 600;
+  }
+
+  .consent-required {
+    color: #e11d48;
+    font-size: 0.8em;
+    margin-left: 2px;
+  }
+
+  .consent-check {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    border: 2px solid #c4c4c4;
+    background-color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    vertical-align: middle;
+  }
+
+  .consent-check:checked {
+    background-color: #111;
+    border-color: #111;
+  }
+
+  .consent-check:checked::before {
+    content: "✔";
+    font-size: 15px;
+    color: #fff;
+    line-height: 1;
+    transform: translateY(0.5px);
+  }
+
+  .consent-view-btn {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid #d4d4d8;
+    background-color: #f9fafb;
+    font-size: 0.75rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .consent-view-btn:hover {
+    background-color: #e5e7eb;
+  }
+
+  .consent-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+  }
+
+  .consent-modal.show {
+    display: flex;
+  }
+
+  .consent-modal-panel {
+    background: #ffffff;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+    max-width: 520px;
+    width: 100%;
+    margin: 0 16px;
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .consent-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .consent-modal-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
+
+  .consent-modal-close {
+    border: none;
+    background: transparent;
+    font-size: 1.2rem;
+    line-height: 1;
+    cursor: pointer;
+    color: #6b7280;
+  }
+
+  .consent-modal-body {
+    padding: 10px 12px 12px;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-y: auto;
+  }
+</style>
+
 {% extends "admin/base_admin.html" %}
 {% block title %}파트너 회원가입{% endblock %}
 
@@ -74,10 +222,14 @@
     <!-- 소속(필수) -->
     <label style="display:flex; flex-direction:column; font-size:14px;">
       <span>소속(회사명 등) <span style="color:#ef4444;">*</span></span>
-      <input type="text" name="division" required
-            value="{{ division or '' }}"
-            placeholder="예: ㈜가온앤"
-            style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+
+      <select name="division" required
+              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px; border-radius:8px;">
+        <option value="" {% if not division %}selected{% endif %}>선택</option>
+        {% for opt in partner_list %}
+          <option value="{{ opt }}" {% if division == opt %}selected{% endif %}>{{ opt }}</option>
+        {% endfor %}
+      </select>
     </label>
 
 
@@ -90,13 +242,13 @@
              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
     </label>
 
-    <!-- 비밀번호(필수, 영문/숫자/특수문자 8~15자리) -->
+    <!-- 비밀번호(필수, 숫자 4~6자리) -->
     <label style="display:flex; flex-direction:column; font-size:14px;">
-      비밀번호(영문/숫자/특수문자 8~15자리)<span style="color:#ef4444; margin-left:4px;">*</span>
+      비밀번호(숫자 4~6자리)<span style="color:#ef4444; margin-left:4px;">*</span>
       <input type="password" name="password" required
-             inputmode="text"
-             minlength="8" maxlength="15"
-             title="영문, 숫자, 특수문자를 모두 포함한 8~15자리"
+             inputmode="numeric"
+             pattern="[0-9]{4,6}"
+             minlength="4" maxlength="6"
              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
     </label>
 
@@ -104,12 +256,56 @@
     <label style="display:flex; flex-direction:column; font-size:14px;">
       비밀번호 재확인<span style="color:#ef4444; margin-left:4px;">*</span>
       <input type="password" name="password_confirm" required
-             inputmode="text"
-             minlength="8" maxlength="15"
+             inputmode="numeric"
+             minlength="4" maxlength="6"
              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
     </label>
 
-     <button type="submit"
+
+    <!-- 동의 영역 시작 -->
+    <div class="consent-box">
+      <div class="consent-row consent-row-top">
+        <label class="consent-label">
+          <input type="checkbox" id="agree_all" class="consent-check"
+                 {% if agreement_all %}checked{% endif %}>
+          <span class="consent-label-text">전체 동의</span>
+        </label>
+      </div>
+
+      <div class="consent-row">
+        <div class="consent-col">
+          <label class="consent-label">
+            <input type="checkbox" id="agree_collect" name="agreement_collect" value="Y" class="consent-check"
+                   {% if agreement_collect %}checked{% endif %}>
+            <span>개인정보 수집·이용 동의 <span class="consent-required">(필수)</span></span>
+          </label>
+          <button type="button" class="consent-view-btn" data-consent="collect">보기</button>
+        </div>
+
+        <div class="consent-col">
+          <label class="consent-label">
+            <input type="checkbox" id="agree_outsource" name="agreement_outsource" value="Y" class="consent-check"
+                   {% if agreement_outsource %}checked{% endif %}>
+            <span>개인정보 처리위탁 동의 <span class="consent-required">(필수)</span></span>
+          </label>
+          <button type="button" class="consent-view-btn" data-consent="outsource">보기</button>
+        </div>
+      </div>
+
+      <div class="consent-row">
+        <div class="consent-col">
+          <label class="consent-label">
+            <input type="checkbox" id="agree_overseas" name="agreement_overseas" value="Y" class="consent-check"
+                   {% if agreement_overseas %}checked{% endif %}>
+            <span>개인정보 해외 이전 동의 <span class="consent-required">(필수)</span></span>
+          </label>
+          <button type="button" class="consent-view-btn" data-consent="overseas">보기</button>
+        </div>
+      </div>
+    </div>
+    <!-- 동의 영역 끝 -->
+
+    <button type="submit"
             class="btn primary"
             style="margin-top:16px; width:100%; border-radius:999px; padding:10px 0;">
       회원가입
@@ -126,13 +322,158 @@
     const form = document.querySelector('form[action="/partner/signup"]');
     if (!form) return;
 
-    const pwRegex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9\s])[^\s]{8,15}$/;
+    const agreeAll = document.getElementById('agree_all');
+    const agreeCollect = document.getElementById('agree_collect');
+    const agreeOutsource = document.getElementById('agree_outsource');
+    const agreeOverseas = document.getElementById('agree_overseas');
+
+    const consentModal = document.getElementById('consentModal');
+    const consentModalTitle = document.getElementById('consentModalTitle');
+    const consentModalBody = document.getElementById('consentModalBody');
+    const consentModalClose = document.getElementById('consentModalClose');
+
+    function allConsentChecked() {
+      return !!(
+        agreeCollect?.checked &&
+        agreeOutsource?.checked &&
+        agreeOverseas?.checked
+      );
+    }
+
+    function syncAgreeAll() {
+      if (!agreeAll) return;
+      agreeAll.checked = allConsentChecked();
+    }
+
+    if (agreeAll) {
+      agreeAll.addEventListener('change', () => {
+        const checked = agreeAll.checked;
+        [agreeCollect, agreeOutsource, agreeOverseas].forEach(el => {
+          if (!el) return;
+          el.checked = checked;
+        });
+      });
+    }
+
+    [agreeCollect, agreeOutsource, agreeOverseas].forEach(el => {
+      if (!el) return;
+      el.addEventListener('change', syncAgreeAll);
+    });
+
+    const CONSENT_TEXTS = {
+      collect: `개인정보 수집·이용 동의서
+
+가온앤 영양분석 서비스의 파트너 회원가입 및 계정 운영을 위해 아래와 같이 개인정보를 수집·이용합니다.
+
+1. 수집 항목
+- 사번
+- 이름
+- 휴대전화번호
+- 이메일 주소
+- 소속(회사명 등)
+- 부서
+- 비밀번호 해시값(password_p)
+- 회원가입 동의 여부 및 동의 시각
+- 로그인 실패 횟수, 인증코드 발송/검증에 필요한 정보
+
+2. 수집·이용 목적
+- 파트너 회원가입 및 본인 식별
+- 파트너 로그인, 비밀번호 재설정, 계정 보안 관리
+- 담당자 계정 운영 및 리포트 발송/업무 처리
+- 서비스 문의 대응 및 운영 기록 관리
+
+3. 보유 및 이용 기간
+- 회원 탈퇴 또는 계정 운영 종료 시까지
+- 다만, 관련 법령 또는 분쟁 대응상 필요한 경우 해당 기간 동안 보관할 수 있습니다.
+
+4. 동의 거부 권리 및 불이익
+- 귀하는 개인정보 수집·이용에 대한 동의를 거부할 수 있으나, 미동의 시 파트너 회원가입 및 계정 이용이 제한됩니다.`,
+
+      outsource: `개인정보 처리위탁 동의서
+
+가온앤 영양분석 서비스는 파트너 계정 운영 및 서비스 제공을 위해 개인정보 처리업무의 일부를 아래와 같이 위탁합니다.
+
+1. 수탁자
+- ㈜헬로
+
+2. 위탁 업무 내용
+- 웹서비스 개발·배포·운영
+- 데이터베이스 운영 및 유지보수
+- 서버 장애 대응, 보안 적용 및 기능 개선
+- 파트너 계정 관련 서비스 운영 지원
+
+3. 위탁되는 개인정보 항목
+- 사번, 이름, 휴대전화번호, 이메일 주소, 소속, 부서
+- 비밀번호 해시값(password_p)
+- 동의 정보, 로그인 실패 횟수, 인증코드 관련 정보
+- 서비스 이용 과정에서 생성되는 운영 로그 및 계정 처리 정보
+
+4. 보유 및 이용 기간
+- 위탁계약 종료 또는 해당 서비스 운영 종료 시까지
+
+5. 동의 거부 권리 및 불이익
+- 귀하는 개인정보 처리위탁에 대한 동의를 거부할 수 있으나, 미동의 시 파트너 회원가입 및 계정 운영 서비스 이용이 제한됩니다.`,
+
+      overseas: `개인정보 해외 이전 동의서
+
+가온앤 영양분석 서비스는 Render.com 기반 인프라를 사용하여 서비스를 운영하고 있으며, 이 과정에서 개인정보가 해외 서버에 저장·처리될 수 있습니다.
+
+1. 이전받는 자
+- Render, Inc.
+
+2. 이전 국가
+- 미국(USA)
+
+3. 이전 항목
+- 사번, 이름, 휴대전화번호, 이메일 주소, 소속, 부서
+- 비밀번호 해시값(password_p)
+- 동의 정보, 로그인 실패 횟수, 인증코드 정보
+- 서비스 접속 및 운영 과정에서 생성되는 시스템 로그
+
+4. 이전 목적
+- 파트너 회원가입 및 로그인 서비스 제공
+- 계정 보안 처리, 비밀번호 재설정, 서비스 운영 및 장애 대응
+- 데이터 저장 및 시스템 인프라 운영
+
+5. 보유 및 이용 기간
+- 회원 탈퇴 또는 계정 운영 종료 시까지
+- 다만 운영 로그 등은 내부 정책 및 관련 법령에 따라 별도 보관될 수 있습니다.
+
+6. 동의 거부 권리 및 불이익
+- 귀하는 개인정보의 해외 이전에 동의하지 않을 수 있으나, 미동의 시 파트너 회원가입 및 계정 이용이 제한됩니다.`
+    };
+
+    function openConsentModal(kind) {
+      const titleMap = {
+        collect: '개인정보 수집·이용 동의',
+        outsource: '개인정보 처리위탁 동의',
+        overseas: '개인정보 해외 이전 동의'
+      };
+      consentModalTitle.textContent = titleMap[kind] || '동의서 내용';
+      consentModalBody.textContent = CONSENT_TEXTS[kind] || '';
+      consentModal.classList.add('show');
+    }
+
+    function closeConsentModal() {
+      consentModal.classList.remove('show');
+    }
+
+    consentModalClose?.addEventListener('click', closeConsentModal);
+    consentModal?.addEventListener('click', (e) => {
+      if (e.target === consentModal) closeConsentModal();
+    });
+
+    document.querySelectorAll('.consent-view-btn[data-consent]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        openConsentModal(btn.getAttribute('data-consent'));
+      });
+    });
+
+    syncAgreeAll();
 
     form.addEventListener('submit', function (e) {
       const email = (form.querySelector('input[name="email"]')?.value || '').trim();
       const email2 = (form.querySelector('input[name="email_confirm"]')?.value || '').trim();
-      const pw = (form.querySelector('input[name="password"]')?.value || '').trim();
-      const pw2 = (form.querySelector('input[name="password_confirm"]')?.value || '').trim();
 
       if (email && email2 && email !== email2) {
         e.preventDefault();
@@ -140,15 +481,9 @@
         return;
       }
 
-      if (pw && !pwRegex.test(pw)) {
+      if (!allConsentChecked()) {
         e.preventDefault();
-        alert("비밀번호는 영문, 숫자, 특수문자를 모두 포함한 8~15자리만 가능합니다.");
-        return;
-      }
-
-      if (pw !== pw2) {
-        e.preventDefault();
-        alert("비밀번호와 비밀번호 재확인이 일치하지 않습니다.");
+        alert("필수 동의 항목에 모두 동의해주세요.");
         return;
       }
     });
@@ -157,5 +492,15 @@
 
 
   </form>
+<div id="consentModal" class="consent-modal">
+  <div class="consent-modal-panel">
+    <div class="consent-modal-header">
+      <h2 id="consentModalTitle" class="consent-modal-title"></h2>
+      <button type="button" id="consentModalClose" class="consent-modal-close">&times;</button>
+    </div>
+    <div id="consentModalBody" class="consent-modal-body"></div>
+  </div>
+</div>
+
 </div>
 {% endblock %}

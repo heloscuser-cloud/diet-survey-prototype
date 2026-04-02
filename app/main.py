@@ -459,6 +459,10 @@ class UserAdmin(SQLModel, table=True):
     # 로그인 실패 횟수, 비밀번호 찾이 인증코드
     login_fail_count: int = Field(default=0)
     verify_code: str = Field(default="__NO_CODE__")
+    
+    #파트너 회원가입 시 동의여부, 시점
+    agreement_all: bool = Field(default=False)
+    agreement_at: Optional[datetime] = None
 
 
 #-- 업체담당자, 고객 매핑 테이블 --#
@@ -1504,6 +1508,9 @@ async def partner_signup_submit(
     department: str = Form(""),
     password: str = Form(...),
     password_confirm: str = Form(...),
+    agreement_collect: str | None = Form(None),
+    agreement_outsource: str | None = Form(None),
+    agreement_overseas: str | None = Form(None),
     session: Session = Depends(get_session),
 ):
     partner_list = get_partner_list(session)
@@ -1517,6 +1524,10 @@ async def partner_signup_submit(
     department = (department or "").strip()
     password = (password or "").strip()
     password_confirm = (password_confirm or "").strip()
+    agreement_collect_ok = (agreement_collect == "Y")
+    agreement_outsource_ok = (agreement_outsource == "Y")
+    agreement_overseas_ok = (agreement_overseas == "Y")
+    agreement_all_ok = agreement_collect_ok and agreement_outsource_ok and agreement_overseas_ok
 
     #필수값 체크
     error = None
@@ -1532,8 +1543,11 @@ async def partner_signup_submit(
         error = "비밀번호와 비밀번호 재확인이 일치하지 않습니다."
     elif not is_valid_partner_password(password):
         error = "비밀번호는 영문, 숫자, 특수문자를 모두 포함한 8~15자리만 가능합니다."
+    elif not agreement_all_ok:
+        error = "필수 동의 항목에 모두 동의해주세요."
     elif len(phone_raw) < 10 or len(phone_raw) > 11:
         error = "전화번호는 숫자 10~11자리로 입력해주세요."
+    
 
     #입력값 유지 렌더
     if error:
@@ -1551,6 +1565,10 @@ async def partner_signup_submit(
                 "email_confirm": email_confirm,
                 "division": division,
                 "department": department,
+                "agreement_collect": agreement_collect_ok,
+                "agreement_outsource": agreement_outsource_ok,
+                "agreement_overseas": agreement_overseas_ok,
+                "agreement_all": agreement_all_ok,
             },
         )
 
@@ -1588,9 +1606,9 @@ async def partner_signup_submit(
     session.exec(
         sa_text("""
             INSERT INTO user_admin
-                (division, department, co_num, name, phone, mail, is_active, password_p, login_fail_count, verify_code)
+                (division, department, co_num, name, phone, mail, is_active, password_p, agreement_all, agreement_at)
             VALUES
-                (:division, :department, :co_num, :name, :phone, :mail, TRUE, :password_p, 0, :verify_code)
+                (:division, :department, :co_num, :name, :phone, :mail, TRUE, :password_p, :agreement_all, :agreement_at)
         """).bindparams(
             division=division,
             department=department,
@@ -1598,8 +1616,9 @@ async def partner_signup_submit(
             name=name,
             phone=phone_raw,
             mail=email,
-            password_p=password_p,
-            verify_code=PARTNER_VERIFY_CODE_DEFAULT,
+            password_p=password_p,   # 네가 이미 바꿔둔 해시 로직 그대로 사용
+            agreement_all=agreement_all_ok,
+            agreement_at=(now_kst() if agreement_all_ok else None),
         )
     )
     session.commit()
