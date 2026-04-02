@@ -226,11 +226,14 @@
 
     <!-- 소속(필수) -->
     <label style="display:flex; flex-direction:column; font-size:14px;">
-      <span>소속(회사명 등) <span style="color:#ef4444;">*</span></span>
-      <input type="text" name="division" required
-            value="{{ division or '' }}"
-            placeholder="예: ㈜가온앤"
-            style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px;">
+      <span>소속(회사명) <span style="color:#ef4444;">*</span></span>
+      <select name="division" required
+              style="margin-top:4px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px; font-size:14px; border-radius:8px;">
+        <option value="" {% if not division %}selected{% endif %}>선택</option>
+        {% for opt in partner_list %}
+          <option value="{{ opt }}" {% if division == opt %}selected{% endif %}>{{ opt }}</option>
+        {% endfor %}
+      </select>
     </label>
 
 
