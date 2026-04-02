@@ -319,6 +319,19 @@
       </a>
     </div>
 
+
+  </form>
+
+<div id="consentModal" class="consent-modal">
+  <div class="consent-modal-panel">
+    <div class="consent-modal-header">
+      <h2 id="consentModalTitle" class="consent-modal-title"></h2>
+      <button type="button" id="consentModalClose" class="consent-modal-close">&times;</button>
+    </div>
+    <div id="consentModalBody" class="consent-modal-body"></div>
+  </div>
+</div>
+
 <script>
   (function () {
     const form = document.querySelector('form[action="/partner/signup"]');
@@ -492,18 +505,6 @@
   })();
 </script>
 
-
-  </form>
-
-<div id="consentModal" class="consent-modal">
-  <div class="consent-modal-panel">
-    <div class="consent-modal-header">
-      <h2 id="consentModalTitle" class="consent-modal-title"></h2>
-      <button type="button" id="consentModalClose" class="consent-modal-close">&times;</button>
-    </div>
-    <div id="consentModalBody" class="consent-modal-body"></div>
-  </div>
-</div>
 
 </div>
 {% endblock %}
