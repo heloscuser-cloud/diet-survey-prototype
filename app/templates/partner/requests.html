@@ -149,6 +149,7 @@
           <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">고객신청일</th>
           <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">담당자신청일</th>
           <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">고객명</th>
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">생년월일</th>
           <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">고객연락처</th>
           <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">진행 상태값</th>
           <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">리포트 발송여부</th>
@@ -177,24 +178,19 @@
               {{ to_kst_str(pcm.created_at) }}
             </td>
 
-            <!-- 고객명: 두 번째 글자 마스킹 -->
+            <!-- 고객명: 마스킹 없이 전체 표시 -->
             <td style="padding:10px 12px; font-size:14px; text-align:center;">
-              {% set nm = pcm.client_name or '' %}
-              {% if nm|length >= 2 %}
-                {{ nm[0] ~ '*' ~ nm[2:] }}
-              {% else %}
-                {{ nm }}
-              {% endif %}
+              {{ pcm.client_name or '' }}
             </td>
 
-            <!-- 고객연락처: 010****0000 형식으로 마스킹 -->
+            <!-- 생년월일 -->
             <td style="padding:10px 12px; font-size:14px; text-align:center;">
-              {% set ph = pcm.client_phone or '' %}
-              {% if ph|length >= 7 %}
-                {{ ph[:3] ~ '****' ~ ph[-4:] }}
-              {% else %}
-                {{ ph }}
-              {% endif %}
+              {{ resp.birth_date or '' if resp else '' }}
+            </td>
+
+            <!-- 고객연락처: 마스킹 없이 전체 표시 -->
+            <td style="padding:10px 12px; font-size:14px; text-align:center;">
+              {{ pcm.client_phone or '' }}
             </td>
 
             <!-- 진행 상태값 -->
@@ -274,7 +270,7 @@
         {% endfor %}
       {% else %}
         <tr>
-          <td colspan="9" style="padding:20px; text-align:center; font-size:14px; color:#6b7280;">
+          <td colspan="10" style="padding:20px; text-align:center; font-size:14px; color:#6b7280;">
             조회 결과가 없습니다.
           </td>
         </tr>
