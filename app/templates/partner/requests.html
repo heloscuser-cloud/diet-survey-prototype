@@ -26,6 +26,29 @@
       white-space: nowrap;
     }
   }
+
+    /* 데스크톱에서 조회테이블만 약 30% 넓게 */
+  .requests-table-wide {
+    width: calc(100% + 288px);   /* 960px 기준 약 30% 확장 */
+    max-width: 1248px;
+    margin-left: 50%;
+    transform: translateX(-50%);
+  }
+
+  @media (max-width: 768px) {
+    .requests-table-wide {
+      width: 100%;
+      max-width: 100%;
+      margin-left: 0;
+      transform: none;
+    }
+  }
+
+  /* 데스크톱에서도 셀 줄바꿈 방지 */
+  .requests-table-wide th,
+  .requests-table-wide td {
+    white-space: nowrap;
+  }
 </style>
 
 <div style="max-width:960px; margin:24px auto; padding:0 12px;">
@@ -141,7 +164,7 @@
   </div>
 
   <!-- 결과 테이블 -->
-  <div class="table-scroll"; style="background:#ffffff; border:1px solid #e5e7eb; border-radius:16px; padding:0; box-shadow:0 6px 18px rgba(0,0,0,.03); overflow:auto;">
+    <div class="table-scroll requests-table-wide" style="background:#ffffff; border:1px solid #e5e7eb; border-radius:16px; padding:0; box-shadow:0 6px 18px rgba(0,0,0,.03); overflow:auto;">
     <table style="width:100%; border-collapse:collapse;">
       <thead>
         <tr style="background:#f3f4f6;">
