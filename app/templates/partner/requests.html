@@ -169,6 +169,7 @@
       <thead>
         <tr style="background:#f3f4f6;">
           <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">연번</th>
+          <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">신청번호</th>
           <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">고객신청일</th>
           <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">담당자신청일</th>
           <th style="padding:10px 12px; font-size:13px; color:#4b5563; text-align:center;">고객명</th>
@@ -189,6 +190,11 @@
             <!-- 연번 -->
             <td style="padding:10px 12px; font-size:14px; text-align:center;">
               {{ row_no }}
+            </td>
+
+            <!-- 신청번호 -->
+            <td style="padding:10px 12px; font-size:14px; text-align:center;">
+              {{ resp.serial_no or '' if resp else '' }}
             </td>
 
             <!-- 고객신청일: partner_client_mapping.client_submitted_at -->
@@ -293,7 +299,7 @@
         {% endfor %}
       {% else %}
         <tr>
-          <td colspan="10" style="padding:20px; text-align:center; font-size:14px; color:#6b7280;">
+          <td colspan="11" style="padding:20px; text-align:center; font-size:14px; color:#6b7280;">
             조회 결과가 없습니다.
           </td>
         </tr>

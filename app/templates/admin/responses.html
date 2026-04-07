@@ -225,6 +225,7 @@ a.pdf-link:hover{
       <thead>
         <tr>
 <th><input type="checkbox" id="chkAll" onclick="toggleAll(this)"/></th>
+<th>연번</th>
 <th>신청번호</th>
 <th>신청자</th>
 <th>담당자</th>
@@ -243,8 +244,9 @@ a.pdf-link:hover{
       {% for sr, resp, user, rf, ua, partner_requested_at in rows %}
 
        <tr>
+  {% set row_no = ((page|default(1)) - 1) * ((page_size|int) if (page_size and page_size != 'all') else 50) + loop.index %}
   <td><input type="checkbox" class="rowChk" value="{{ sr.id }}"></td>
-
+  <td class="nowrap">{{ row_no }}</td>
   <td class="nowrap">{{ resp.serial_no or '' }}</td>
 
   <td>{{ resp.applicant_name or user.name_enc or '-' }} ({{ resp.birth_date or '' }}, {{ resp.gender or user.gender or '-' }})</td>

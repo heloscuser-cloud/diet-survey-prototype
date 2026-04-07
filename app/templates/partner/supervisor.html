@@ -235,6 +235,7 @@
           <th class="nowrap" style="text-align:center;">
             <input type="checkbox" id="sv_check_all">
          </th>
+          <th>연번</th>
           <th>신청번호</th>
           <th>신청자</th>
           <th>생년월일</th>
@@ -252,6 +253,7 @@
       </thead>
       <tbody>
       {% for sr, resp, user, ua, partner_requested_at in rows %}
+        {% set row_no = ((page|default(1)) - 1) * ((page_size|int) if (page_size and page_size != 'all') else 50) + loop.index %}
         <tr>
           <td style="text-align:center;">
             <input type="checkbox"
@@ -260,6 +262,7 @@
                   data-status="{{ resp.status if resp else '' }}"
                   data-pr="{{ 1 if partner_requested_at else 0 }}">
           </td>
+          <td class="nowrap">{{ row_no }}</td>
           <td class="nowrap">{{ resp.serial_no or '' }}</td>
           <td>{{ resp.applicant_name or user.name_enc or '-' }}</td>
           <td>{{ resp.birth_date or '' }}</td>
