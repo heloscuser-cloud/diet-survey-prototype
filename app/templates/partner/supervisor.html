@@ -217,6 +217,10 @@
     담당자 변경
   </button>
 
+  <button class="btn btn-sky btn-sm" type="button" onclick="openManageUsersModal()" style="width:140px; margin-left:8px;">
+    담당자 관리
+  </button>
+
   <!--엑셀 다운로드 버튼은 기능만 살려두고 버튼은 비활성화-->
   <button class="btn btn-sky btn-sm" type="button" onclick="downloadXlsx()" style="width:140px; margin-left:8px; display:none;">
     엑셀 다운로드
@@ -432,6 +436,45 @@
   </div>
 </div>
 
+
+<!-- 담당자 관리 모달 -->
+<div id="manageUsersModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:9999;">
+  <div style="background:#fff; max-width:1000px; margin:60px auto; border-radius:14px; padding:16px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <strong>담당자 관리</strong>
+      <button type="button" onclick="closeManageUsersModal()" style="border:none; background:transparent; font-size:18px; cursor:pointer;">✕</button>
+    </div>
+
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
+      <input id="manage_users_kw" type="text" placeholder="담당자명 또는 전화번호 일부"
+             onkeydown="if(event.key === 'Enter'){ event.preventDefault(); loadManageUsers(); }"
+             style="flex:1; padding:8px 10px; border:1px solid #e5e7eb; border-radius:10px;">
+      <button type="button" class="btn btn-primary btn-sm" onclick="loadManageUsers()">검색</button>
+    </div>
+
+    <div style="max-height:420px; overflow:auto; border:1px solid #e5e7eb; border-radius:12px;">
+      <table style="width:100%; border-collapse:collapse;">
+        <thead>
+          <tr style="background:#f3f4f6;">
+            <th style="padding:10px; text-align:center;">담당자명</th>
+            <th style="padding:10px; text-align:center;">부서</th>
+            <th style="padding:10px; text-align:center;">전화번호</th>
+            <th style="padding:10px; text-align:center;">메일주소</th>
+            <th style="padding:10px; text-align:center;">상태</th>
+            <th style="padding:10px; text-align:center;" colspan="2">수정</th>
+          </tr>
+        </thead>
+        <tbody id="manageUsersTbody"></tbody>
+      </table>
+    </div>
+
+    <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px;">
+      <button type="button" class="btn btn-gray btn-sm" onclick="closeManageUsersModal()">닫기</button>
+    </div>
+  </div>
+</div>
+
+
 <script>
 let _sv_mode = "";            // "assign" | "change"
 let _sv_target_ids = [];      // respondent ids
@@ -511,6 +554,88 @@ async function loadAssignees(){
     `;
     tb.appendChild(tr);
   });
+}
+
+function openManageUsersModal(){
+  document.getElementById("manageUsersModal").style.display = "block";
+  loadManageUsers();
+}
+
+function closeManageUsersModal(){
+  document.getElementById("manageUsersModal").style.display = "none";
+}
+
+async function loadManageUsers(){
+  const kw = document.getElementById("manage_users_kw").value || "";
+  const res = await fetch("/partner/supervisor/manage-users?q=" + encodeURIComponent(kw));
+  const data = await res.json();
+
+  const tb = document.getElementById("manageUsersTbody");
+  tb.innerHTML = "";
+
+  data.forEach(u => {
+    const tr = document.createElement("tr");
+    const safeName = JSON.stringify(u.name || "");
+    const statusText = u.is_active ? "사용 중" : "사용중지";
+
+    tr.innerHTML = `
+      <td style="padding:10px; text-align:center;">${u.name || ""}</td>
+      <td style="padding:10px; text-align:center;">${u.department || ""}</td>
+      <td style="padding:10px; text-align:center;">${u.phone || ""}</td>
+      <td style="padding:10px; text-align:center;">${u.mail || ""}</td>
+      <td style="padding:10px; text-align:center;">${statusText}</td>
+      <td style="padding:10px; text-align:center;">
+        <button type="button" class="btn btn-primary btn-sm"
+                onclick='submitManageUserStatus(${u.id}, ${safeName}, "activate")'>
+          활성화
+        </button>
+      </td>
+      <td style="padding:10px; text-align:center;">
+        <button type="button" class="btn btn-gray btn-sm"
+                onclick='submitManageUserStatus(${u.id}, ${safeName}, "deactivate")'>
+          비활성화
+        </button>
+      </td>
+    `;
+    tb.appendChild(tr);
+  });
+}
+
+function submitManageUserStatus(userId, userName, action){
+  let confirmMsg = "";
+
+  if(action === "activate"){
+    confirmMsg = `${userName}님의 계정을 활성화 처리 하시겠습니까?\n비활성화 계정을 활성화 상태로 변경하는 후에는 로그인 후 회원정보에서 전화번호와 이메일 주소를 꼭 수정해주세요.`;
+  }else{
+    confirmMsg = `${userName}님의 계정을 비활성화 처리 하시겠습니까?\n비활성화 처리 시 계정의 전화번호, 이메일주소가 함께 파기됩니다.`;
+  }
+
+  if(!confirm(confirmMsg)) return;
+
+  const f = document.createElement("form");
+  f.method = "post";
+  f.action = "/partner/supervisor/manage-users/status";
+
+  const uid = document.createElement("input");
+  uid.type = "hidden";
+  uid.name = "target_user_id";
+  uid.value = userId;
+  f.appendChild(uid);
+
+  const act = document.createElement("input");
+  act.type = "hidden";
+  act.name = "action";
+  act.value = action;
+  f.appendChild(act);
+
+  const next = document.createElement("input");
+  next.type = "hidden";
+  next.name = "next";
+  next.value = window.location.pathname + (window.location.search ? window.location.search : "");
+  f.appendChild(next);
+
+  document.body.appendChild(f);
+  f.submit();
 }
 
 function confirmAssignee(){

@@ -463,6 +463,10 @@ class UserAdmin(SQLModel, table=True):
     # 파트너 회원가입 시 동의여부, 시점
     agreement_all: bool = Field(default=False)
     agreement_at: Optional[datetime] = None
+    
+    # 파트너 계정 활성화/비활성화 변경 id, at
+    status_save_id: Optional[int] = None
+    status_save_at: Optional[datetime] = None
 
 
 #-- 업체담당자, 고객 매핑 테이블 --#
@@ -3300,6 +3304,142 @@ def supervisor_search_assignees(
         })
     return JSONResponse(data)
 
+
+# 파트너 관리자페이지 담당자 관리창 조회 API
+@app.get("/partner/supervisor/manage-users")
+def supervisor_manage_users(
+    request: Request,
+    q: str = "",
+    session: Session = Depends(get_session),
+):
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return JSONResponse([], status_code=200)
+
+    ua_me = session.get(UserAdmin, int(partner_id))
+    if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
+        return JSONResponse([], status_code=200)
+
+    my_division = (ua_me.division or "").strip()
+    if not my_division:
+        return JSONResponse([], status_code=200)
+
+    kw = (q or "").strip()
+    stmt = select(UserAdmin).where(UserAdmin.division == my_division)
+
+    if kw:
+        kw_digits = _phone_digits(kw)
+        conds = [
+            UserAdmin.name.ilike(f"%{kw}%"),
+            UserAdmin.department.ilike(f"%{kw}%"),
+            UserAdmin.mail.ilike(f"%{kw}%"),
+        ]
+        if kw_digits:
+            conds.append(UserAdmin.phone.ilike(f"%{kw_digits}%"))
+
+        stmt = stmt.where(or_(*conds))
+
+    stmt = stmt.order_by(
+        UserAdmin.is_active.desc(),
+        UserAdmin.name.asc(),
+        UserAdmin.id.asc(),
+    )
+
+    users = session.exec(stmt).all()
+
+    return [
+        {
+            "id": u.id,
+            "name": (u.name or "").strip(),
+            "department": (u.department or "").strip(),
+            "phone": (u.phone or "").strip(),
+            "mail": (u.mail or "").strip(),
+            "is_active": bool(getattr(u, "is_active", True)),
+        }
+        for u in users
+    ]
+
+# 파트너 관리자페이지 담당자 관리 상태변경 POST API
+@app.post("/partner/supervisor/manage-users/status")
+def supervisor_manage_user_status(
+    request: Request,
+    target_user_id: int = Form(...),
+    action: str = Form(...),   # activate | deactivate
+    next: str = Form("/partner/supervisor"),
+    session: Session = Depends(get_session),
+):
+    partner_id = request.session.get("partner_id")
+    if not partner_id:
+        return RedirectResponse(url="/partner/login", status_code=303)
+
+    ua_me = session.get(UserAdmin, int(partner_id))
+    if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
+        return _redirect_partner_with_msg(next, "권한이 없습니다.")
+
+    my_division = (ua_me.division or "").strip()
+    if not my_division:
+        return _redirect_partner_with_msg(next, "소속정보가 없습니다.")
+
+    target = session.get(UserAdmin, int(target_user_id))
+    if not target or (target.division or "").strip() != my_division:
+        return _redirect_partner_with_msg(next, "선택한 계정이 유효하지 않습니다.")
+
+    if action not in ("activate", "deactivate"):
+        return _redirect_with_msg(next, "잘못된 요청입니다.")
+
+    # 본인 계정 비활성화 방지
+    if action == "deactivate" and int(target.id) == int(ua_me.id):
+        return _redirect_with_msg(next, "현재 로그인한 본인 계정은 비활성화할 수 없습니다.")
+
+    desired_active = (action == "activate")
+    current_active = bool(getattr(target, "is_active", True))
+
+    if current_active == desired_active:
+        state_text = "활성화" if desired_active else "비활성화"
+        return _redirect_with_msg(next, f"선택한 계정이 이미 {state_text} 상태입니다.")
+
+    now = now_kst()
+
+    if desired_active:
+        target.is_active = True
+
+        # 잠금 관련 필드가 있으면 같이 초기화
+        if hasattr(target, "login_fail_count"):
+            target.login_fail_count = 0
+        if hasattr(target, "verify_code"):
+            target.verify_code = PARTNER_VERIFY_CODE_DEFAULT
+
+        # phone/mail은 비활성화 당시 값이 유지됨
+        # (활성화 후 사용자가 회원정보에서 수정해야 함)
+        done_msg = (
+            f"{(target.name or '선택한 계정')}님의 계정을 활성화 처리했습니다.\n"
+            "비활성화 계정을 활성화 상태로 변경한 후에는 로그인 후 회원정보에서 전화번호와 이메일 주소를 꼭 수정해주세요."
+        )
+
+    else:
+        inact_phone, inact_mail = _build_inactivation_contacts(session, target)
+
+        target.is_active = False
+        target.phone = inact_phone
+        target.mail = inact_mail
+
+        if hasattr(target, "login_fail_count"):
+            target.login_fail_count = 0
+        if hasattr(target, "verify_code"):
+            target.verify_code = PARTNER_VERIFY_CODE_DEFAULT
+
+        done_msg = f"{(target.name or '선택한 계정')}님의 계정을 비활성화 처리했습니다."
+
+    target.status_save_id = ua_me.id
+    target.status_save_at = now
+    target.updated_at = now
+    session.add(target)
+    session.commit()
+
+    return _redirect_with_msg(next, done_msg)
+
+
+
 #관리자페이지 담당자지정&분석신청
 @app.post("/partner/supervisor/assign")
 def supervisor_assign(
@@ -4300,6 +4440,42 @@ def _redirect_partner_with_msg(next_url: str | None, msg: str) -> RedirectRespon
 
     new_url = urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
     return RedirectResponse(url=new_url, status_code=303)
+
+
+# 파트너 계정 비활성화 phone/mail 처리 헬퍼
+def _build_inactivation_contacts(session: Session, target: UserAdmin) -> tuple[str, str]:
+    """
+    비활성화 시 phone/mail 대체값 생성.
+    - "_" 자체는 문제 없지만, phone varchar(20) + UNIQUE 제약 때문에
+      길이/중복을 더 보수적으로 처리한다.
+    - co_num 우선 사용, 없거나 충돌 시 user_admin.id fallback
+    """
+
+    raw_suffix = re.sub(r"[^A-Za-z0-9]", "", (target.co_num or "").strip())
+    if not raw_suffix:
+        raw_suffix = str(target.id or "")
+
+    # phone 컬럼 길이(20) 고려
+    raw_suffix = raw_suffix[:7] if raw_suffix else str(target.id or "")
+    phone_candidate = f"inactivation{raw_suffix}"   # 최대 19자 정도
+    if len(phone_candidate) > 20:
+        phone_candidate = f"inact{target.id}"[:20]
+
+    # UNIQUE 충돌 방지
+    exists = session.exec(
+        select(UserAdmin.id).where(
+            UserAdmin.phone == phone_candidate,
+            UserAdmin.id != target.id,
+        )
+    ).first()
+
+    if exists:
+        phone_candidate = f"inact{target.id}"[:20]
+
+    # mail은 이메일 형식처럼 보이게 저장
+    mail_candidate = f"{phone_candidate}@invalid.local"
+
+    return phone_candidate, mail_candidate
 
 
 # 접수완료 처리 (POST + Form)
