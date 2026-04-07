@@ -234,12 +234,36 @@ def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
     ivmode = (os.getenv("DATAHUB_FORCE_IV_MODE", "ENV") or "ENV").upper()
     kshape = (os.getenv("DATAHUB_FORCE_KEY_SHAPE", "right") or "right").lower()
 
-    key = shape_key(key_cands[0] if key_cands else b"", kb, kshape)
-    iv  = shape_iv((iv_cands[0] if iv_cands else b"\x00" * 16), ivmode)
+    key_cand_idx = int(os.getenv("DATAHUB_FORCE_KEY_CAND_IDX", "0") or "0")
+    iv_cand_idx = int(os.getenv("DATAHUB_FORCE_IV_CAND_IDX", "0") or "0")
 
-    print("[ENC][KIV]", "key_bits=", kb, "key_len=", len(key),
-          "iv_len=", len(iv), "iv_src=", ivmode, "key_shape=", kshape)
-    return key, iv
+    if key_cands:
+        if key_cand_idx < 0 or key_cand_idx >= len(key_cands):
+            key_cand_idx = 0
+        key_src = key_cands[key_cand_idx]
+    else:
+        key_src = b""
+
+    if iv_cands:
+        if iv_cand_idx < 0 or iv_cand_idx >= len(iv_cands):
+            iv_cand_idx = 0
+        iv_src = iv_cands[iv_cand_idx]
+    else:
+        iv_src = b"\x00" * 16
+
+    key = shape_key(key_src, kb, kshape)
+    iv  = shape_iv(iv_src, ivmode)
+
+    print(
+        "[ENC][KIV]",
+        "key_bits=", kb,
+        "key_len=", len(key),
+        "iv_len=", len(iv),
+        "iv_src=", ivmode,
+        "key_shape=", kshape,
+        "key_cand_idx=", key_cand_idx,
+        "iv_cand_idx=", iv_cand_idx,
+    )
 
 
 
