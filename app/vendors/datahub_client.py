@@ -264,7 +264,7 @@ def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
         "key_cand_idx=", key_cand_idx,
         "iv_cand_idx=", iv_cand_idx,
     )
-
+    return key, iv
 
 
 def encrypt_field(plain: str) -> str:
