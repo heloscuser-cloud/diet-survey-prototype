@@ -3385,18 +3385,18 @@ def supervisor_manage_user_status(
         return _redirect_partner_with_msg(next, "선택한 계정이 유효하지 않습니다.")
 
     if action not in ("activate", "deactivate"):
-        return _redirect_with_msg(next, "잘못된 요청입니다.")
+        return _redirect_partner_with_msg(next, "잘못된 요청입니다.")
 
     # 본인 계정 비활성화 방지
     if action == "deactivate" and int(target.id) == int(ua_me.id):
-        return _redirect_with_msg(next, "현재 로그인한 본인 계정은 비활성화할 수 없습니다.")
+        return _redirect_partner_with_msg(next, "현재 로그인한 본인 계정은 비활성화할 수 없습니다.")
 
     desired_active = (action == "activate")
     current_active = bool(getattr(target, "is_active", True))
 
     if current_active == desired_active:
         state_text = "활성화" if desired_active else "비활성화"
-        return _redirect_with_msg(next, f"선택한 계정이 이미 {state_text} 상태입니다.")
+        return _redirect_partner_with_msg(next, f"선택한 계정이 이미 {state_text} 상태입니다.")
 
     now = now_kst()
 
@@ -4446,8 +4446,7 @@ def _redirect_partner_with_msg(next_url: str | None, msg: str) -> RedirectRespon
 def _build_inactivation_contacts(session: Session, target: UserAdmin) -> tuple[str, str]:
     """
     비활성화 시 phone/mail 대체값 생성.
-    - "_" 자체는 문제 없지만, phone varchar(20) + UNIQUE 제약 때문에
-      길이/중복을 더 보수적으로 처리한다.
+    - phone varchar(20) + UNIQUE 제약 고려
     - co_num 우선 사용, 없거나 충돌 시 user_admin.id fallback
     """
 
@@ -4455,13 +4454,13 @@ def _build_inactivation_contacts(session: Session, target: UserAdmin) -> tuple[s
     if not raw_suffix:
         raw_suffix = str(target.id or "")
 
-    # phone 컬럼 길이(20) 고려
-    raw_suffix = raw_suffix[:7] if raw_suffix else str(target.id or "")
-    phone_candidate = f"inactivation{raw_suffix}"   # 최대 19자 정도
+    # prefix를 짧게 inact 로 사용
+    raw_suffix = raw_suffix[:15] if raw_suffix else str(target.id or "")
+    phone_candidate = f"inact{raw_suffix}"   # 최대 20자
+
     if len(phone_candidate) > 20:
         phone_candidate = f"inact{target.id}"[:20]
 
-    # UNIQUE 충돌 방지
     exists = session.exec(
         select(UserAdmin.id).where(
             UserAdmin.phone == phone_candidate,
@@ -4472,7 +4471,6 @@ def _build_inactivation_contacts(session: Session, target: UserAdmin) -> tuple[s
     if exists:
         phone_candidate = f"inact{target.id}"[:20]
 
-    # mail은 이메일 형식처럼 보이게 저장
     mail_candidate = f"{phone_candidate}@invalid.local"
 
     return phone_candidate, mail_candidate
