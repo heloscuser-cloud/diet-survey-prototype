@@ -203,8 +203,8 @@ def encrypt_field(plain: str) -> str:
         cipher = AES.new(key, AES.MODE_CBC, iv)
         return base64.b64encode(cipher.encrypt(data)).decode("ascii")
 
-    # 개발환경 + expect 설정 → 자동탐색
-    if app_env != "prod" and expect:
+    # 환경 + expect 설정 → 자동탐색
+    if app_env != "dev" and expect:
         for enc_name in enc_candidates:
             for key_bits in (256, 128):
                 for iv_mode in ("ENV", "ZERO"):

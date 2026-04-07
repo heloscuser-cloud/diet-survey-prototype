@@ -218,7 +218,7 @@
   </button>
 
   <button class="btn btn-sky btn-sm" type="button" onclick="openManageUsersModal()" style="width:140px; margin-left:8px;">
-    담당자 관리
+    담당자 계정관리
   </button>
 
   <!--엑셀 다운로드 버튼은 기능만 살려두고 버튼은 비활성화-->
@@ -584,12 +584,15 @@ async function loadManageUsers(){
       <td style="padding:10px; text-align:center;">${u.phone || ""}</td>
       <td style="padding:10px; text-align:center;">${u.mail || ""}</td>
       <td style="padding:10px; text-align:center;">${statusText}</td>
-      <td style="padding:10px; text-align:center;">
-        <button type="button" class="btn btn-primary btn-sm"
-                onclick='submitManageUserStatus(${u.id}, ${safeName}, "activate")'>
-          활성화
-        </button>
-      </td>
+      
+      // 활성화 버튼 안보이게 주석 처리
+      // <td style="padding:10px; text-align:center;">
+      //  <button type="button" class="btn btn-primary btn-sm"
+      //          onclick='submitManageUserStatus(${u.id}, ${safeName}, "activate")'>
+      //    활성화
+      //  </button>
+      // </td>
+
       <td style="padding:10px; text-align:center;">
         <button type="button" class="btn btn-gray btn-sm"
                 onclick='submitManageUserStatus(${u.id}, ${safeName}, "deactivate")'>
@@ -605,7 +608,7 @@ function submitManageUserStatus(userId, userName, action){
   let confirmMsg = "";
 
   if(action === "activate"){
-    confirmMsg = `${userName}님의 계정을 활성화 처리 하시겠습니까?\n비활성화 계정을 활성화 상태로 변경하는 후에는 로그인 후 회원정보에서 전화번호와 이메일 주소를 꼭 수정해주세요.`;
+    confirmMsg = `${userName}님의 계정을 활성화 처리 하시겠습니까?\n비활성화 계정을 활성화 상태로 변경하는 후에는 현재 전화번호(inactive~)로 로그인 후 회원정보에서 전화번호와 이메일 주소를 꼭 수정해주세요.`;
   }else{
     confirmMsg = `${userName}님의 계정을 비활성화 처리 하시겠습니까?\n비활성화 처리 시 계정의 전화번호, 이메일주소가 함께 파기됩니다.`;
   }
