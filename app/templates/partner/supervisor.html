@@ -585,15 +585,8 @@ async function loadManageUsers(){
       <td style="padding:10px; text-align:center;">${u.mail || ""}</td>
       <td style="padding:10px; text-align:center;">${statusText}</td>
       
-      // 활성화 버튼 안보이게 주석 처리
-      // <td style="padding:10px; text-align:center;">
-      //  <button type="button" class="btn btn-primary btn-sm"
-      //          onclick='submitManageUserStatus(${u.id}, ${safeName}, "activate")'>
-      //    활성화
-      //  </button>
-      // </td>
-
-      <td style="padding:10px; text-align:center;">
+      
+       <td style="padding:10px; text-align:center;">
         <button type="button" class="btn btn-gray btn-sm"
                 onclick='submitManageUserStatus(${u.id}, ${safeName}, "deactivate")'>
           비활성화

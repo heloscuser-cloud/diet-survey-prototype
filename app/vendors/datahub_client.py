@@ -4,6 +4,7 @@ import requests, re
 from Crypto.Cipher import AES
 
 print("[MOD] datahub_client loaded from", __file__, flush=True)
+_CRYPTO_OVERRIDE: Optional[dict] = None
 
 class DatahubError(Exception):
     pass
@@ -40,19 +41,16 @@ def _get_text_encoding() -> str:
     if enc in ("cp949", "euc-kr", "euckr", "ksc5601"): return "cp949"  # cp949로 통일
     return "utf-8"
 
+
 def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
     """
     EncKey/IV 디코드 + 강제 옵션 반영 + (개발모드) SELFTEST로
-    올바른 key/iv 후보를 '직접' 선택.
-    - DATAHUB_FORCE_KEY_BITS: 128|256 (기본 EncSpec 추정)
-    - DATAHUB_FORCE_IV_MODE : ENV|ZERO (기본 ENV)
-    - DATAHUB_FORCE_KEY_SHAPE: right|left|sha256|md5 (기본 right)
-    - DATAHUB_SELFTEST_PLAIN / DATAHUB_SELFTEST_EXPECT 가 있으면
-      모든 key/iv 후보(점/urlsafe/hex/raw) 중에서 'expect'를 만들어내는
-      후보를 선택하여 반환한다.
+    올바른 key/iv/shape/bits/iv_mode 조합을 직접 선택.
     """
     import base64, os, hashlib
     from Crypto.Cipher import AES
+
+    global _CRYPTO_OVERRIDE
 
     enc_key = (os.getenv("DATAHUB_ENC_KEY_B64", "") or "").strip()
     iv_env  = (os.getenv("DATAHUB_ENC_IV_B64", "")  or "").strip()
@@ -88,20 +86,6 @@ def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
     def raw_try(s: str) -> list[bytes]:
         return [s.encode("utf-8")] if s else []
 
-    key_cands = b64_variants(enc_key) + hex_try(enc_key) + raw_try(enc_key)
-    iv_cands  = b64_variants(iv_env)  + hex_try(iv_env)  + raw_try(iv_env)
-    if not iv_cands:
-        iv_cands = [b"\x00"*16]
-
-    # EncSpec 기반 기본 비트수
-    spec = (os.getenv("DATAHUB_ENC_SPEC", "") or "").strip().upper()
-    default_bits = 256 if ("256" in spec or "AES256" in spec) else 128
-
-    kb     = int(os.getenv("DATAHUB_FORCE_KEY_BITS", str(default_bits)) or str(default_bits))
-    ivmode = (os.getenv("DATAHUB_FORCE_IV_MODE", "ENV") or "ENV").upper()
-    kshape = (os.getenv("DATAHUB_FORCE_KEY_SHAPE", "right") or "right").lower()
-
-    # 키 shaping
     def shape_key(k: bytes, bits: int, mode: str) -> bytes:
         need = 32 if bits == 256 else 16
         if mode == "right":
@@ -116,121 +100,196 @@ def _get_key_iv() -> Tuple[bytes, Optional[bytes]]:
             return (d if need == 16 else (d + hashlib.md5(d).digest()))[:need]
         return (k[:need]).ljust(need, b"\x00")
 
-    # IV shaping
     def shape_iv(v: bytes, mode: str) -> bytes:
         if mode == "ZERO":
-            return b"\x00"*16
-        vv = (v[:16]).ljust(16, b"\x00")
-        return vv
+            return b"\x00" * 16
+        return (v[:16]).ljust(16, b"\x00")
 
-    # (개발) SELFTEST로 올바른 key/iv 후보를 직접 선택
+    key_cands = b64_variants(enc_key) + hex_try(enc_key) + raw_try(enc_key)
+    iv_cands  = b64_variants(iv_env)  + hex_try(iv_env)  + raw_try(iv_env)
+    if not iv_cands:
+        iv_cands = [b"\x00" * 16]
+
+    spec = (os.getenv("DATAHUB_ENC_SPEC", "") or "").strip().upper()
+    default_bits = 256 if ("256" in spec or "AES256" in spec) else 128
+
+    # 1) selftest가 있으면 가장 먼저 전체 조합 탐색
     plain  = (os.getenv("DATAHUB_SELFTEST_PLAIN", "") or "").strip()
     expect = (os.getenv("DATAHUB_SELFTEST_EXPECT", "") or "").strip()
+    st_flag = (os.getenv("DATAHUB_SELFTEST", "1") or "").strip()
     app_env = (os.getenv("APP_ENV", "dev") or "").strip().lower()
-    text_enc = (os.getenv("DATAHUB_TEXT_ENCODING", "utf-8") or "").lower()
-    text_enc = "cp949" if text_enc in ("cp949","euc-kr","euckr","ksc5601") else "utf-8"
 
-    if app_env != "prod" and plain and expect:
-        p = plain.encode(text_enc, errors="strict")
-        data = _pkcs7_pad(p, 16)
-        for i, kc in enumerate(key_cands):
-            key = shape_key(kc, kb, kshape)
-            for j, ic in enumerate(iv_cands):
-                iv  = shape_iv(ic, ivmode)
-                try:
-                    ct = AES.new(key, AES.MODE_CBC, iv).encrypt(data)
-                    b64 = base64.b64encode(ct).decode("ascii")
-                    if b64 == expect:
-                        print("[ENC][KIV][PICKED]", f"key_idx={i}", f"iv_idx={j}",
-                              "key_bits=", kb, "key_len=", len(key),
-                              "iv_len=", len(iv), "iv_src=", ivmode, "key_shape=", kshape)
-                        return key, iv
-                except Exception:
-                    continue
-        # 못 찾으면 아래 일반 경로로 진행
+    enc_pref = (os.getenv("DATAHUB_TEXT_ENCODING", "utf-8") or "").strip().lower()
+    enc_pref = "cp949" if enc_pref in ("cp949", "euc-kr", "euckr", "ksc5601") else "utf-8"
+    enc_candidates = [enc_pref]
+    for e in ("utf-8", "cp949"):
+        if e not in enc_candidates:
+            enc_candidates.append(e)
 
-    # 일반 경로: 첫 후보 사용
+    bit_candidates = [default_bits]
+    for b in (256, 128):
+        if b not in bit_candidates:
+            bit_candidates.append(b)
+
+    shape_candidates = []
+    forced_shape = (os.getenv("DATAHUB_FORCE_KEY_SHAPE", "") or "").strip().lower()
+    if forced_shape:
+        shape_candidates.append(forced_shape)
+    for s in ("right", "left", "sha256", "md5"):
+        if s not in shape_candidates:
+            shape_candidates.append(s)
+
+    iv_mode_candidates = []
+    forced_iv_mode = (os.getenv("DATAHUB_FORCE_IV_MODE", "") or "").strip().upper()
+    if forced_iv_mode:
+        iv_mode_candidates.append(forced_iv_mode)
+    for m in ("ENV", "ZERO"):
+        if m not in iv_mode_candidates:
+            iv_mode_candidates.append(m)
+
+    if _CRYPTO_OVERRIDE is None and app_env != "prod" and st_flag == "1" and plain and expect:
+        for enc_name in enc_candidates:
+            try:
+                plain_bytes = plain.encode(enc_name, errors="strict")
+            except Exception:
+                continue
+            padded = _pkcs7_pad(plain_bytes, 16)
+
+            for bits in bit_candidates:
+                for shape_mode in shape_candidates:
+                    for i, kc in enumerate(key_cands):
+                        key = shape_key(kc, bits, shape_mode)
+
+                        for iv_mode in iv_mode_candidates:
+                            iv_pool = [b"\x00" * 16] if iv_mode == "ZERO" else iv_cands
+
+                            for j, ic in enumerate(iv_pool):
+                                iv = shape_iv(ic, iv_mode)
+                                try:
+                                    ct = AES.new(key, AES.MODE_CBC, iv).encrypt(padded)
+                                    b64 = base64.b64encode(ct).decode("ascii")
+                                    if b64 == expect:
+                                        _CRYPTO_OVERRIDE = {
+                                            "encoding": enc_name,
+                                            "key_bits": bits,
+                                            "iv_mode": iv_mode,
+                                            "key_shape": shape_mode,
+                                            "key_idx": i,
+                                            "iv_idx": 0 if iv_mode == "ZERO" else j,
+                                        }
+                                        print(
+                                            "[ENC][AUTO-FINDER][MATCH]",
+                                            f"encoding={enc_name}",
+                                            f"key_bits={bits}",
+                                            f"iv_mode={iv_mode}",
+                                            f"key_shape={shape_mode}",
+                                            f"key_idx={i}",
+                                            f"iv_idx={0 if iv_mode == 'ZERO' else j}",
+                                        )
+                                        break
+                                except Exception:
+                                    continue
+                            if _CRYPTO_OVERRIDE is not None:
+                                break
+                        if _CRYPTO_OVERRIDE is not None:
+                            break
+                    if _CRYPTO_OVERRIDE is not None:
+                        break
+                if _CRYPTO_OVERRIDE is not None:
+                    break
+            if _CRYPTO_OVERRIDE is not None:
+                break
+
+        if _CRYPTO_OVERRIDE is None:
+            print(
+                "[ENC][AUTO-FINDER] no match",
+                "plain_set=", bool(plain),
+                "expect_set=", bool(expect),
+                "spec=", spec or "(empty)",
+            )
+
+    # 2) selftest로 찾은 조합이 있으면 그걸 최우선 사용
+    if _CRYPTO_OVERRIDE is not None:
+        kc = key_cands[_CRYPTO_OVERRIDE["key_idx"]] if key_cands else b""
+        key = shape_key(kc, int(_CRYPTO_OVERRIDE["key_bits"]), str(_CRYPTO_OVERRIDE["key_shape"]))
+
+        if str(_CRYPTO_OVERRIDE["iv_mode"]) == "ZERO":
+            iv = b"\x00" * 16
+        else:
+            ic = iv_cands[_CRYPTO_OVERRIDE["iv_idx"]] if iv_cands else b"\x00" * 16
+            iv = shape_iv(ic, "ENV")
+
+        print(
+            "[ENC][KIV][AUTO]",
+            "key_bits=", _CRYPTO_OVERRIDE["key_bits"],
+            "key_len=", len(key),
+            "iv_len=", len(iv),
+            "iv_mode=", _CRYPTO_OVERRIDE["iv_mode"],
+            "key_shape=", _CRYPTO_OVERRIDE["key_shape"],
+        )
+        return key, iv
+
+    # 3) fallback: force 값이 있으면 우선, 없으면 EncSpec 기준
+    kb = int(os.getenv("DATAHUB_FORCE_KEY_BITS", str(default_bits)) or str(default_bits))
+    ivmode = (os.getenv("DATAHUB_FORCE_IV_MODE", "ENV") or "ENV").upper()
+    kshape = (os.getenv("DATAHUB_FORCE_KEY_SHAPE", "right") or "right").lower()
+
     key = shape_key(key_cands[0] if key_cands else b"", kb, kshape)
-    iv  = shape_iv(iv_cands[0] if iv_cands else b"\x00"*16, ivmode)
+    iv  = shape_iv((iv_cands[0] if iv_cands else b"\x00" * 16), ivmode)
 
     print("[ENC][KIV]", "key_bits=", kb, "key_len=", len(key),
           "iv_len=", len(iv), "iv_src=", ivmode, "key_shape=", kshape)
     return key, iv
 
 
+
 def encrypt_field(plain: str) -> str:
     """
     AES-CBC + PKCS7 → Base64
-    - DATAHUB_TEXT_ENCODING (utf-8/cp949)
-    - 평소엔 현재 설정값으로 1회 암호화
-    - 다만 개발모드에서 DATAHUB_SELFTEST_EXPECT가 설정되어 있으면
-      아래 조합을 자동탐색 후 '일치하는' 조합을 로그로 출력:
-        * encoding: [현재설정, utf-8, cp949]
-        * key_bits: [256, 128]
-        * iv_mode : [ENV, ZERO]
-    - 찾은 조합을 이후에도 동일하게 재사용할 수 있도록 로그 확인 후 ENV 고정 권장
+    - selftest로 찾은 조합(_CRYPTO_OVERRIDE)이 있으면 그걸 최우선 사용
+    - 없으면 ENV/EncSpec 기반 fallback 사용
     """
-    expect = (os.getenv("DATAHUB_SELFTEST_EXPECT", "") or "").strip()
-    app_env = (os.getenv("APP_ENV", "dev") or "").strip().lower()
+    global _CRYPTO_OVERRIDE
 
-    # 기본 인코딩(설정)
-    def _norm_enc(name: str) -> str:
-        n = (name or "utf-8").lower()
-        return "cp949" if n in ("cp949","euc-kr","euckr","ksc5601") else "utf-8"
+    spec = (os.getenv("DATAHUB_ENC_SPEC", "") or "").strip().upper()
+    default_bits = 256 if ("256" in spec or "AES256" in spec) else 128
 
-    enc_pref = _norm_enc(os.getenv("DATAHUB_TEXT_ENCODING", "utf-8"))
-    enc_candidates = [enc_pref]
-    for e in ("utf-8","cp949"):
-        if e not in enc_candidates:
-            enc_candidates.append(e)
-
-    # key/iv 재구성 헬퍼 (key_bits/iv_mode에 따라)
-    def _build_kiv(key_bits: int, iv_mode: str) -> Tuple[bytes, bytes]:
-        # 원본 키/IV 디코드
-        full_key, full_iv = _get_key_iv()  # full_key는 최대 32, full_iv는 16 보장됨
-        if key_bits == 256:
-            key = (full_key[:32]).ljust(32, b"\x00")
-        else:
-            key = (full_key[:16]).ljust(16, b"\x00")
-        iv = (full_iv if iv_mode == "ENV" else b"\x00"*16)
-        return key, iv
-
-    # 단일 조합으로 실제 암호화
-    def _enc_once(s: str, enc_name: str, key_bits: int, iv_mode: str) -> str:
-        key, iv = _build_kiv(key_bits, iv_mode)
-        data = s.encode(enc_name, errors="strict")
-        data = _pkcs7_pad(data, 16)
-        cipher = AES.new(key, AES.MODE_CBC, iv)
-        return base64.b64encode(cipher.encrypt(data)).decode("ascii")
-
-    # 환경 + expect 설정 → 자동탐색
-    if app_env != "prod" and expect:
-        for enc_name in enc_candidates:
-            for key_bits in (256, 128):
-                for iv_mode in ("ENV", "ZERO"):
-                    try:
-                        ct = _enc_once(plain, enc_name, key_bits, iv_mode)
-                    except Exception:
-                        continue
-                    if ct == expect:
-                        # 🔍 정답 조합 로그 (꼭 확인해서 ENV로 고정해줘)
-                        print("[ENC][SELFTEST][FINDER]",
-                              f"encoding={enc_name} key_bits={key_bits} iv_mode={iv_mode}")
-                        # 이후 동일 방식으로 암호화 결과 반환
-                        return ct
-        # 탐색 실패 시, 아래 일반 경로로 진행
-
-    # 일반 경로: ENV 강제 설정값 사용
-    chosen_enc = _get_text_encoding()  # utf-8 / cp949
-    kb  = int(os.getenv("DATAHUB_FORCE_KEY_BITS", "256") or "256")
-    ivm = (os.getenv("DATAHUB_FORCE_IV_MODE", "ENV") or "ENV").upper()
-    print("[ENC][PLAINTEXT-ENCODING]", chosen_enc, "| key_bits=", kb, "| iv_mode=", ivm)
-    # 실제 키/IV는 _get_key_iv()에서 강제 옵션 반영되어 생성됨
+    # _get_key_iv()가 selftest 탐색 + override 캐시 설정까지 담당
     key, iv = _get_key_iv()
+
+    if _CRYPTO_OVERRIDE is not None:
+        chosen_enc = str(_CRYPTO_OVERRIDE["encoding"])
+        print(
+            "[ENC][PLAINTEXT-ENCODING][AUTO]",
+            chosen_enc,
+            "| key_bits=",
+            _CRYPTO_OVERRIDE["key_bits"],
+            "| iv_mode=",
+            _CRYPTO_OVERRIDE["iv_mode"],
+            "| key_shape=",
+            _CRYPTO_OVERRIDE["key_shape"],
+        )
+    else:
+        chosen_enc = _get_text_encoding()
+        kb = int(os.getenv("DATAHUB_FORCE_KEY_BITS", str(default_bits)) or str(default_bits))
+        ivm = (os.getenv("DATAHUB_FORCE_IV_MODE", "ENV") or "ENV").upper()
+        kshape = (os.getenv("DATAHUB_FORCE_KEY_SHAPE", "right") or "right").lower()
+        print(
+            "[ENC][PLAINTEXT-ENCODING]",
+            chosen_enc,
+            "| key_bits=",
+            kb,
+            "| iv_mode=",
+            ivm,
+            "| key_shape=",
+            kshape,
+        )
+
     data = plain.encode(chosen_enc, errors="strict")
     data = _pkcs7_pad(data, 16)
     cipher = AES.new(key, AES.MODE_CBC, iv)
     return base64.b64encode(cipher.encrypt(data)).decode("ascii")
+
 
 
 def _crypto_selftest():
