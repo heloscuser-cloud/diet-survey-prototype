@@ -52,6 +52,10 @@
       {% elif request.url.path.startswith('/partner/dashboard') %}
         <a href="/partner/supervisor">관리자페이지</a>
 
+      {% endif %}
+
+      <a href="/partner/logout" onclick="return confirm('로그아웃 하시겠어요?')">로그아웃</a>
+
     {# 5) /admin/responses*: 로그아웃만 #}
     {% elif request.url.path.startswith('/admin/responses') %}
       <a href="/admin/logout" onclick="return confirm('로그아웃 하시겠어요?')">로그아웃</a>
