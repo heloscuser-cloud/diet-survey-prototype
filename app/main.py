@@ -707,7 +707,7 @@ def send_submission_email(serial_no: int, campaign_id: str | None, created_at_ks
 
     # 메일 만들기
     msg = EmailMessage()
-    msg["Subject"] = f"[GaonnSurvey] 신규 분석신청 접수 알림 #{serial_no}"
+    msg["Subject"] = f"[nuinSurvey] 신규 분석신청 접수 알림 #{serial_no}"
     msg["From"] = mail_from
     msg["To"] = mail_to
     body = (
@@ -715,7 +715,7 @@ def send_submission_email(serial_no: int, campaign_id: str | None, created_at_ks
         f"- 일련번호: {serial_no}\n"
         f"- 신청업체: {campaign_id or '(미입력)'}\n"
         f"- 접수시각(KST): {created_at_kst_str}\n"
-        f"\n가온앤 관리자 페이지에서 확인해주세요."
+        f"\n웰비온 관리자 페이지에서 확인해주세요."
     )
     msg.set_content(body)
 
@@ -778,12 +778,12 @@ def send_partner_verify_code_email(to_email: str, verify_code: str) -> bool:
     login_user = user if "@" in user else f"{user}@naver.com"
 
     msg = EmailMessage()
-    msg["Subject"] = "가온앤 영양분석 서비스 인증코드 발송"
+    msg["Subject"] = "nuin 영양관리 솔루션 인증코드 발송"
     msg["From"] = mail_from
     msg["To"] = to_email
     body = (
-        "※ 가온앤 영양분석 서비스의 비밀번호 찾기 인증코드가 발송되었습니다.\n"
-        "※ 본인이 비밀번호 찾기를 시도한 것이 아닌 경우 가온앤 관리자에게 문의하세요.\n\n"
+        "※ nuin 영양관리 솔루션의 비밀번호 찾기 인증코드가 발송되었습니다.\n"
+        "※ 본인이 비밀번호 찾기를 시도한 것이 아닌 경우 웰비온 nuin 관리자에게 문의하세요.\n\n"
         f"- 인증코드 : {verify_code}\n"
     )
     msg.set_content(body)
@@ -849,14 +849,14 @@ def send_report_email(
     login_user = user if "@" in user else f"{user}@naver.com"
 
     masked_applicant = mask_second_char(applicant_name)
-    subject = f"[(주)가온앤] {masked_applicant}님의 영양분석 리포트가 도착했습니다."
+    subject = f"[nuin] {masked_applicant}님의 영양관리 솔루션 리포트가 도착했습니다."
 
     body = (
         f"{partner_name}님 안녕하세요,\n"
-        f"(주)가온앤 영양분석서비스 담당자입니다.\n\n"
-        f"{partner_requested_at_kst_str}에 분석신청하신 고객 {applicant_name}님의 영양분석 리포트를 전달드립니다.\n"
+        f"웰비온 nuin 건강자산 영양관리 솔루션 담당자입니다.\n\n"
+        f"{partner_requested_at_kst_str}에 분석신청하신 고객 {applicant_name}님의 분석 리포트를 전달드립니다.\n"
         f"리포트는 고객님 이외 다른 사람에게 전달되지 않도록 주의해주시기 바랍니다.\n\n"
-        f"저희 가온앤 서비스를 신청해주셔서 감사합니다.\n"
+        f"저희 웰비온 건강자산 영양관리 솔루션을 신청해주셔서 감사합니다.\n"
         f"앞으로도 양질의 서비스를 제공해드리기 위해 최선을 다하겠습니다.\n\n"
         f"즐거운 하루 보내세요!\n\n"
         f"** 보안을 위해 리포트에는 암호가 적용되어있습니다 **\n"
@@ -1647,7 +1647,7 @@ def partner_login_post(
         select(UserAdmin).where(UserAdmin.phone == phone_raw)
     ).first()
 
-    locked_msg = "로그인 시도 횟수를 초과하였습니다. 비밀번호 찾기를 시도하거나 가온앤 관리자에게 문의해주세요."
+    locked_msg = "로그인 시도 횟수를 초과하였습니다. 비밀번호 찾기를 시도하거나 웰비온 관리자에게 문의해주세요."
 
     # 1) 잠금된 계정
     if user and (not bool(user.is_active)) and int(getattr(user, "login_fail_count", 0) or 0) >= 5:
@@ -1669,7 +1669,7 @@ def partner_login_post(
     if not bool(user.is_active):
         return templates.TemplateResponse("partner/login.html", {
             "request": request,
-            "error": "사용이 중지된 계정입니다. 가온앤 관리자에게 문의해주세요.",
+            "error": "사용이 중지된 계정입니다. 웰비온 관리자에게 문의해주세요.",
             "message": None,
         })
 
@@ -1736,7 +1736,7 @@ def partner_password_reset_send_code(
 
     if not user or not (user.mail or "").strip():
         return JSONResponse(
-            {"ok": False, "message": "가입 정보를 찾을 수 없거나 이메일 정보가 없습니다. 가온앤 관리자에게 문의해주세요."},
+            {"ok": False, "message": "가입 정보를 찾을 수 없거나 이메일 정보가 없습니다. 웰비온 관리자에게 문의해주세요."},
             status_code=200
         )
 
@@ -1839,7 +1839,7 @@ def partner_password_reset_change_password(
 
     if not user:
         return JSONResponse(
-            {"ok": False, "message": "가입 정보를 찾을 수 없습니다. 가온앤 관리자에게 문의해주세요."},
+            {"ok": False, "message": "가입 정보를 찾을 수 없습니다. 웰비온 관리자에게 문의해주세요."},
             status_code=200
         )
 
@@ -2640,7 +2640,7 @@ def partner_supervisor(
             "error.html",
             {
                 "request": request,
-                "message": "진입 권한이 없습니다.\n가온앤 관리자에게 문의해주세요.",
+                "message": "진입 권한이 없습니다.\n웰비온 관리자에게 문의해주세요.",
             },
             status_code=403,
         )
@@ -2652,7 +2652,7 @@ def partner_supervisor(
             "error.html",
             {
                 "request": request,
-                "message": "소속(division) 정보가 없어 조회할 수 없습니다.\n가온앤 관리자에게 문의해주세요.",
+                "message": "소속(division) 정보가 없어 조회할 수 없습니다.\n웰비온 관리자에게 문의해주세요.",
             },
             status_code=400,
         )
@@ -3101,11 +3101,11 @@ def partner_supervisor_report_download_by_serial(
 
     ua_me = session.get(UserAdmin, int(partner_id))
     if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
-        return _redirect_partner_with_msg("/partner/supervisor", "진입 권한이 없습니다.\n가온앤 관리자에게 문의해주세요.")
+        return _redirect_partner_with_msg("/partner/supervisor", "진입 권한이 없습니다.\n웰비온 관리자에게 문의해주세요.")
 
     my_division = (ua_me.division or "").strip()
     if not my_division:
-        return _redirect_partner_with_msg("/partner/supervisor", "소속(division) 정보가 없어 조회할 수 없습니다.\n가온앤 관리자에게 문의해주세요.")
+        return _redirect_partner_with_msg("/partner/supervisor", "소속(division) 정보가 없어 조회할 수 없습니다.\n웰비온 관리자에게 문의해주세요.")
 
     # referer 기반 next (필터 유지)
     ref = request.headers.get("referer", "")
@@ -3122,7 +3122,7 @@ def partner_supervisor_report_download_by_serial(
         )
         return _redirect_partner_with_msg(
             next_url,
-            "리포트 다운로드 가능기간이 만료되었거나, 다운로드 가능한 리포트가 없습니다. 가온앤 관리자에게 문의해주세요",
+            "리포트 다운로드 가능기간이 만료되었거나, 다운로드 가능한 리포트가 없습니다. 웰비온 관리자에게 문의해주세요",
         )
 
     logging.info(
@@ -3725,7 +3725,7 @@ def partner_calculate(
     if not ua_me or not bool(getattr(ua_me, "supervisor", False)):
         return templates.TemplateResponse(
             "error.html",
-            {"request": request, "message": "진입 권한이 없습니다.\n가온앤 관리자에게 문의해주세요."},
+            {"request": request, "message": "진입 권한이 없습니다.\n웰비온 관리자에게 문의해주세요."},
             status_code=403,
         )
 
@@ -3733,7 +3733,7 @@ def partner_calculate(
     if not my_division:
         return templates.TemplateResponse(
             "error.html",
-            {"request": request, "message": "소속(division) 정보가 없어 조회할 수 없습니다.\n가온앤 관리자에게 문의해주세요."},
+            {"request": request, "message": "소속(division) 정보가 없어 조회할 수 없습니다.\n웰비온 관리자에게 문의해주세요."},
             status_code=400,
         )
 
@@ -5487,7 +5487,7 @@ def survey_finish(
     if resp:
         try_auto_map_partner_for_respondent(session, resp)
 
-    # ── 문진제출 완료시점 가온앤에 문진제출 알림 이메일 사용안함 처리_260317
+    # ── 문진제출 완료시점 웰비온에 문진제출 알림 이메일 사용안함 처리_260317
     # 알림메일: 매핑 완료된 경우에만 비동기 발송 ───────────────────────────────
     """
     try:
