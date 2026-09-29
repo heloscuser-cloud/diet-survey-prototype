@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>로그인 코드 입력</title>
+  <title>신청 코드번호 입력</title>
   <link rel="stylesheet" href="/static/css/styles.css">
 </head>
 <body>
   <div class="container">
-    <h1>로그인 코드 입력</h1>
-    <p>담당자에게 전달받은 <strong>코드(휴대폰 번호)</strong>를 입력해주세요.</p>
+    <h1>신청 코드번호 입력</h1>
+    <p>리포트 신청을 안내한 담당자의 <strong>코드번호(휴대폰번호)</strong>를 입력해주세요.</p>
 
     {% if error %}
       <p style="color:#b91c1c; font-weight:600;">{{ error }}</p>
@@ -17,7 +17,7 @@
 
     <form method="post" action="/login/verify">
       <label>
-        로그인 코드(휴대폰 번호)
+        담당자 코드번호(휴대폰 번호)
         <input name="phone" required placeholder="01012345678" pattern="\d{10,11}">
       </label>
       <button type="submit">확인</button>

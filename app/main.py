@@ -1276,7 +1276,7 @@ def verify_otp(session: Session, phone: str, code: str) -> bool:
 def _host(request: Request) -> str:
     return (request.headers.get("host") or "").split(":")[0].lower()
 
-ADMIN_HOST = "admin.gaonnsurvey.store"
+ADMIN_HOST = "admin.nuinsurvey.com"
 DEFAULT_CAMPAIGN_ID = "demo"
 
 def get_partner_list(session: Session) -> list[str]:
